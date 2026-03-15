@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+
+# Build output
+dist/
+backend/.next/
+backend/tsconfig.tsbuildinfo
+
+# Environment / secrets (never commit these)
+.env
+.env.local
+.env.*
+!.env.example
+backend/.env
+backend/.env.local
+backend/.env.*
+!backend/.env.example
+
+# Test artifacts
+test-results/
+playwright-report/
+backend/backups/
+
+# Playwright / test Chrome profile directories
+.tmp-*/
+
+# Claude Code project settings (local-only)
+.claude/
+
+# Scratch files
+files.zip
+
+# OS / editor
+.DS_Store
+*.swp

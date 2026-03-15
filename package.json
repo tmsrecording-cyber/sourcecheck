@@ -1,0 +1,38 @@
+{
+  "name": "sourcecheck",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:dev": "vite build --mode development",
+    "build": "tsc && vite build && node scripts/check-release-dist.mjs",
+    "check:dist-release": "node scripts/check-release-dist.mjs",
+    "check:release-secrets": "node scripts/check-release-secrets.mjs",
+    "test:e2e:smoke": "playwright test tests/e2e/extension-smoke.spec.ts",
+    "release:gate": "npm run build && npm --prefix backend run build && npm --prefix backend test && npm run check:dist-release && npm run check:release-secrets && npm run test:e2e:smoke"
+  },
+  "dependencies": {
+    "framer-motion": "^12.36.0",
+    "lucide-react": "^0.400.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.3.0",
+    "@playwright/test": "^1.58.2",
+    "@types/chrome": "^0.0.268",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.3",
+    "vite": "^7.3.1"
+  },
+  "overrides": {
+    "@crxjs/vite-plugin": {
+      "rollup": "2.80.0"
+    }
+  }
+}
