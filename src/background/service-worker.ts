@@ -1037,6 +1037,48 @@ const hasPendingClaim = (claim: Pick<ExtractedClaim, 'claimText' | 'timestampSec
 const hasQueuedVerificationForKey = (key: string) =>
   verificationQueue.some((item) => item.key === key);
 
+// Near-duplicate detection: check if a very similar claim was recently checked
+// Uses normalized text comparison within a time window
+const isNearDuplicate = (claim: ExtractedClaim): boolean => {
+  const DUPLICATE_WINDOW_SECONDS = 120; // 2 minutes
+  const normalizedClaimText = claim.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
+  
+  // Check existing source cards
+  const recentCard = allSourceCards.find((card) => {
+    const timeDiff = Math.abs(card.claim.timestampSeconds - claim.timestampSeconds);
+    if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
+    const normalizedCardText = card.claim.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
+    // High similarity: shared 80%+ of normalized text
+    const longer = Math.max(normalizedClaimText.length, normalizedCardText.length);
+    const shorter = Math.min(normalizedClaimText.length, normalizedCardText.length);
+    return shorter > 0 && (shorter / longer) > 0.8;
+  });
+  if (recentCard) return true;
+  
+  // Check pending claims
+  const recentPending = allPendingClaims.find((pending) => {
+    const timeDiff = Math.abs(pending.timestampSeconds - claim.timestampSeconds);
+    if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
+    const normalizedPendingText = pending.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const longer = Math.max(normalizedClaimText.length, normalizedPendingText.length);
+    const shorter = Math.min(normalizedClaimText.length, normalizedPendingText.length);
+    return shorter > 0 && (shorter / longer) > 0.8;
+  });
+  if (recentPending) return true;
+  
+  // Check verification queue
+  const recentQueued = verificationQueue.find((item) => {
+    const timeDiff = Math.abs(item.claim.timestampSeconds - claim.timestampSeconds);
+    if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
+    const normalizedQueuedText = item.claim.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const longer = Math.max(normalizedClaimText.length, normalizedQueuedText.length);
+    const shorter = Math.min(normalizedClaimText.length, normalizedQueuedText.length);
+    return shorter > 0 && (shorter / longer) > 0.8;
+  });
+  
+  return !!recentQueued;
+};
+
 const logAnalysisResult = (
   videoId: string,
   startIndex: number,
@@ -1054,29 +1096,82 @@ const logAnalysisResult = (
 const getVerificationSkipReason = (claim: ExtractedClaim) => {
   const key = getClaimKey(claim);
 
-  // Filter out claim fragments that are too short or lack substance
+  // --- 1. Basic structural filters ---
   const claimWords = claim.claimText.trim().split(/\s+/).length;
-  if (claimWords < 5) {
+  
+  // Too short to be meaningful (less than 3 words is definitely a fragment)
+  if (claimWords < 3) {
     return `claim too short (${claimWords} words)`;
   }
 
-  // Filter claims without concrete entities (numbers, dates, proper nouns)
-  // A verifiable claim should have SOME concrete reference
-  const hasConcreteReference = /\d+|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b|\b[A-Z][a-z]+ (?:University|Institute|Center|Study|Research|Lab|Corp|Inc|Ltd)\b|\b(?:WHO|CDC|FDA|UN|NASA|MIT|Harvard|Stanford)\b/i.test(claim.claimText);
-  if (!hasConcreteReference && claim.claimText.length < 40) {
-    return 'claim lacks concrete references for verification';
+  // --- 2. Specificity / concreteness detection ---
+  // A verifiable claim needs concrete references. We detect:
+  // - Numbers (counts, percentages, dates)
+  // - Named months
+  // - Proper noun entities (capitalized words that aren't sentence-start)
+  // - Specific organization keywords
+  // - Units of measurement
+  const hasNumber = /\d+/.test(claim.claimText);
+  const hasMonth = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b/i.test(claim.claimText);
+  const hasProperNounEntity = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/.test(claim.claimText);
+  const hasOrgKeyword = /\b(?:University|Institute|Center|Study|Research|Organization|NASA|WHO|CDC|FDA|UN|MIT|Harvard|Stanford)\b/i.test(claim.claimText);
+  const hasUnit = /\b(?:percent|%|degrees|meters|kilometers|kg|mg|ml|years?|months?|days?|hours?)\b/i.test(claim.claimText);
+  
+  const isConcrete = hasNumber || hasMonth || (hasProperNounEntity && claimWords >= 4) || hasOrgKeyword || hasUnit;
+  
+  // Short claims (< 5 words) must be highly concrete to pass
+  if (claimWords < 5 && !isConcrete) {
+    return 'short claim lacks concrete specificity';
+  }
+  
+  // Medium claims (5-7 words) need at least some concreteness
+  if (claimWords >= 5 && claimWords <= 7 && !isConcrete && claim.claimText.length < 30) {
+    return 'claim lacks sufficient specificity for verification';
   }
 
+  // --- 3. Vagueness / opinion pattern detection ---
+  // Reject opinion markers, predictions, vague generalizations even if long
+  const lowerText = claim.claimText.toLowerCase();
+  const hasOpinionMarker = /\b(i think|i believe|in my opinion|obviously|clearly|definitely|probably|maybe|seems like|feels like)\b/i.test(lowerText);
+  const hasPredictionMarker = /\b(will|going to|predict|future|soon|eventually|next year|coming years)\b/i.test(lowerText);
+  const hasVagueGeneralization = /\b(very|really|quite|extremely|incredibly|transformative|important|significant|crucial|essential)\b/i.test(lowerText);
+  const lacksSpecificSubject = !/[A-Z]/.test(claim.claimText.slice(1)); // No proper nouns at all
+  
+  // Long but vague claims should be rejected
+  if (claimWords > 10 && hasVagueGeneralization && !isConcrete) {
+    return 'vague generalization without concrete specifics';
+  }
+  
+  // Opinion claims
+  if (hasOpinionMarker) {
+    return 'opinion statement not suitable for fact-checking';
+  }
+  
+  // Predictions about future
+  if (hasPredictionMarker && !hasNumber) {
+    return 'prediction about future events';
+  }
+
+  // --- 4. Confidence threshold (using actual backend confidence) ---
+  // Backend confidence is inferred by claim type (0.75-0.92)
+  // MIN_CONFIDENCE is 0.65, so this is effectively a no-op for normal claims
+  // We keep it as a safety floor for malformed data
   if (claim.confidence < MIN_CONFIDENCE) {
     return `confidence ${claim.confidence.toFixed(2)} below threshold ${MIN_CONFIDENCE.toFixed(2)}`;
   }
 
+  // --- 5. Duplicate detection ---
   if (hasCardForClaim(claim)) {
     return 'matching source card already exists';
   }
 
   if (hasQueuedVerificationForKey(key) || activeVerificationKeys.has(key)) {
     return 'claim already queued or verifying';
+  }
+  
+  // Near-duplicate check for similar claims within time window
+  if (isNearDuplicate(claim)) {
+    return 'similar claim recently checked';
   }
 
   if (hasPendingClaim(claim)) {

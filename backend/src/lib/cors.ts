@@ -20,7 +20,8 @@ function getAllowedExtensionIds(): Set<string> {
 }
 
 function isLocalhost(request: NextRequest): boolean {
-  const hostname = request.headers.get('host')?.split(':')[0] || request.nextUrl.hostname;
+  // Defensive: handle test stubs that may not have nextUrl
+  const hostname = request.headers.get('host')?.split(':')[0] || request.nextUrl?.hostname || '';
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
