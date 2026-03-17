@@ -8,7 +8,7 @@ import type {
 } from '../../../shared/types';
 
 export const GEMINI_MODELS = [
-  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-lite-preview',
   'gemini-3.1-flash-lite-preview',
   'gemini-3-flash-preview',
 ] as const;

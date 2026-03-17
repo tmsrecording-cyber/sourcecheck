@@ -6,7 +6,7 @@
 export type GeminiModelOption = 
   | 'gemini-3.1-flash-lite'
   | 'gemini-3-flash'
-  | 'gemini-2.5-flash-lite';
+  | 'gemini-2.5-flash-lite-preview';
 
 export interface ModelConfig {
   id: GeminiModelOption;
@@ -29,7 +29,7 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     speed: 'balanced',
   },
   {
-    id: 'gemini-2.5-flash-lite',
+    id: 'gemini-2.5-flash-lite-preview',
     label: 'Flash 2.5 Lite',
     description: 'Previous generation',
     speed: 'deep',
