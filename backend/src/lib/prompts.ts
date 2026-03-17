@@ -124,6 +124,8 @@ Determine:
    - "disputed": credible sources directly contradict or cast serious doubt
    - "unverifiable": no credible source found that confirms or denies this
 
+   IMPORTANT: Only use "unverifiable" as a last resort. If you find ANY relevant information, use "partial" instead. "Unverifiable" is for completely fabricated claims with zero web presence.
+
 2. sourceTitle — the single best source name. Be specific (include author, year, or org when possible).
 
 3. sourceType — one of: academic_paper, news_article, official_source, wikipedia, other
@@ -133,7 +135,7 @@ Determine:
    Rules:
    - Lead with the SPECIFIC thing the viewer should know, not a summary of the verdict.
    - For "supported": say what confirms it. E.g., "WHO 2024 data matches this exactly."
-   - For "partial": say what's off. E.g., "The 250% figure is from ice baths, not cold showers."
+   - For "partial": say what's off or what context is missing. E.g., "The 250% figure is from ice baths, not cold showers." or "Widely reported in 2023 but methodology disputed."
    - For "disputed": say who disagrees or what's wrong. E.g., "FDA data shows the opposite trend."
    - For "unverifiable": say WHY it can't be checked. E.g., "No published study uses this specific figure." or "Common claim but original source unclear."
    - NEVER write generic filler like "requires additional context" or "this is a complex topic."
@@ -141,6 +143,7 @@ Determine:
    GOOD: "The 250% figure is from 1-hour ice baths, not cold showers."
    GOOD: "No published source for the 90% figure."
    GOOD: "True for the US, but reversed in Europe."
+   GOOD: "Widely reported in 2023-2024, but primary source unclear."
    BAD: "While AI is widely projected to increase efficiency, there is no credible data supporting this."
    BAD: "This claim requires additional context to fully evaluate."
 
