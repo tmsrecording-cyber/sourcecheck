@@ -86,6 +86,41 @@ async function getSessionToken(): Promise<string | null> {
   return pendingSessionTokenRequest;
 }
 
+// Maximum retries for transient errors
+const MAX_RETRIES = 3;
+// Base delay for exponential backoff (ms)
+const BASE_RETRY_DELAY_MS = 1000;
+
+/**
+ * Check if an error/status code indicates a transient failure that should be retried.
+ * 429 = Rate limited, 503 = Service unavailable, 502/504 = Gateway errors
+ */
+const isTransientError = (status: number | null, error: unknown): boolean => {
+  if (status === 429 || status === 503 || status === 502 || status === 504) return true;
+  if (status !== null) return false;
+  
+  // Network errors (status is null)
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  return (
+    errorMessage.includes('network') ||
+    errorMessage.includes('fetch') ||
+    errorMessage.includes('abort') ||
+    errorMessage.includes('timeout') ||
+    errorMessage.includes('ECONNREFUSED') ||
+    errorMessage.includes('ETIMEDOUT')
+  );
+};
+
+/**
+ * Calculate delay for exponential backoff with jitter.
+ * Delays: 1s, 2s, 4s (with up to 20% jitter)
+ */
+const getRetryDelayMs = (attempt: number): number => {
+  const exponentialDelay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+  const jitter = 0.8 + Math.random() * 0.4; // 0.8 to 1.2 multiplier
+  return Math.floor(exponentialDelay * jitter);
+};
+
 /**
  * Fetches from the backend with optional BYOK (Bring Your Own Key) support.
  * 
@@ -95,6 +130,8 @@ async function getSessionToken(): Promise<string | null> {
  * and applies rate limiting.
  * 
  * Automatically includes session token for authentication.
+ * 
+ * Retries on transient errors (429, 503, network failures) with exponential backoff.
  */
 export async function fetchWithBYOK(
   endpoint: string,
@@ -103,74 +140,100 @@ export async function fetchWithBYOK(
 ): Promise<unknown> {
   console.log('[SourceCheck/API] fetchWithBYOK called:', endpoint);
   
-  // Get session token first (required for production)
-  const sessionToken = await getSessionToken();
-  console.log('[SourceCheck/API] Session token:', sessionToken ? 'present' : 'MISSING');
-  
-  // Pull the saved key and model from storage
+  // Pull the saved key and model from storage (once, outside retry loop)
   const { customApiKey, selectedModel } = await chrome.storage.sync.get([
     'customApiKey',
     'selectedModel',
   ]) as BYOKConfig;
 
-  const headers = new Headers({
-    'Content-Type': 'application/json',
-    'X-Extension-Id': chrome.runtime.id,
-  });
-
-  // Add session token if available
-  if (sessionToken) {
-    headers.set('Authorization', `Bearer ${sessionToken}`);
-    console.log('[SourceCheck/API] Added Authorization header');
-  } else {
-    console.warn('[SourceCheck/API] NO SESSION TOKEN - request may fail with 403');
-  }
-
-  // If the user has a key, inject it into a custom header
   const hasCustomKey = customApiKey && customApiKey.trim() !== '';
-  if (hasCustomKey) {
-    headers.set('X-Custom-Api-Key', customApiKey.trim());
-    console.log('[SourceCheck/API] Using custom API key (BYOK)');
-  }
-
-  // Use their selected model if they have a key, otherwise force free tier model
   const modelToUse = hasCustomKey && selectedModel
     ? selectedModel
-    : 'gemini-2.5-flash-lite';
+    : 'gemini-2.5-flash-lite-preview';
   
-  payload.model = modelToUse;
-  console.log('[SourceCheck/API] Using model:', modelToUse);
+  // Build payload with model
+  const requestPayload = { ...payload, model: modelToUse };
 
-  // Set up the abort controller for timeouts
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Get fresh session token for each attempt (may have expired)
+      const sessionToken = await getSessionToken();
+      
+      if (attempt > 0) {
+        const delayMs = getRetryDelayMs(attempt - 1);
+        console.log(`[SourceCheck/API] Retry attempt ${attempt}/${MAX_RETRIES} after ${delayMs}ms`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+      
+      const headers = new Headers({
+        'Content-Type': 'application/json',
+        'X-Extension-Id': chrome.runtime.id,
+      });
 
-  try {
-    const url = `${API_BASE}${endpoint}`;
-    console.log('[SourceCheck/API] Fetching:', url);
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+      if (sessionToken) {
+        headers.set('Authorization', `Bearer ${sessionToken}`);
+      }
 
-    console.log('[SourceCheck/API] Response status:', response.status);
+      if (hasCustomKey) {
+        headers.set('X-Custom-Api-Key', customApiKey.trim());
+      }
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      console.error('[SourceCheck/API] API Error:', response.status, errorText);
-      throw new Error(`API Error ${response.status}: ${errorText}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const url = `${API_BASE}${endpoint}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
+          
+          // Check if we should retry this error
+          if (attempt < MAX_RETRIES && isTransientError(response.status, null)) {
+            console.warn(`[SourceCheck/API] Transient error ${response.status}, will retry:`, errorText.slice(0, 100));
+            lastError = new Error(`API Error ${response.status}: ${errorText}`);
+            continue; // Go to next retry iteration
+          }
+          
+          // Not retryable or out of retries
+          throw new Error(`API Error ${response.status}: ${errorText}`);
+        }
+
+        const data = await response.json();
+        
+        if (attempt > 0) {
+          console.log('[SourceCheck/API] Success after retry');
+        }
+        
+        return data;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      const status = error instanceof Error && error.message.match(/API Error (\d+)/)?.[1];
+      const statusNum = status ? parseInt(status, 10) : null;
+      
+      // Check if this is a retryable network error
+      if (attempt < MAX_RETRIES && isTransientError(statusNum, error)) {
+        console.warn(`[SourceCheck/API] Transient error on attempt ${attempt}, will retry:`, 
+          error instanceof Error ? error.message : String(error));
+        lastError = error instanceof Error ? error : new Error(String(error));
+        continue; // Go to next retry iteration
+      }
+      
+      // Not retryable or out of retries - rethrow
+      throw error;
     }
-
-    const data = await response.json();
-    console.log('[SourceCheck/API] Success - response parsed');
-    return data;
-  } catch (e) {
-    console.error('[SourceCheck/API] Fetch error:', e);
-    throw e;
-  } finally {
-    clearTimeout(timeoutId);
   }
+  
+  // Exhausted all retries
+  console.error(`[SourceCheck/API] Exhausted all ${MAX_RETRIES} retries`);
+  throw lastError ?? new Error('Request failed after retries');
 }
