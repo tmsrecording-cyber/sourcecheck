@@ -47,6 +47,9 @@ function makeVerifyRequest(overrides: Record<string, unknown> = {}) {
 
   return {
     json: () => Promise.resolve(body),
+    headers: new Headers({
+      'origin': 'chrome-extension://test-extension-id',
+    }),
   } as unknown as NextRequest;
 }
 

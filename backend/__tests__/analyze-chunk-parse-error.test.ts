@@ -41,6 +41,9 @@ vi.mock('next/server', () => ({
     json: (body: unknown, init?: { status?: number }) => ({
       status: init?.status ?? 200,
       json: () => Promise.resolve(body),
+      headers: {
+        set: () => {},
+      },
     }),
   },
 }));
@@ -67,7 +70,12 @@ const VALID_BODY = {
 };
 
 function fakeRequest(body = VALID_BODY) {
-  return { json: () => Promise.resolve(body) } as any;
+  return {
+    json: () => Promise.resolve(body),
+    headers: new Headers({
+      'origin': 'chrome-extension://test-extension-id',
+    }),
+  } as any;
 }
 
 // ---------------------------------------------------------------------------
