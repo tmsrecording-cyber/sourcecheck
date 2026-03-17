@@ -650,9 +650,19 @@ async function callGemini(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
 
+    // DEBUG: Log the actual API call details
+    const apiUrl = `${API_BASE}/models/${model}:generateContent`;
+    console.log('[gemini.ts] Calling Gemini API:', {
+      url: apiUrl,
+      model,
+      hasApiKey: !!apiKey,
+      apiKeyLength: apiKey?.length || 0,
+      useGrounding,
+    });
+    
     try {
       const response = await fetch(
-        `${API_BASE}/models/${model}:generateContent`,
+        apiUrl,
         {
           method: 'POST',
           headers: {
@@ -666,6 +676,15 @@ async function callGemini(
 
       if (!response.ok) {
         const errorBody = await response.text();
+        
+        // DEBUG: Log the actual error from Google
+        console.error('[gemini.ts] Gemini API error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorBody: errorBody.substring(0, 500),
+          model,
+          apiUrl,
+        });
 
         if (response.status === 429) {
           throw new GeminiError('RATE_LIMITED', 'Gemini API rate limit hit. Try again in a moment.', 429);

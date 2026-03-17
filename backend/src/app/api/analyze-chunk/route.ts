@@ -246,6 +246,15 @@ export async function POST(request: NextRequest) {
 
     // Extract BYOK header - user can provide their own API key
     const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+    
+    // DEBUG: Log incoming request details
+    console.log('[analyze-chunk] Request:', {
+      videoId: parsedBody.videoId,
+      model: parsedBody.model,
+      hasCustomKey: !!customApiKey,
+      customKeyLength: customApiKey?.length || 0,
+      chunkCount: parsedBody.chunks.length,
+    });
 
     const combinedText = parsedBody.chunks
       .map((chunk) => chunk.text)
@@ -362,10 +371,14 @@ export async function POST(request: NextRequest) {
     return response;
 
   } catch (error: unknown) {
-    console.error('[analyze-chunk] Error:', {
+    // DEBUG: Log full error details to Vercel logs
+    console.error('[analyze-chunk] RAW ERROR:', error);
+    console.error('[analyze-chunk] Error details:', {
       name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : 'N/A',
       code: isGeminiError(error) ? error.code : undefined,
       status: isGeminiError(error) ? error.status : undefined,
+      stack: error instanceof Error ? error.stack : 'N/A',
     });
 
     if (body && isGeminiError(error) && error.code === 'PARSE_ERROR') {
