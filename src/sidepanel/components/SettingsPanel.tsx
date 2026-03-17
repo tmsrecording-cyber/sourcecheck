@@ -169,18 +169,29 @@ export const SettingsPanel = ({ onSaved }: SettingsPanelProps) => {
                 </button>
               </div>
 
-              <p className="mt-4 border-t border-white/10 pt-3 text-[12px] leading-relaxed text-textMuted">
-                A Gemini key can still be stored here for future experiments. Get one at{' '}
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-accentSoft underline"
-                >
-                  aistudio.google.com
-                </a>
-                . In the current beta, SourceCheck requests still go through the backend, and model selection here does not switch the live runtime.
-              </p>
+              <div className="mt-4 border-t border-white/10 pt-3">
+                <p className="text-[12px] leading-relaxed text-textMuted">
+                  <strong className="text-textMain/80">Google AI Studio API key</strong>
+                </p>
+                <p className="mt-1 text-[12px] leading-relaxed text-textMuted">
+                  1. Go to{' '}
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accentSoft underline"
+                  >
+                    Google AI Studio
+                  </a>
+                  <br />
+                  2. Click &ldquo;Create API key&rdquo; (no billing required for free tier)
+                  <br />
+                  3. Copy and paste the key starting with &ldquo;AIza&rdquo;
+                </p>
+                <p className="mt-2 text-[11px] leading-relaxed text-textMuted/60">
+                  Current beta: requests route through SourceCheck backend. Full local mode coming.
+                </p>
+              </div>
             </div>
           </div>
         </div>

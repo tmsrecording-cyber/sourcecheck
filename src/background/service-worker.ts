@@ -1608,6 +1608,26 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     }
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) return;
     console.error('[SourceCheck/SW] Verification queue error after retries:', summarizeErrorForLog(error));
+    
+    // Create a failed verification card so users see the error, not a silent failure
+    const errorCard: SourceCard = {
+      id: crypto.randomUUID(),
+      claim: item.claim,
+      status: 'unverifiable',
+      sourceTitle: 'Check failed',
+      sourceUrl: '',
+      sourceType: 'other',
+      nuance: 'Verification temporarily unavailable. The claim was saved and will retry automatically.',
+      timestampSeconds: item.claim.timestampSeconds,
+      verifiedAt: new Date().toISOString(),
+    };
+    
+    removePendingClaimByKey(item.key);
+    if (!hasCardForClaim(item.claim)) {
+      allSourceCards = [errorCard, ...allSourceCards].slice(0, MAX_SOURCE_CARDS);
+    }
+    dispatch({ type: 'VERIFY_COMPLETED' });
+    persistPanelState({ includeCards: true, includeQueue: true });
   } finally {
     activeVerificationKeys.delete(item.key);
     console.log(

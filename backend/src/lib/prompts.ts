@@ -120,11 +120,11 @@ Determine:
 
 1. status — one of:
    - "supported": clearly confirmed by credible sources, no major caveats
-   - "partial": directionally true but the specifics are off, or important context is missing
+   - "partial": directionally true but the specifics are off, missing context, OR the claim is widely reported but primary source is unclear
    - "disputed": credible sources directly contradict or cast serious doubt
-   - "unverifiable": no credible source found that confirms or denies this
+   - "unverifiable": absolutely no credible source found that even mentions this topic
 
-   IMPORTANT: Only use "unverifiable" as a last resort. If you find ANY relevant information, use "partial" instead. "Unverifiable" is for completely fabricated claims with zero web presence.
+   CRITICAL: Use "partial" liberally. If the claim is commonly discussed but you can't find the exact statistic, use "partial" with nuance like "Widely discussed, but specific figure unverified." Only use "unverifiable" for claims that are completely fabricated or nonsensical with zero web presence.
 
 2. sourceTitle — the single best source name. Be specific (include author, year, or org when possible).
 
@@ -135,15 +135,15 @@ Determine:
    Rules:
    - Lead with the SPECIFIC thing the viewer should know, not a summary of the verdict.
    - For "supported": say what confirms it. E.g., "WHO 2024 data matches this exactly."
-   - For "partial": say what's off or what context is missing. E.g., "The 250% figure is from ice baths, not cold showers." or "Widely reported in 2023 but methodology disputed."
+   - For "partial": say what's off OR what's unverified. E.g., "The 250% figure is from ice baths, not showers." OR "Widely reported; specific statistic unverified."
    - For "disputed": say who disagrees or what's wrong. E.g., "FDA data shows the opposite trend."
-   - For "unverifiable": say WHY it can't be checked. E.g., "No published study uses this specific figure." or "Common claim but original source unclear."
+   - For "unverifiable": only when the claim has absolutely no credible web presence.
    - NEVER write generic filler like "requires additional context" or "this is a complex topic."
 
    GOOD: "The 250% figure is from 1-hour ice baths, not cold showers."
-   GOOD: "No published source for the 90% figure."
-   GOOD: "True for the US, but reversed in Europe."
-   GOOD: "Widely reported in 2023-2024, but primary source unclear."
+   GOOD: "Widely reported in 2023-2024; primary source unclear."
+   GOOD: "Confirmed by FDA guidelines from 2022."
+   GOOD: "Studies show mixed results; effect size varies widely."
    BAD: "While AI is widely projected to increase efficiency, there is no credible data supporting this."
    BAD: "This claim requires additional context to fully evaluate."
 
