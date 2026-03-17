@@ -699,6 +699,8 @@ function methodCanHaveBody(method: string) {
   return upperMethod !== 'GET' && upperMethod !== 'HEAD' && upperMethod !== 'OPTIONS';
 }
 
-export const config = {
-  matcher: '/api/:path*',
-};
+// DISABLED: Middleware causes Edge Runtime issues with ioredis
+// Rate limiting now handled directly in API routes
+// export const config = {
+//   matcher: '/api/:path*',
+// };

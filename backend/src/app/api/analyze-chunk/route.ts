@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
 import { buildClaimExtractionPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
+import { InMemoryRateLimitStore } from '@/lib/rate-limit-store';
+
+// Force Node.js runtime - Edge runtime doesn't support ioredis
+export const runtime = 'nodejs';
+
+// Simple in-memory rate limiter for this route
+const rateLimitStore = new InMemoryRateLimitStore();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_POINTS = 80;
+const RATE_LIMIT_COST = 2;
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -239,6 +249,27 @@ export async function POST(request: NextRequest) {
       const response = NextResponse.json(
         { error: validationError },
         { status: 400 }
+      );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
+
+    // Rate limiting check (moved from middleware to route)
+    const extensionId = request.headers.get('x-extension-id')?.trim() || 'unknown';
+    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const rateLimitKey = `ext:${extensionId}:ip:${clientIp}:/api/analyze-chunk`;
+    
+    const allowed = await rateLimitStore.tryConsume(
+      rateLimitKey,
+      RATE_LIMIT_COST,
+      RATE_LIMIT_MAX_POINTS,
+      RATE_LIMIT_WINDOW_MS
+    );
+    
+    if (!allowed) {
+      const response = NextResponse.json(
+        { error: 'Rate limit exceeded. Please retry shortly.' },
+        { status: 429 }
       );
       Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
       return response;
