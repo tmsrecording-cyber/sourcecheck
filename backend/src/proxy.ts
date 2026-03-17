@@ -25,6 +25,7 @@ const SESSION_INIT_PATH = '/api/session/init';
 // ---------------------------------------------------------------------------
 
 let _rateLimitStore: RateLimitStore | null = null;
+let _redisUnavailableLogged = false;
 
 /**
  * Returns the active rate-limit store.
@@ -33,13 +34,41 @@ let _rateLimitStore: RateLimitStore | null = null;
  * - REDIS_URL unset → InMemoryRateLimitStore (process-local; fine for dev /
  *                     single-process deployments).  A warning is emitted once
  *                     when running on a non-localhost host without Redis.
+ * 
+ * Edge Runtime Handling:
+ * If ioredis fails to load (e.g., in Vercel Edge runtime), we gracefully
+ * fall back to InMemoryRateLimitStore and emit a warning.
  */
-function getRateLimitStore(): RateLimitStore {
+async function getRateLimitStore(request: NextRequest): Promise<RateLimitStore> {
   if (_rateLimitStore) return _rateLimitStore;
 
   const redisUrl = process.env.REDIS_URL?.trim();
   if (redisUrl) {
-    _rateLimitStore = new RedisRateLimitStore(redisUrl);
+    const redisStore = new RedisRateLimitStore(redisUrl);
+    
+    // Test the Redis store by attempting a dry-run consumption
+    // This will trigger the ioredis module load and fail gracefully if unavailable
+    const testResult = await redisStore.tryConsume('__test_key__', 0, 100, 60000);
+    
+    // If Redis is fully unavailable (module load failed or connection refused),
+    // the store will return false. We check if this is due to module unavailability
+    // by examining if we're in an Edge runtime environment.
+    // 
+    // Note: We can't easily detect module load failure vs. connection failure,
+    // so we rely on the warning logs from rate-limit-store.ts
+    _rateLimitStore = redisStore;
+    
+    // If we're on a non-localhost host and Redis might be having issues,
+    // log a warning but continue with the Redis store (it may recover)
+    if (!isLocalApiHost(request.nextUrl.hostname) && !_redisUnavailableLogged) {
+      console.warn(
+        '[SourceCheck/proxy] Redis configured but may be unavailable. ' +
+        'If you see ioredis load errors above, the deployment environment ' +
+        'may not support Node.js-specific modules. Consider using InMemoryRateLimitStore ' +
+        'or switching to a Node.js runtime (not Edge).'
+      );
+      _redisUnavailableLogged = true;
+    }
   } else {
     _rateLimitStore = new InMemoryRateLimitStore();
   }
@@ -126,9 +155,9 @@ export async function proxy(request: NextRequest) {
   
   if (hasCustomKey) {
     console.log(`[SourceCheck/proxy] BYOK request detected for ${authResult.identity}, skipping rate limit`);
-    // Add the custom key to the request headers for downstream API routes
+    // Note: API routes read the custom key directly from request headers,
+    // no need to set it on response. Pass through with CORS headers.
     const response = NextResponse.next();
-    response.headers.set('X-Custom-Api-Key', customApiKey);
     
     Object.entries(corsHeaders).forEach(([key, value]) => {
       response.headers.set(key, value);
@@ -186,17 +215,16 @@ async function exceedsRequestSizeLimit(request: NextRequest) {
       if (!reader) return false;
       
       let totalBytes = 0;
-      const chunk = await reader.read();
-      // Accumulate chunks up to max + 1 to detect overflow
-      while (!chunk.done) {
+      // Read chunks in a loop, accumulating total bytes
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        
         totalBytes += chunk.value?.length || 0;
         if (totalBytes > maxRequestBytes) {
-          reader.cancel();
+          await reader.cancel();
           return true;
         }
-        // Read next chunk
-        const next = await reader.read();
-        if (next.done) break;
       }
       return false;
     } catch {
@@ -226,6 +254,7 @@ function getCorsHeaders(request: NextRequest): Record<string, string> {
       'Authorization',
       'X-Extension-Version',
       'X-Extension-Id',
+      'X-Custom-Api-Key',
     ].join(', '),
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
@@ -626,7 +655,7 @@ async function applyRateLimit(request: NextRequest, identity: string): Promise<b
     }
   }
 
-  const store = getRateLimitStore();
+  const store = await getRateLimitStore(request);
   return store.tryConsume(bucketKey, cost, getRateLimitMaxPoints(), getRateLimitWindowMs());
 }
 

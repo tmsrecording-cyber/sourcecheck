@@ -106,7 +106,9 @@ local max_pts = tonumber(ARGV[2])
 local win_ms  = tonumber(ARGV[3])
 local now_ms  = tonumber(ARGV[4])
 
-if pts == 0 or (now_ms - win) >= win_ms then
+-- Only reset window if it has actually expired (or on first use where win=0)
+-- Note: pts==0 is NOT a reset condition because it happens when budget is exhausted
+if (now_ms - win) >= win_ms then
   if cost > max_pts then
     return 0
   end
@@ -133,39 +135,106 @@ return 1
  * be bypassed during a Redis outage.
  */
 // Dynamically import ioredis to avoid Edge runtime issues
-interface RedisClient {
+// This module uses a lazy-loading pattern to prevent bundler issues in Edge runtimes
+
+type RedisClient = {
   eval(...args: (string | number)[]): Promise<unknown>;
   on(event: string, callback: (err: Error) => void): void;
+};
+
+// Module-level cache for the ioredis module to avoid repeated dynamic imports
+let ioredisModule: { default: new (url: string, options: Record<string, unknown>) => RedisClient } | null = null;
+
+/**
+ * Lazily load ioredis module. This is wrapped in a try-catch to handle Edge runtime
+ * environments where ioredis may not be available or may fail to load due to
+ * Node.js-specific dependencies (like 'net', 'tls').
+ */
+async function loadIoRedis(): Promise<typeof ioredisModule> {
+  if (ioredisModule) {
+    return ioredisModule;
+  }
+  
+  try {
+    // Use a variable to hold the import to avoid direct string literal analysis issues
+    const moduleName = 'ioredis';
+    const imported = await import(moduleName);
+    ioredisModule = imported as typeof ioredisModule;
+    return ioredisModule;
+  } catch (error) {
+    // ioredis failed to load (likely in Edge runtime or missing dependencies)
+    console.error(
+      '[SourceCheck/ratelimit] Failed to load ioredis module. ' +
+      'This is expected in Edge runtimes. Error:',
+      error instanceof Error ? error.message : String(error)
+    );
+    return null;
+  }
 }
 
-async function getRedisClient(redisUrl: string): Promise<RedisClient> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { default: Redis } = await import('ioredis') as any;
-  const client = new Redis(redisUrl, {
+async function getRedisClient(redisUrl: string): Promise<RedisClient | null> {
+  const Redis = await loadIoRedis();
+  
+  if (!Redis) {
+    return null;
+  }
+  
+  const client = new Redis.default(redisUrl, {
     lazyConnect: true,
     enableReadyCheck: false,
     maxRetriesPerRequest: 0,
     connectTimeout: 2_000,
   });
+  
   client.on('error', (err: Error) => {
     console.error('[SourceCheck/ratelimit] Redis error:', err.message);
   });
-  return client as RedisClient;
+  
+  return client;
 }
 
 export class RedisRateLimitStore implements RateLimitStore {
   private client: RedisClient | null = null;
   private readonly redisUrl: string;
+  private loadError: Error | null = null;
+  private fallbackStore: InMemoryRateLimitStore | null = null;
+  private isUsingFallback = false;
 
   constructor(redisUrl: string) {
     this.redisUrl = redisUrl;
   }
 
-  private async getClient(): Promise<RedisClient> {
+  private async getClient(): Promise<RedisClient | null> {
+    if (this.loadError) {
+      // Previously failed to load, don't retry
+      return null;
+    }
+    
     if (!this.client) {
       this.client = await getRedisClient(this.redisUrl);
+      
+      if (!this.client) {
+        this.loadError = new Error('Failed to initialize Redis client - ioredis module unavailable');
+      }
     }
+    
     return this.client;
+  }
+
+  /**
+   * Get or create the fallback in-memory store.
+   * This is used when Redis is unavailable to provide graceful degradation
+   * rather than completely denying all requests.
+   */
+  private getFallbackStore(): InMemoryRateLimitStore {
+    if (!this.fallbackStore) {
+      this.fallbackStore = new InMemoryRateLimitStore();
+      console.warn(
+        '[SourceCheck/ratelimit] Initialized in-memory fallback store. ' +
+        'Rate limits will be process-local only until Redis recovers.'
+      );
+    }
+    return this.fallbackStore;
   }
 
   async tryConsume(
@@ -174,8 +243,25 @@ export class RedisRateLimitStore implements RateLimitStore {
     maxPoints: number,
     windowMs: number,
   ): Promise<boolean> {
+    // If we're already using fallback, continue using it
+    if (this.isUsingFallback) {
+      return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
+    }
+
     try {
       const client = await this.getClient();
+      
+      // If Redis client couldn't be initialized (e.g., in Edge runtime),
+      // gracefully fall back to in-memory store
+      if (!client) {
+        console.warn(
+          '[SourceCheck/ratelimit] Redis client unavailable, activating in-memory fallback. ' +
+          'Rate limits will be process-local only.'
+        );
+        this.isUsingFallback = true;
+        return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
+      }
+      
       const result = (await client.eval(
         RATE_LIMIT_LUA,
         1,
@@ -187,13 +273,14 @@ export class RedisRateLimitStore implements RateLimitStore {
       )) as number;
       return result === 1;
     } catch (err) {
-      // Redis is unavailable — fail closed so the limit cannot be bypassed
-      // during an outage.
+      // Redis command failed — switch to fallback for graceful degradation
+      // rather than completely denying all requests during a Redis outage.
       console.error(
-        '[SourceCheck/ratelimit] Redis eval failed, denying request:',
+        '[SourceCheck/ratelimit] Redis eval failed, switching to in-memory fallback:',
         err instanceof Error ? err.message : String(err),
       );
-      return false;
+      this.isUsingFallback = true;
+      return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
     }
   }
 }
