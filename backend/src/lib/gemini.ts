@@ -27,6 +27,7 @@ type GeminiCallOptions = {
   responseMimeType?: string;
   responseJsonSchema?: GeminiJsonSchema;
   model?: string;  // Allow dynamic model selection from client
+  tier?: 'free' | 'pro';  // User tier for model access control
 };
 
 // Minimal JSON Schema validator covering the subset used in this codebase:
@@ -548,6 +549,28 @@ const ALLOWED_MODELS = [
   'gemini-2.5-flash-lite-preview',
 ];
 
+// Freemium tier model restrictions
+// Free tier: only light/fast models; Pro tier: all models
+const FREE_TIER_MODELS = [
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-lite-preview',
+];
+const PRO_TIER_MODELS = ALLOWED_MODELS; // Pro gets all allowed models
+
+// Default tiers - in production, this would come from auth/subscription system
+function getTierForRequest(_identity?: string): 'free' | 'pro' {
+  // TODO: Integrate with actual subscription/auth system
+  // For now, all requests are treated as free tier
+  return 'free';
+}
+
+/**
+ * Get allowed models for a given tier.
+ */
+export function getModelsForTier(tier: 'free' | 'pro'): string[] {
+  return tier === 'pro' ? PRO_TIER_MODELS : FREE_TIER_MODELS;
+}
+
 /**
  * Core Gemini API call — shared by both grounded and ungrounded paths.
  */
@@ -559,11 +582,26 @@ async function callGemini(
 ): Promise<GeminiResponse> {
   const apiKey = process.env.GEMINI_API_KEY;
   
-  // Security: Validate model against whitelist, fallback if invalid
+  // Security: Validate model against whitelist and tier restrictions
   const requestedModel = options.model || getModel();
-  const model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
+  const tier = options.tier || getTierForRequest();
+  const allowedForTier = getModelsForTier(tier);
+  
+  // First check: model must be in global allowlist
+  let model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
+  
+  // Second check: model must be allowed for user's tier
+  if (!allowedForTier.includes(model)) {
+    // Fall back to first allowed model for this tier
+    const fallbackModel = allowedForTier[0] || DEFAULT_MODEL;
+    console.warn(
+      `[gemini.ts] Model '${model}' not allowed for ${tier} tier, falling back to '${fallbackModel}'`
+    );
+    model = fallbackModel;
+  }
+  
   if (requestedModel !== model) {
-    console.warn(`[gemini.ts] Invalid model '${requestedModel}' requested, using '${model}'`);
+    console.warn(`[gemini.ts] Invalid/tier-restricted model '${requestedModel}' requested, using '${model}'`);
   }
   const thinkingBudget = getThinkingBudget(model);
   const requestTimeoutMs = getRequestTimeoutMs();

@@ -10,7 +10,7 @@
       ]
     },
     "condition": {
-      "urlFilter": "*://*.youtube.com/api/timedtext*",
+      "urlFilter": "||youtube.com/api/timedtext*",
       "resourceTypes": ["xmlhttprequest"]
     }
   }

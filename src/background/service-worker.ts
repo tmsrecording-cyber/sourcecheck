@@ -1142,6 +1142,13 @@ const persistPanelState = (options: {
   chrome.storage.session.set(payload, () => {
     if (chrome.runtime.lastError) {
       console.error('[SourceCheck/SW] Failed to persist panel state:', chrome.runtime.lastError.message);
+    } else {
+      console.log('[Pipeline] State persisted:', {
+        sourceCardsCount: sourceCards.length,
+        pendingClaimsCount: pendingClaims.length,
+        lifecycle: runtimeState.lifecycle,
+        chunksScanned: runtimeState.chunksScanned,
+      });
     }
   });
 };
@@ -1620,7 +1627,25 @@ const askVideoQuestion = async (question: string) => {
 
 const processPlayback = async (currentTime: number) => {
   const activeVideo = currentVideoInfo;
-  if (!currentTranscript.length || !activeVideo || isProcessing) return;
+  
+  // AGGRESSIVE PIPELINE LOGGING
+  console.log('[Pipeline] processPlayback called:', {
+    currentTime,
+    transcriptLength: currentTranscript.length,
+    hasActiveVideo: !!activeVideo,
+    isProcessing,
+    lastProcessedIndex,
+    videoId: activeVideo?.videoId,
+  });
+  
+  if (!currentTranscript.length || !activeVideo || isProcessing) {
+    console.log('[Pipeline] Early return:', {
+      noTranscript: !currentTranscript.length,
+      noVideo: !activeVideo,
+      isProcessing,
+    });
+    return;
+  }
 
   currentScanPreview = getLivePreview(currentTime);
   syncVisibleTimelineState(currentTime);
@@ -1658,12 +1683,18 @@ const processPlayback = async (currentTime: number) => {
   const combinedText = chunksToProcess.map((c) => c.text).join(' ');
   const wordCount = combinedText.trim().split(/\s+/).length;
   if (wordCount < 10 && currentIndex < currentTranscript.length - 1) {
+    console.log('[Pipeline] Skipping: insufficient words', { wordCount, currentIndex, totalChunks: currentTranscript.length });
     return;
   }
 
   const backlogChunks = Math.max(0, currentIndex - lastProcessedIndex);
   const now = Date.now();
-  if (now - lastAnalyzedAt < getAnalysisIntervalMs(backlogChunks)) return;
+  const timeSinceLast = now - lastAnalyzedAt;
+  const intervalMs = getAnalysisIntervalMs(backlogChunks);
+  if (timeSinceLast < intervalMs) {
+    console.log('[Pipeline] Skipping: rate limited', { timeSinceLast, intervalMs, backlogChunks });
+    return;
+  }
   lastAnalyzedAt = now;
 
   dispatch({ type: 'ANALYZE_STARTED' });
@@ -1674,9 +1705,16 @@ const processPlayback = async (currentTime: number) => {
 
   try {
     const analyzeEndpoint = `${API_BASE}/api/analyze-chunk`;
-    console.log(
-      `[SourceCheck/SW] analyze-chunk request video=${requestVideoId} endpoint=${analyzeEndpoint} currentTime=${currentTime} startIndex=${startIndex} endIndex=${endIndex}`
-    );
+    // AGGRESSIVE PIPELINE LOGGING
+    console.log('[Pipeline] ANALYZE CHUNK START:', {
+      videoId: requestVideoId,
+      startIndex,
+      endIndex,
+      chunkCount: chunksToProcess.length,
+      wordCount: chunksToProcess.map(c => c.text).join(' ').split(/\s+/).length,
+      firstChunk: chunksToProcess[0]?.text?.slice(0, 50),
+      lastChunk: chunksToProcess[chunksToProcess.length - 1]?.text?.slice(0, 50),
+    });
 
     const analyzeRes = await fetchWithTimeout(analyzeEndpoint, {
       method: 'POST',
@@ -1689,9 +1727,11 @@ const processPlayback = async (currentTime: number) => {
         model: runtimeState.selectedModel,
       }),
     });
-    console.log(
-      `[SourceCheck/SW] analyze-chunk response video=${requestVideoId} status=${analyzeRes.status} startIndex=${startIndex} endIndex=${endIndex}`
-    );
+    console.log('[Pipeline] API Response:', {
+      videoId: requestVideoId,
+      status: analyzeRes.status,
+      ok: analyzeRes.ok,
+    });
 
     if (runGeneration !== processingGeneration || currentVideoInfo?.videoId !== requestVideoId) return;
 
@@ -1707,7 +1747,18 @@ const processPlayback = async (currentTime: number) => {
     }
 
     const extraction: AnalyzeChunkResponse = await analyzeRes.json();
-    if (runGeneration !== processingGeneration || currentVideoInfo?.videoId !== requestVideoId) return;
+    console.log('[Pipeline] Parsed Response:', {
+      videoId: requestVideoId,
+      hasClaim: extraction.has_claim,
+      claimCount: extraction.claims?.length || 0,
+      actionState: extraction.action_state,
+      claims: extraction.claims?.map(c => ({ text: c.claimText?.slice(0, 40), confidence: c.confidence })),
+    });
+    
+    if (runGeneration !== processingGeneration || currentVideoInfo?.videoId !== requestVideoId) {
+      console.log('[Pipeline] Generation mismatch or video changed, aborting.');
+      return;
+    }
     // Advance only after a successful parse — malformed 200 bodies fall through
     // to the catch block which explicitly does NOT advance lastProcessedIndex.
     lastProcessedIndex = endIndex;
@@ -1743,8 +1794,10 @@ const processPlayback = async (currentTime: number) => {
     syncVisibleTimelineState(currentTime);
 
     if (claims.length > 0) {
+      console.log('[Pipeline] Claims extracted, enqueueing for verification:', claims.length);
       enqueueClaimsForVerification(claims);
     } else {
+      console.log('[Pipeline] No claims in this batch.');
       dispatch({ type: 'ANALYZE_COMPLETED', claimCount: 0 });
       persistPanelState();
     }

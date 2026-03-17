@@ -547,9 +547,11 @@ async function applyRateLimit(request: NextRequest, identity: string): Promise<b
   const path = request.nextUrl.pathname;
   const cost = RATE_LIMIT_COST_BY_PATH[path] || 1;
   // Rate limit by IP to prevent one abusive user from throttling everyone
-  const clientIp = request.headers.get('x-forwarded-for') || 
-                   request.headers.get('x-real-ip') || 
-                   'unknown';
+  // Extract first IP from x-forwarded-for (format: "client, proxy1, proxy2")
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  const clientIp = forwardedFor 
+    ? forwardedFor.split(',')[0].trim()
+    : request.headers.get('x-real-ip') || 'unknown';
   const bucketKey = `${identity}:ip:${clientIp}:${path}`;
 
   if (!process.env.REDIS_URL && !isLocalApiHost(request.nextUrl.hostname)) {

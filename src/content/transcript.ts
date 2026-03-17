@@ -123,9 +123,15 @@ type TranscriptFetchDebugLogger = (
 type TranscriptFetchFailureReason = Extract<
   TranscriptDebugReason,
   | 'fetch-failed'
+  | 'fetch-non-ok'
+  | 'fetch-empty-body'
+  | 'fetch-html-instead-of-transcript'
+  | 'fetch-json-no-events'
+  | 'fetch-xml-no-text'
   | 'response-empty'
   | 'parse-empty'
   | 'parse-error'
+  | 'parse-threw'
   | 'chunks-filtered-empty'
   | 'all-tracks-response-empty'
   | 'no-usable-track'
@@ -612,12 +618,33 @@ const fetchFreshPlayerResponse = async (
   }
 };
 
+// Extract InnerTube API key from page HTML using regex (Manifest V3 safe)
+// Content scripts cannot access window.ytcfg directly due to isolated world
+const extractInnerTubeApiKeyFromHtml = (html: string): string | null => {
+  // Pattern 1: ytcfg.set({..."INNERTUBE_API_KEY":"AIza..."...})
+  const setPattern = /ytcfg\.set\s*\(\s*\{[^}]*"INNERTUBE_API_KEY"\s*:\s*"(AIza[^"]+)"/;
+  const setMatch = html.match(setPattern);
+  if (setMatch?.[1]) return setMatch[1];
+
+  // Pattern 2: INNERTUBE_API_KEY":"AIza..." in any script
+  const keyPattern = /"INNERTUBE_API_KEY"\s*:\s*"(AIza[^"]+)"/;
+  const keyMatch = html.match(keyPattern);
+  if (keyMatch?.[1]) return keyMatch[1];
+
+  // Pattern 3: ytcfg.data_.INNERTUBE_API_KEY in script assignment
+  const dataPattern = /ytcfg\.data_\s*=\s*\{[^}]*"INNERTUBE_API_KEY"\s*:\s*"(AIza[^"]+)"/;
+  const dataMatch = html.match(dataPattern);
+  if (dataMatch?.[1]) return dataMatch[1];
+
+  return null;
+};
+
 // Use YouTube's internal InnerTube API to fetch the player response directly.
 // This is more reliable than HTML parsing on SPA navigation because ytInitialPlayerResponse
 // in the window/scripts is stale (it holds the previous video's data), and the fresh HTML
-// fetch can fail or return a simplified page for programmatic requests.
-const extractInnerTubeApiKey = (ytWindow: any): string | null => {
-  // Try multiple extraction paths (in order of reliability)
+// fetch can return a simplified page for programmatic requests.
+const extractInnerTubeApiKey = (ytWindow: any, html?: string): string | null => {
+  // Try direct window access first (may work in some contexts)
   const key =
     ytWindow.ytcfg?.get?.('INNERTUBE_API_KEY') ||
     ytWindow.yt?.config_?.INNERTUBE_API_KEY ||
@@ -627,16 +654,44 @@ const extractInnerTubeApiKey = (ytWindow: any): string | null => {
   if (key && typeof key === 'string' && key.startsWith('AIza')) {
     return key;
   }
+  
+  // Fallback: extract from HTML using regex (Manifest V3 safe)
+  if (html) {
+    return extractInnerTubeApiKeyFromHtml(html);
+  }
+  
   return null;
 };
 
-const extractInnerTubeClientVersion = (ytWindow: any): string => {
-  return (
+const extractInnerTubeClientVersionFromHtml = (html: string): string => {
+  // Pattern 1: ytcfg.set({..."INNERTUBE_CLIENT_VERSION":"2.2024..."...})
+  const setPattern = /ytcfg\.set\s*\(\s*\{[^}]*"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/;
+  const setMatch = html.match(setPattern);
+  if (setMatch?.[1]) return setMatch[1];
+
+  // Pattern 2: Direct INNERTUBE_CLIENT_VERSION in script
+  const versionPattern = /"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/;
+  const versionMatch = html.match(versionPattern);
+  if (versionMatch?.[1]) return versionMatch[1];
+
+  return '2.20240101.00.00';
+};
+
+const extractInnerTubeClientVersion = (ytWindow: any, html?: string): string => {
+  const version =
     ytWindow.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') ||
     ytWindow.yt?.config_?.INNERTUBE_CLIENT_VERSION ||
     ytWindow.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION ||
-    '2.20240101.00.00'
-  );
+    null;
+  
+  if (version) return version;
+  
+  // Fallback: extract from HTML using regex (Manifest V3 safe)
+  if (html) {
+    return extractInnerTubeClientVersionFromHtml(html);
+  }
+  
+  return '2.20240101.00.00';
 };
 
 const fetchPlayerResponseFromInnerTube = async (
@@ -645,13 +700,24 @@ const fetchPlayerResponseFromInnerTube = async (
 ): Promise<Record<string, any> | null> => {
   try {
     const ytWindow = window as any;
-    const apiKey = extractInnerTubeApiKey(ytWindow);
+    
+    // Get HTML for regex extraction (Manifest V3 safe - content script can read DOM)
+    const pageHtml = document.documentElement.innerHTML;
+    
+    // Try window access first, fallback to HTML regex extraction
+    const apiKey = extractInnerTubeApiKey(ytWindow, pageHtml);
     
     if (!apiKey) {
-      console.warn('[SourceCheck] No YouTube API key found in page config');
+      console.warn('[SourceCheck] No YouTube API key found in page config or HTML');
       return null;
     }
-    const clientVersion = extractInnerTubeClientVersion(ytWindow);
+    
+    const clientVersion = extractInnerTubeClientVersion(ytWindow, pageHtml);
+    
+    console.log('[SourceCheck] InnerTube API key extracted:', { 
+      fromWindow: !!ytWindow.ytcfg?.get?.('INNERTUBE_API_KEY'),
+      fromHtml: !ytWindow.ytcfg?.get?.('INNERTUBE_API_KEY') && !!apiKey 
+    });
 
     const response = await fetch(
       `https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`,
@@ -908,6 +974,13 @@ const withCaptionFormat = (transcriptUrl: string, format: 'xml' | 'json3' | 'srv
     if (format === 'srv3') {
       url.searchParams.set('fmt', 'srv3');
     }
+  }
+
+  // CRITICAL WAF BYPASS: YouTube drops requests without a declared web client
+  if (!url.searchParams.has('c')) {
+    url.searchParams.set('c', 'WEB');
+    url.searchParams.set('client', 'WEB'); // Redundant client param for legacy WAF
+    url.searchParams.set('cver', '2.20240228.06.00'); // Valid recent client version
   }
 
   return url.toString();
@@ -1347,56 +1420,112 @@ const loadTranscriptFromPanel = async (
 };
 
 const parseXmlTranscript = (xmlText: string): TranscriptChunk[] => {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
-  const textNodes = Array.from(xmlDoc.getElementsByTagName('text'));
+  try {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+    
+    // Check for parser errors
+    const parserErrors = Array.from(xmlDoc.getElementsByTagName('parsererror'));
+    if (parserErrors.length > 0) {
+      console.warn('[SourceCheck] XML parse error:', parserErrors[0]?.textContent);
+      return [];
+    }
+    
+    const textNodes = Array.from(xmlDoc.getElementsByTagName('text'));
 
-  return textNodes
-    .map(node => ({
-      text: cleanTranscriptText(decodeHtmlEntities(node.textContent || '')),
-      startMs: Math.round(parseFloat(node.getAttribute('start') || '0') * 1000),
-      durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('dur') || '0') * 1000)),
-    }))
-    .filter((chunk) => chunk.text.length > 0);
+    return textNodes
+      .map(node => ({
+        text: cleanTranscriptText(decodeHtmlEntities(node.textContent || '')),
+        startMs: Math.round(parseFloat(node.getAttribute('start') || '0') * 1000),
+        durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('dur') || '0') * 1000)),
+      }))
+      .filter((chunk) => chunk.text.length > 0);
+  } catch (error) {
+    console.warn('[SourceCheck] Failed to parse XML transcript:', error);
+    return [];
+  }
 };
 
 const analyzeXmlTranscript = (xmlText: string) => {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+  let xmlDoc: Document;
+  try {
+    const parser = new DOMParser();
+    xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+  } catch (error) {
+    console.log('[SourceCheck][HARD DEBUG] XML parse-threw:', error);
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'parse-threw',
+    };
+  }
+  
   const parserErrors = Array.from(xmlDoc.getElementsByTagName('parsererror'));
   if (parserErrors.length > 0) {
-    throw new Error('xml parsererror');
+    console.log('[SourceCheck][HARD DEBUG] XML parsererror:', parserErrors[0]?.textContent);
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'parse-error',
+    };
   }
 
   const textNodes = Array.from(xmlDoc.getElementsByTagName('text'));
+  
+  if (textNodes.length === 0) {
+    console.log('[SourceCheck][HARD DEBUG] XML has no <text> nodes');
+  }
+  
   const chunks = parseXmlTranscript(xmlText);
   return {
     rawCount: textNodes.length,
     chunks,
-    emptyReason: textNodes.length === 0 ? 'no-text-nodes' : 'filtered-to-zero',
+    emptyReason: textNodes.length === 0 ? 'fetch-xml-no-text' : chunks.length === 0 ? 'filtered-to-zero' : null,
   };
 };
 
 const parseJson3Transcript = (jsonText: string): TranscriptChunk[] => {
-  const payload = JSON.parse(jsonText) as Json3TranscriptResponse;
-  const events = Array.isArray(payload.events) ? payload.events : [];
+  try {
+    const payload = JSON.parse(jsonText) as Json3TranscriptResponse;
+    const events = Array.isArray(payload.events) ? payload.events : [];
 
-  return events
-    .map((event) => ({
-      text: cleanTranscriptText(
-        (event.segs || [])
-          .map(segment => segment.utf8 || '')
-          .join('')
-      ),
-      startMs: Math.max(0, Math.round(event.tStartMs || 0)),
-      durationMs: Math.max(1000, Math.round(event.dDurationMs || 0)),
-    }))
-    .filter((chunk) => chunk.text.length > 0);
+    return events
+      .map((event) => ({
+        text: cleanTranscriptText(
+          (event.segs || [])
+            .map(segment => segment.utf8 || '')
+            .join('')
+        ),
+        startMs: Math.max(0, Math.round(event.tStartMs || 0)),
+        durationMs: Math.max(1000, Math.round(event.dDurationMs || 0)),
+      }))
+      .filter((chunk) => chunk.text.length > 0);
+  } catch (error) {
+    console.warn('[SourceCheck][HARD DEBUG] JSON3 parse error:', error);
+    return [];
+  }
 };
 
 const analyzeJson3Transcript = (jsonText: string) => {
-  const payload = JSON.parse(jsonText) as Json3TranscriptResponse;
+  let payload: Json3TranscriptResponse;
+  try {
+    payload = JSON.parse(jsonText) as Json3TranscriptResponse;
+  } catch (error) {
+    console.log('[SourceCheck][HARD DEBUG] JSON3 parse-threw:', error);
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'parse-threw',
+    };
+  }
+  
   const events = Array.isArray(payload.events) ? payload.events : [];
+  
+  // Log if no events
+  if (events.length === 0) {
+    console.log('[SourceCheck][HARD DEBUG] JSON3 has no events array');
+  }
+  
   const chunks = events
     .map((event) => ({
       text: cleanTranscriptText(
@@ -1412,40 +1541,74 @@ const analyzeJson3Transcript = (jsonText: string) => {
   return {
     rawCount: events.length,
     chunks,
-    emptyReason: events.length === 0 ? 'no-events' : 'filtered-to-zero',
+    emptyReason: events.length === 0 ? 'fetch-json-no-events' : chunks.length === 0 ? 'filtered-to-zero' : null,
   };
 };
 
 const parseSrv3Transcript = (xmlText: string): TranscriptChunk[] => {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
-  const paragraphNodes = Array.from(xmlDoc.getElementsByTagName('p'));
+  try {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+    
+    // Check for parser errors
+    const parserErrors = Array.from(xmlDoc.getElementsByTagName('parsererror'));
+    if (parserErrors.length > 0) {
+      console.warn('[SourceCheck] SRV3 parse error:', parserErrors[0]?.textContent);
+      return [];
+    }
+    
+    const paragraphNodes = Array.from(xmlDoc.getElementsByTagName('p'));
 
-  return paragraphNodes
-    .map((node) => {
-      const segmentNodes = Array.from(node.getElementsByTagName('s'));
-      const text = segmentNodes.length > 0
-        ? segmentNodes.map((segment) => decodeHtmlEntities(segment.textContent || '')).join(' ')
-        : decodeHtmlEntities(node.textContent || '');
+    return paragraphNodes
+      .map((node) => {
+        const segmentNodes = Array.from(node.getElementsByTagName('s'));
+        const text = segmentNodes.length > 0
+          ? segmentNodes.map((segment) => decodeHtmlEntities(segment.textContent || '')).join(' ')
+          : decodeHtmlEntities(node.textContent || '');
 
-      return {
-        text: cleanTranscriptText(text),
-        startMs: Math.max(0, Math.round(parseFloat(node.getAttribute('t') || '0'))),
-        durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('d') || '0'))),
-      };
-    })
-    .filter((chunk) => chunk.text.length > 0);
+        return {
+          text: cleanTranscriptText(text),
+          startMs: Math.max(0, Math.round(parseFloat(node.getAttribute('t') || '0'))),
+          durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('d') || '0'))),
+        };
+      })
+      .filter((chunk) => chunk.text.length > 0);
+  } catch (error) {
+    console.warn('[SourceCheck] Failed to parse SRV3 transcript:', error);
+    return [];
+  }
 };
 
 const analyzeSrv3Transcript = (xmlText: string) => {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+  let xmlDoc: Document;
+  try {
+    const parser = new DOMParser();
+    xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+  } catch (error) {
+    console.log('[SourceCheck][HARD DEBUG] SRV3 parse-threw:', error);
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'parse-threw',
+    };
+  }
+  
   const parserErrors = Array.from(xmlDoc.getElementsByTagName('parsererror'));
   if (parserErrors.length > 0) {
-    throw new Error('srv3 parsererror');
+    console.log('[SourceCheck][HARD DEBUG] SRV3 parsererror:', parserErrors[0]?.textContent);
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'parse-error',
+    };
   }
 
   const paragraphNodes = Array.from(xmlDoc.getElementsByTagName('p'));
+  
+  if (paragraphNodes.length === 0) {
+    console.log('[SourceCheck][HARD DEBUG] SRV3 has no <p> nodes');
+  }
+  
   const segmentCount = paragraphNodes.reduce(
     (count, node) => count + node.getElementsByTagName('s').length,
     0
@@ -1455,20 +1618,31 @@ const analyzeSrv3Transcript = (xmlText: string) => {
     rawCount: paragraphNodes.length,
     chunks,
     emptyReason: paragraphNodes.length === 0
-      ? 'no-paragraphs'
-      : segmentCount === 0
-        ? 'no-segments'
-        : 'filtered-to-zero',
+      ? 'fetch-xml-no-text'
+      : chunks.length === 0 ? 'filtered-to-zero' : null,
   };
 };
 
 const getFailurePriority = (reason: TranscriptFetchFailureReason) => {
+  // Higher = more specific/useful for debugging
   switch (reason) {
+    case 'parse-threw':
+      return 10;
     case 'parse-error':
-      return 4;
+      return 9;
     case 'chunks-filtered-empty':
-      return 3;
+      return 8;
+    case 'fetch-json-no-events':
+      return 7;
+    case 'fetch-xml-no-text':
+      return 6;
     case 'parse-empty':
+      return 5;
+    case 'fetch-html-instead-of-transcript':
+      return 4;
+    case 'fetch-empty-body':
+      return 3;
+    case 'fetch-non-ok':
       return 2;
     case 'response-empty':
       return 1;
@@ -1480,14 +1654,25 @@ const getFailurePriority = (reason: TranscriptFetchFailureReason) => {
 
 const getAttemptFailureReason = (
   result: TranscriptFetchAttemptResult
-): TranscriptFetchFailureReason => (
-  result.reason === 'response-empty' ||
-  result.reason === 'parse-empty' ||
-  result.reason === 'parse-error' ||
-  result.reason === 'chunks-filtered-empty'
-    ? result.reason
-    : 'fetch-failed'
-);
+): TranscriptFetchFailureReason => {
+  // Return specific failure reasons directly
+  const reason = result.reason;
+  if (
+    reason === 'response-empty' ||
+    reason === 'parse-empty' ||
+    reason === 'parse-error' ||
+    reason === 'parse-threw' ||
+    reason === 'chunks-filtered-empty' ||
+    reason === 'fetch-non-ok' ||
+    reason === 'fetch-empty-body' ||
+    reason === 'fetch-html-instead-of-transcript' ||
+    reason === 'fetch-json-no-events' ||
+    reason === 'fetch-xml-no-text'
+  ) {
+    return reason;
+  }
+  return 'fetch-failed';
+};
 
 const fetchTranscriptChunks = async (
   transcriptUrl: string,
@@ -1518,29 +1703,43 @@ const fetchTranscriptChunks = async (
     emitTranscriptFetchDebug(onFetchDebug, 'html', 'fetch_started', `${candidate.format} ${candidate.url}`);
 
     try {
+      // Force an anonymous request to bypass auth-token mismatches
+      // YouTube WAF blocks credentialed requests without proper X-Youtube-Identity-Token
       const response = await fetch(candidate.url, {
-        credentials: 'include',
-        signal,
-        headers: {
-          'Accept': '*/*',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
-        }
+        credentials: 'omit', 
+        signal
       });
+      
+      // Get content-type header for debugging
+      const contentType = response.headers.get('content-type') || 'unknown';
       const bodyText = await response.text();
+
+      // HARD DEBUG: Log raw response details
+      console.log(`[SourceCheck][HARD DEBUG] Transcript fetch:`, {
+        format: candidate.format,
+        url: candidate.url,
+        status: response.status,
+        contentType,
+        bodyLength: bodyText.length,
+        bodyPreview: bodyText.slice(0, 300).replace(/\s+/g, ' '),
+        startsWithDoctype: bodyText.trim().toLowerCase().startsWith('<!doctype'),
+        startsWithHtml: bodyText.trim().toLowerCase().startsWith('<html'),
+        startsWithXml: bodyText.trim().startsWith('<?xml'),
+        looksLikeJson: bodyText.trim().startsWith('{') || bodyText.trim().startsWith('['),
+      });
 
       logTranscriptDetail('html', 'fetchStatus', {
         format: candidate.format,
         status: response.status,
         ok: response.ok,
         finalUrl: response.url,
+        contentType,
       });
       emitTranscriptFetchDebug(
         onFetchDebug,
         'html',
         'fetch_completed',
-        `${candidate.format} status=${response.status} ok=${response.ok} finalUrl=${response.url}`
+        `${candidate.format} status=${response.status} ok=${response.ok} contentType=${contentType} bytes=${bodyText.length}`
       );
 
       if (!response.ok) {
@@ -1553,14 +1752,17 @@ const fetchTranscriptChunks = async (
           onFetchDebug,
           'html',
           'error',
-          `${candidate.format} response preview=${preview || '[empty]'}`
+          `${candidate.format} fetch-non-ok status=${response.status} preview=${preview || '[empty]'}`
         );
-        bestFailure = {
+        const failure: TranscriptFetchAttemptResult = {
           chunks: null,
-          reason: 'fetch-failed',
+          reason: 'fetch-non-ok',
           format: candidate.format,
-          detail: `status=${response.status} preview=${preview || '[empty]'}`,
+          detail: `status=${response.status} contentType=${contentType} preview=${preview || '[empty]'}`,
         };
+        bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
+          ? failure
+          : bestFailure;
         console.log(`[SourceCheck] Transcript ${candidate.format} unavailable (${response.status}), trying next format.`);
         continue;
       }
@@ -1577,31 +1779,84 @@ const fetchTranscriptChunks = async (
           onFetchDebug,
           'html',
           'parse_empty',
-          `${candidate.format} response-empty bytes=${bodyText.length}`
+          `${candidate.format} fetch-empty-body bytes=${bodyText.length}`
         );
-        bestFailure = getFailurePriority('response-empty') >= getFailurePriority(getAttemptFailureReason(bestFailure))
-          ? {
-              chunks: null,
-              reason: 'response-empty',
-              format: candidate.format,
-              detail: `response-empty bytes=${bodyText.length}`,
-            }
+        const failure: TranscriptFetchAttemptResult = {
+          chunks: null,
+          reason: 'fetch-empty-body',
+          format: candidate.format,
+          detail: `fetch-empty-body bytes=${bodyText.length}`,
+        };
+        bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
+          ? failure
           : bestFailure;
-        console.log(`[SourceCheck] Transcript ${candidate.format} response-empty bytes=${bodyText.length}, trying next format.`);
-        console.log(`[SourceCheck] Transcript ${candidate.format} response was empty, trying next format.`);
+        console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} response was empty (0 bytes after trim)`);
+        continue;
+      }
+
+      // Detect HTML error pages
+      const trimmedLower = bodyText.trim().toLowerCase();
+      if (trimmedLower.startsWith('<!doctype') || 
+          trimmedLower.startsWith('<html') ||
+          trimmedLower.startsWith('<head') ||
+          trimmedLower.includes('<title>')) {
+        console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} returned HTML instead of transcript`);
+        emitTranscriptFetchDebug(
+          onFetchDebug,
+          'html',
+          'error',
+          `${candidate.format} fetch-html-instead-of-transcript received HTML page not transcript`
+        );
+        const failure: TranscriptFetchAttemptResult = {
+          chunks: null,
+          reason: 'fetch-html-instead-of-transcript',
+          format: candidate.format,
+          detail: 'fetch-html-instead-of-transcript: received HTML page instead of transcript',
+        };
+        bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
+          ? failure
+          : bestFailure;
         continue;
       }
 
       try {
         logTranscriptDetail('html', 'parseMode', candidate.format);
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'parse_started', candidate.format);
-        const parseResult =
-          candidate.format === 'xml'
+        
+        let parseResult;
+        try {
+          parseResult = candidate.format === 'xml'
             ? analyzeXmlTranscript(bodyText)
             : candidate.format === 'json3'
               ? analyzeJson3Transcript(bodyText)
               : analyzeSrv3Transcript(bodyText);
+        } catch (parseError) {
+          console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} parse threw:`, parseError);
+          emitTranscriptFetchDebug(
+            onFetchDebug,
+            'html',
+            'parse_error',
+            `${candidate.format} parse-threw: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+          );
+          const failure: TranscriptFetchAttemptResult = {
+            chunks: null,
+            reason: 'parse-threw',
+            format: candidate.format,
+            detail: `parse-threw: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+          };
+          bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
+            ? failure
+            : bestFailure;
+          continue;
+        }
+        
         const { chunks } = parseResult;
+        
+        console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} parsed:`, {
+          rawCount: parseResult.rawCount,
+          chunksAfterFilter: chunks.length,
+          emptyReason: (parseResult as any).emptyReason,
+        });
 
         if (chunks.length > 0) {
           emitTranscriptFetchDebug(
@@ -1618,22 +1873,32 @@ const fetchTranscriptChunks = async (
           };
         }
 
-        const emptyReason = parseResult.emptyReason;
-        const reason: TranscriptFetchFailureReason =
-          emptyReason === 'filtered-to-zero' ? 'chunks-filtered-empty' : 'parse-empty';
+        const emptyReason = (parseResult as { emptyReason?: string }).emptyReason;
+        // Map specific empty reasons to specific failure reasons
+        const reason: TranscriptFetchFailureReason = (() => {
+          switch (emptyReason) {
+            case 'filtered-to-zero': return 'chunks-filtered-empty';
+            case 'fetch-json-no-events': return 'fetch-json-no-events';
+            case 'fetch-xml-no-text': return 'fetch-xml-no-text';
+            case 'parse-threw': return 'parse-threw';
+            case 'parse-error': return 'parse-error';
+            default: return 'parse-empty';
+          }
+        })();
         emitTranscriptFetchDebug(
           onFetchDebug,
           'html',
           'parse_empty',
           `${candidate.format} parsed 0 usable chunks reason=${emptyReason} rawCount=${parseResult.rawCount}`
         );
-        bestFailure = getFailurePriority(reason) >= getFailurePriority(getAttemptFailureReason(bestFailure))
-          ? {
-              chunks: null,
-              reason,
-              format: candidate.format,
-              detail: `${emptyReason} rawCount=${parseResult.rawCount}`,
-            }
+        const failure: TranscriptFetchAttemptResult = {
+          chunks: null,
+          reason,
+          format: candidate.format,
+          detail: `${emptyReason || 'unknown'} rawCount=${parseResult.rawCount}`,
+        };
+        bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
+          ? failure
           : bestFailure;
         console.log(`[SourceCheck] Transcript ${candidate.format} parsed 0 usable chunks reason=${emptyReason} rawCount=${parseResult.rawCount}, trying next format.`);
         console.log(`[SourceCheck] Transcript ${candidate.format} parsed but contained no usable chunks, trying next format.`);
@@ -1653,7 +1918,7 @@ const fetchTranscriptChunks = async (
           'parse_error',
           `${candidate.format} error=${getErrorMessage(error)} preview=${preview || '[empty]'}`
         );
-        bestFailure = getFailurePriority('parse-error') >= getFailurePriority(getAttemptFailureReason(bestFailure))
+        bestFailure = getFailurePriority('parse-error') >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
           ? {
               chunks: null,
               reason: 'parse-error',
@@ -1684,6 +1949,7 @@ const fetchTranscriptChunks = async (
     }
   }
 
+  console.log(`[SourceCheck][HARD DEBUG] All transcript fetch attempts failed. bestFailure:`, bestFailure);
   return bestFailure;
 };
 
@@ -1799,6 +2065,19 @@ export const extractTranscriptData = async (
       );
 
       const transcriptResult = await fetchTranscriptChunks(trackCandidate.baseUrl || '', signal, onFetchDebug);
+      
+      // Log detailed track-level result
+      console.log(`[SourceCheck][TRACK DEBUG] Track ${index + 1}/${trackCandidates.length} result:`, {
+        languageCode: trackCandidate.languageCode,
+        kind: trackCandidate.kind,
+        baseUrl: trackCandidate.baseUrl?.slice(0, 200) + '...',
+        success: transcriptResult.chunks && transcriptResult.chunks.length > 0,
+        reason: transcriptResult.reason,
+        format: transcriptResult.format,
+        detail: transcriptResult.detail,
+        chunkCount: transcriptResult.chunks?.length ?? 0,
+      });
+      
       if (transcriptResult.chunks?.length) {
         const chunks = transcriptResult.chunks;
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'transcript_candidate_count', `count=${chunks.length}`);
@@ -1811,15 +2090,27 @@ export const extractTranscriptData = async (
         });
       }
 
-      sawResponseEmpty = sawResponseEmpty || transcriptResult.reason === 'response-empty';
-      sawParseError = sawParseError || transcriptResult.reason === 'parse-error';
+      // Track specific failure reasons for better debugging
+      sawResponseEmpty = sawResponseEmpty || 
+        transcriptResult.reason === 'response-empty' || 
+        transcriptResult.reason === 'fetch-empty-body';
+      sawParseError = sawParseError || 
+        transcriptResult.reason === 'parse-error' ||
+        transcriptResult.reason === 'parse-threw';
       sawUsableBodyWithoutChunks = sawUsableBodyWithoutChunks || (
         transcriptResult.reason === 'parse-empty' ||
-        transcriptResult.reason === 'chunks-filtered-empty'
+        transcriptResult.reason === 'chunks-filtered-empty' ||
+        transcriptResult.reason === 'fetch-json-no-events' ||
+        transcriptResult.reason === 'fetch-xml-no-text'
       );
-      sawFetchFailure = sawFetchFailure || transcriptResult.reason === 'fetch-failed';
+      sawFetchFailure = sawFetchFailure || 
+        transcriptResult.reason === 'fetch-failed' ||
+        transcriptResult.reason === 'fetch-non-ok' ||
+        transcriptResult.reason === 'fetch-html-instead-of-transcript';
     }
 
+    // Determine final reason based on what we saw
+    // Priority: specific failures > generic failures
     const finalReason: TranscriptFetchFailureReason =
       sawResponseEmpty && !sawParseError && !sawUsableBodyWithoutChunks && !sawFetchFailure
         ? 'all-tracks-response-empty'
@@ -1831,10 +2122,10 @@ export const extractTranscriptData = async (
               ? 'fetch-failed'
               : 'no-usable-track';
 
-    if (
-      allowPanelAutoOpen &&
-      (finalReason === 'all-tracks-response-empty' || finalReason === 'no-usable-track')
-    ) {
+    // Check if this failure type is potentially recoverable via panel fallback
+    const isPotentiallyRecoverable = finalReason === 'all-tracks-response-empty' || finalReason === 'no-usable-track';
+    
+    if (allowPanelAutoOpen && isPotentiallyRecoverable) {
       console.log('[SourceCheck] Timedtext returned empty for all candidate tracks. Trying transcript panel fallback.');
       const panelFallbackResult = await tryPanelFallback();
       if (panelFallbackResult.transcript?.length) {
@@ -1843,13 +2134,40 @@ export const extractTranscriptData = async (
       }
     }
 
-    emitTranscriptFetchDebug(
-      onFetchDebug,
-      'html',
-      'error',
-      `transcript build failed reason=${finalReason} attemptedTracks=${trackCandidates.length}`
-    );
-    console.warn(`[SourceCheck] Caption tracks found but none produced a usable transcript. tracks=${trackCandidates.length} reason=${finalReason}`);
+    // Summary of all track attempts
+    console.log(`[SourceCheck][TRACK SUMMARY] All ${trackCandidates.length} tracks failed:`, {
+      sawResponseEmpty,
+      sawParseError,
+      sawUsableBodyWithoutChunks,
+      sawFetchFailure,
+      finalReason,
+      allowPanelAutoOpen,
+      isPotentiallyRecoverable,
+    });
+    
+    // UX FIX: Don't show hard failure error if fallback hasn't been attempted yet
+    // for failures that might be recoverable via panel fallback on next attempt
+    const suppressHardError = isPotentiallyRecoverable && !allowPanelAutoOpen;
+    
+    if (suppressHardError) {
+      console.log(`[SourceCheck] Timedtext failed: ${finalReason}, fallback not yet attempted - suppressing user-facing error`);
+      emitTranscriptFetchDebug(
+        onFetchDebug,
+        'html',
+        'error',
+        `transcript build failed reason=${finalReason} attemptedTracks=${trackCandidates.length} fallback_pending=true`
+      );
+    } else {
+      // Real failure - both timedtext and fallback failed (or non-recoverable error)
+      emitTranscriptFetchDebug(
+        onFetchDebug,
+        'html',
+        'error',
+        `transcript build failed reason=${finalReason} attemptedTracks=${trackCandidates.length}`
+      );
+      console.warn(`[SourceCheck] Caption tracks found but none produced a usable transcript. tracks=${trackCandidates.length} reason=${finalReason}`);
+    }
+    
     return withPanelState({
       transcript: null,
       debug: createTranscriptDebug('html', finalReason),

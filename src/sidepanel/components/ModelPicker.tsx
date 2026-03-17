@@ -151,7 +151,7 @@ export const ModelPickerStandalone = () => {
     // Notify background worker of model change
     chrome.runtime.sendMessage({
       type: 'MODEL_CHANGED',
-      payload: { model }
+      model: model  // Service worker expects top-level 'model', not payload.model
     }).catch(() => {
       // Ignore errors if background not ready
     });

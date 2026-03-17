@@ -163,6 +163,14 @@ const NON_ENTITY_TITLECASE = new Set([
   'why',
 ]);
 
+// NEW FIX: Ignore common capitalized sentence starters from transcripts
+const IGNORED_TITLE_CASE = new Set([
+  'And', 'But', 'Or', 'So', 'The', 'A', 'An', 'In', 'On', 'At', 'To', 'For', 'With',
+  'If', 'Then', 'When', 'Because', 'As', 'That', 'This', 'These', 'Those', 
+  'It', 'Is', 'Are', 'Was', 'Were', 'Will', 'Would', 'Can', 'Could', 'Should', 
+  'We', 'They', 'He', 'She', 'I', 'You', 'What', 'Where', 'Why', 'How', 'Yeah', 'Yes', 'No'
+]);
+
 const FEED_RAIL_LAYOUT = {
   '--rail-left': '46px',
   '--rail-node-left': '42px',
@@ -277,6 +285,9 @@ const shouldHighlightEntity = (value: string) => {
   if (rawToken === rawToken.toUpperCase() && rawToken.length > 6) {
     return false;
   }
+
+  // NEW FIX: Ignore common capitalized sentence starters from transcripts
+  if (IGNORED_TITLE_CASE.has(rawToken)) return false;
 
   // Proper Noun detection (Title Case like "Elon", "Microsoft")
   return (
@@ -594,21 +605,21 @@ const RailEntry = ({
         </span>
       </div>
     )}
-    {/* Phase 3: Intensified Diamond Node Glow */}
+    {/* Phase 3: Diamond Node - Centered alignment for 1:42 position */}
     <span
       className={`rail-node absolute h-2 w-2 left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
       style={{ 
         top: '10px',
-        borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.5)`,
-        boxShadow: '0 0 12px rgba(var(--model-accent-rgb, 168, 199, 250), 0.6), inset 0 0 4px rgba(255, 255, 255, 0.8)'
+        borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.45)`,
+        boxShadow: '0 0 10px rgba(var(--model-accent-rgb, 168, 199, 250), 0.4), inset 0 0 3px rgba(255, 255, 255, 0.6)'
       }}
     />
-    {/* HUD Precise Connector - touches card edge */}
+    {/* Phase 2: Razor-thin Fiber Optic Connector - fades before card */}
     <span
-      className={`rail-connector absolute h-[1px] w-[20px] left-[57px] bg-gradient-to-r to-transparent opacity-90 transition-all duration-300 ${style.from}`}
+      className="rail-connector absolute h-[1px] w-[16px] left-[57px] opacity-70 transition-all duration-300"
       style={{ 
         top: '14px',
-        background: `linear-gradient(to right, rgb(var(--model-accent-rgb, 168, 199, 250)), transparent)`
+        background: `linear-gradient(to right, rgba(var(--model-accent-rgb, 168, 199, 250), 0.9), rgba(var(--model-accent-rgb, 168, 199, 250), 0.2) 70%, transparent)`
       }}
     />
     {children}
@@ -1165,13 +1176,15 @@ export const CardFeed = ({
   const activePreview = latestPendingClaim?.claimText?.trim() || currentScanPreview?.trim() || '';
   const activeReadingTimestamp = lastScannedTimestamp ?? liveTimestampSeconds;
   const isLiveReading = status === 'monitoring' || status === 'ready' || status === 'verifying';
+  const isAnalyzing = status === 'monitoring' || status === 'verifying' || status === 'loading';
   const showTypingCursor = status !== 'idle' && status !== 'error' && status !== 'no-transcript';
 
+  // FIX: Always show reading state when monitoring/verifying/loading with no cards
   const showReadingState =
     !latestCheckedCard &&
     !latestPendingClaim &&
-    isLiveReading &&
-    (chunksScanned > 0 || lastScannedTimestamp !== null || Boolean(currentScanPreview));
+    isAnalyzing &&
+    (chunksScanned > 0 || lastScannedTimestamp !== null || Boolean(currentScanPreview) || status === 'monitoring' || status === 'verifying');
 
   const showResumeLive =
     !isPinned &&
@@ -1279,6 +1292,17 @@ export const CardFeed = ({
                   tone="disputed"
                   headline="Something went wrong."
                   supportLine="Refresh the YouTube tab to try again."
+                />
+              ) : status === 'monitoring' || status === 'verifying' ? (
+                // FIX: Never show Idle when monitoring/verifying - show scanning state instead
+                <LiveReadingStrip
+                  timestampSeconds={activeReadingTimestamp}
+                  previewText={currentScanPreview || 'Scanning for claims…'}
+                  showCursor={true}
+                  extractedEntities={scanEntities}
+                  actionState={scanActionState}
+                  reason={scanReason || 'Listening for checkable claims.'}
+                  onEntitySelect={onEntitySelect}
                 />
               ) : (
                 <StateCard

@@ -44,6 +44,13 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
   manifest_version: 3,
   name: 'SourceCheck',
   version: '0.1.0',
+  description: 'Real-time fact-checking for YouTube videos using AI-powered claim verification.',
+  icons: {
+    '16': 'icons/16.png',
+    '32': 'icons/32.png',
+    '48': 'icons/48.png',
+    '128': 'icons/128.png',
+  },
   permissions: ['sidePanel', 'storage', 'declarativeNetRequest', 'declarativeNetRequestWithHostAccess'],
   host_permissions: [
     'https://www.youtube.com/*',
@@ -74,6 +81,9 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
   action: {
     default_title: 'Open SourceCheck',
   },
+  // Explicitly disable web_accessible_resources for security
+  // The content script runs in isolated world; no page script injection needed
+  web_accessible_resources: [],
 });
 
 const manifestApiBase = import.meta.env?.PROD

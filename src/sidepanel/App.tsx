@@ -92,19 +92,13 @@ export const App = () => {
   const [isThinking, setIsThinking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
-  const [selectedModel, setSelectedModel] = useState<GeminiModelOption>(runtimeState.selectedModel ?? 'gemini-3.1-flash-lite');
   const isMountedRef = useRef(true);
 
   useEffect(() => () => {
     isMountedRef.current = false;
   }, []);
 
-  // Sync selectedModel from runtimeState (e.g., after worker restart/hydration)
-  useEffect(() => {
-    if (runtimeState.selectedModel) {
-      setSelectedModel(runtimeState.selectedModel);
-    }
-  }, [runtimeState.selectedModel]);
+  // Use runtimeState.selectedModel directly - single source of truth
 
   useEffect(() => {
     setAskDraft('');
@@ -270,19 +264,14 @@ export const App = () => {
             </button>
           </div>
           <ModelPicker 
-            selectedModel={selectedModel} 
+            selectedModel={runtimeState.selectedModel} 
             onModelChange={async (model) => {
-              const previous = selectedModel;
-              setSelectedModel(model);
-              
               try {
                 // Persist to storage
                 await chrome.storage.sync.set({ selectedModel: model });
                 // Notify background worker
                 await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
               } catch (error) {
-                // Rollback on failure
-                setSelectedModel(previous);
                 console.error('[SourceCheck/UI] Model change failed:', error);
               }
             }} 
@@ -323,7 +312,7 @@ export const App = () => {
             onEntitySelect={handleEntitySelect}
             onRetryTranscript={handleRetryTranscript}
             activeTab={activeTab}
-            selectedModel={selectedModel}
+            selectedModel={runtimeState.selectedModel}
           />
         </div>
         <AskBox
