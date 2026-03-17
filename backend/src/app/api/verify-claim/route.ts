@@ -388,17 +388,44 @@ export async function POST(request: NextRequest) {
       status: isGeminiError(error) ? error.status : undefined,
     });
 
-    if (isGeminiError(error) && error.code === 'RATE_LIMITED') {
-      const response = NextResponse.json(
-        { error: 'Rate limited. Please wait a moment.' },
-        { status: 429 }
-      );
+    // Pass error classification to frontend for better UX
+    if (isGeminiError(error)) {
+      let statusCode = 500;
+      let errorResponse: { error: string; errorCode?: string; retryable: boolean } = {
+        error: error.message,
+        errorCode: error.code,
+        retryable: false,
+      };
+
+      switch (error.code) {
+        case 'RATE_LIMITED':
+          statusCode = 429;
+          errorResponse.retryable = true;
+          break;
+        case 'QUOTA_EXHAUSTED':
+          statusCode = 429;
+          errorResponse.retryable = false;
+          break;
+        case 'OVERLOADED':
+          statusCode = 503;
+          errorResponse.retryable = true;
+          break;
+        case 'AUTH_ERROR':
+          statusCode = 401;
+          errorResponse.retryable = false;
+          break;
+        default:
+          statusCode = 502;
+          errorResponse.retryable = true;
+      }
+
+      const response = NextResponse.json(errorResponse, { status: statusCode });
       Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
       return response;
     }
 
     const response = NextResponse.json(
-      { error: 'Failed to verify claim.' },
+      { error: 'Failed to verify claim.', retryable: true },
       { status: 500 }
     );
     Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));

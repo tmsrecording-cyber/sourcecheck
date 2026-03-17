@@ -1722,31 +1722,74 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       );
       return;
     }
-    // Pass 500 as status to indicate server error for retry delay calculation
-    if (await retryVerificationItem(item, runGeneration, 500)) {
-      console.warn('[SourceCheck/SW] Verification queue error, retrying.', summarizeErrorForLog(error));
-      return;
+    
+    // Extract error code if available
+    const errorCode = (error as Error & { errorCode?: string }).errorCode;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    // Check if this is a non-retryable error
+    const nonRetryableCodes = ['AUTH_ERROR', 'QUOTA_EXHAUSTED'];
+    const isNonRetryable = errorCode && nonRetryableCodes.includes(errorCode);
+    
+    // Only retry if it's a potentially transient error
+    if (!isNonRetryable) {
+      if (await retryVerificationItem(item, runGeneration, 500)) {
+        console.warn('[SourceCheck/SW] Verification queue error, retrying.', summarizeErrorForLog(error));
+        return;
+      }
     }
+    
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) return;
     console.error('[SourceCheck/SW] Verification queue error after retries:', summarizeErrorForLog(error));
     
-    // Create a failed verification card so users see the error, not a silent failure
-    const errorCard: SourceCard = {
-      id: crypto.randomUUID(),
-      claim: item.claim,
-      status: 'unverifiable',
-      sourceTitle: 'Check failed',
-      sourceUrl: '',
-      sourceType: 'other',
-      nuance: 'Verification temporarily unavailable. The claim was saved and will retry automatically.',
-      timestampSeconds: item.claim.timestampSeconds,
-      verifiedAt: new Date().toISOString(),
-    };
+    // Determine user-facing error message based on error type
+    let errorTitle = 'Check failed';
+    let errorNuance = 'Verification temporarily unavailable. The claim was saved and will retry automatically.';
     
-    removePendingClaimByKey(item.key);
-    if (!hasCardForClaim(item.claim)) {
-      allSourceCards = [errorCard, ...allSourceCards].slice(0, MAX_SOURCE_CARDS);
+    if (errorCode === 'QUOTA_EXHAUSTED' || errorMessage.includes('quota')) {
+      errorTitle = 'API quota exhausted';
+      errorNuance = 'Daily API quota reached. Try again tomorrow or add your own API key in settings.';
+    } else if (errorCode === 'AUTH_ERROR' || errorMessage.includes('API key') || errorMessage.includes('auth')) {
+      errorTitle = 'API key invalid';
+      errorNuance = 'The API key is invalid or expired. Check your settings and update your Google AI Studio key.';
+    } else if (errorCode === 'RATE_LIMITED' || errorMessage.includes('rate limit')) {
+      errorTitle = 'Rate limited';
+      errorNuance = 'Too many requests. Waiting a moment before retrying.';
+    } else if (isNonRetryable) {
+      errorTitle = 'Cannot verify';
+      errorNuance = 'This claim cannot be verified due to API restrictions. Try a different video or check settings.';
     }
+    
+    // Check if we already have a failure card for this claim to avoid duplicates
+    const existingFailureCard = allSourceCards.find(
+      (card) => card.claim.timestampSeconds === item.claim.timestampSeconds && 
+                card.status === 'unverifiable' &&
+                (card.sourceTitle === 'Check failed' || card.sourceTitle === 'API quota exhausted' ||
+                 card.sourceTitle === 'API key invalid' || card.sourceTitle === 'Rate limited')
+    );
+    
+    if (!existingFailureCard) {
+      // Create a failed verification card so users see the error, not a silent failure
+      const errorCard: SourceCard = {
+        id: crypto.randomUUID(),
+        claim: item.claim,
+        status: 'unverifiable',
+        sourceTitle: errorTitle,
+        sourceUrl: '',
+        sourceType: 'other',
+        nuance: errorNuance,
+        timestampSeconds: item.claim.timestampSeconds,
+        verifiedAt: new Date().toISOString(),
+      };
+      
+      removePendingClaimByKey(item.key);
+      if (!hasCardForClaim(item.claim)) {
+        allSourceCards = [errorCard, ...allSourceCards].slice(0, MAX_SOURCE_CARDS);
+      }
+    } else {
+      removePendingClaimByKey(item.key);
+    }
+    
     dispatch({ type: 'VERIFY_COMPLETED' });
     persistPanelState({ includeCards: true, includeQueue: true });
   } finally {

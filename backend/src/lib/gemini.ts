@@ -444,6 +444,7 @@ interface GeminiAPIResponse {
 export type GeminiErrorCode =
   | 'AUTH_ERROR'
   | 'RATE_LIMITED'
+  | 'QUOTA_EXHAUSTED'
   | 'OVERLOADED'
   | 'API_ERROR'
   | 'PARSE_ERROR';
@@ -694,6 +695,22 @@ async function callGemini(
           apiUrl,
         });
 
+        // Check for quota exhaustion in error message (various API providers use different terms)
+        const errorLower = errorBody.toLowerCase();
+        const isQuotaExhausted = errorLower.includes('quota') || 
+                                   errorLower.includes('exhausted') || 
+                                   errorLower.includes('billing') ||
+                                   errorLower.includes('limit exceeded') ||
+                                   errorLower.includes('usage limit');
+        
+        if (isQuotaExhausted) {
+          throw new GeminiError(
+            'QUOTA_EXHAUSTED',
+            'API quota exhausted. Please check your Google AI Studio billing or wait until quota resets.',
+            429
+          );
+        }
+        
         if (response.status === 429) {
           throw new GeminiError('RATE_LIMITED', 'Gemini API rate limit hit. Try again in a moment.', 429);
         }

@@ -92,14 +92,37 @@ const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1000;
 
 /**
- * Check if an error/status code indicates a transient failure that should be retried.
- * 429 = Rate limited, 503 = Service unavailable, 502/504 = Gateway errors
+ * Error response from backend with classification.
  */
-const isTransientError = (status: number | null, error: unknown): boolean => {
+interface ErrorResponse {
+  error: string;
+  errorCode?: string;
+  retryable?: boolean;
+}
+
+/**
+ * Check if an error/status code indicates a transient failure that should be retried.
+ * Only retries truly transient errors - NOT auth failures, quota exhaustion, etc.
+ */
+const isTransientError = (status: number | null, errorResponse: ErrorResponse | null, error: unknown): boolean => {
+  // If backend explicitly says not retryable, respect that
+  if (errorResponse?.retryable === false) return false;
+  
+  // If backend explicitly says retryable, trust it
+  if (errorResponse?.retryable === true) return true;
+  
+  // Check error codes that should never be retried
+  const nonRetryableCodes = ['AUTH_ERROR', 'QUOTA_EXHAUSTED'];
+  if (errorResponse?.errorCode && nonRetryableCodes.includes(errorResponse.errorCode)) {
+    return false;
+  }
+  
+  // Status code based heuristics
+  if (status === 401) return false; // Auth errors - retrying won't help
   if (status === 429 || status === 503 || status === 502 || status === 504) return true;
   if (status !== null) return false;
   
-  // Network errors (status is null)
+  // Network errors (status is null) are generally retryable
   const errorMessage = error instanceof Error ? error.message : String(error);
   return (
     errorMessage.includes('network') ||
@@ -195,15 +218,27 @@ export async function fetchWithBYOK(
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
           
+          // Try to parse structured error from backend
+          let errorResponse: ErrorResponse | null = null;
+          try {
+            errorResponse = JSON.parse(errorText) as ErrorResponse;
+          } catch {
+            // Not JSON, use plain text
+          }
+          
           // Check if we should retry this error
-          if (attempt < MAX_RETRIES && isTransientError(response.status, null)) {
+          if (attempt < MAX_RETRIES && isTransientError(response.status, errorResponse, null)) {
             console.warn(`[SourceCheck/API] Transient error ${response.status}, will retry:`, errorText.slice(0, 100));
-            lastError = new Error(`API Error ${response.status}: ${errorText}`);
+            lastError = new Error(`API Error ${response.status}: ${errorResponse?.error || errorText}`);
+            lastError.name = errorResponse?.errorCode || 'API_ERROR';
             continue; // Go to next retry iteration
           }
           
           // Not retryable or out of retries
-          throw new Error(`API Error ${response.status}: ${errorText}`);
+          const error = new Error(errorResponse?.error || `API Error ${response.status}: ${errorText}`);
+          error.name = errorResponse?.errorCode || 'API_ERROR';
+          (error as Error & { status: number }).status = response.status;
+          throw error;
         }
 
         const data = await response.json();
@@ -217,18 +252,26 @@ export async function fetchWithBYOK(
         clearTimeout(timeoutId);
       }
     } catch (error) {
-      const status = error instanceof Error && error.message.match(/API Error (\d+)/)?.[1];
-      const statusNum = status ? parseInt(status, 10) : null;
+      // Extract status from error if available
+      const statusMatch = error instanceof Error && error.message.match(/API Error (\d+)/);
+      const statusFromError = statusMatch?.[1];
+      const statusNum = statusFromError ? parseInt(statusFromError, 10) : (error as Error & { status?: number }).status || null;
       
-      // Check if this is a retryable network error
-      if (attempt < MAX_RETRIES && isTransientError(statusNum, error)) {
+      // Check if this is a retryable error
+      if (attempt < MAX_RETRIES && isTransientError(statusNum, null, error)) {
         console.warn(`[SourceCheck/API] Transient error on attempt ${attempt}, will retry:`, 
           error instanceof Error ? error.message : String(error));
         lastError = error instanceof Error ? error : new Error(String(error));
         continue; // Go to next retry iteration
       }
       
-      // Not retryable or out of retries - rethrow
+      // Not retryable or out of retries - rethrow with enhanced info
+      if (error instanceof Error) {
+        // Preserve error code in message for upstream handling
+        if (error.name && error.name !== 'Error') {
+          (error as Error & { errorCode?: string }).errorCode = error.name;
+        }
+      }
       throw error;
     }
   }
