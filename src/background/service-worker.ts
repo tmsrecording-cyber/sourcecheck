@@ -1436,7 +1436,7 @@ const hydrateState = async () => {
       persistPanelState({ includeCards: true });
 
       if (verificationQueue.length > 0) {
-        void processVerificationQueue();
+        void processVerificationQueue().catch((err) => console.error('[SW] processVerificationQueue error:', err));
       }
     })
     .finally(() => {
@@ -1488,7 +1488,7 @@ const enqueueClaimsForVerification = (claims: AnalyzeChunkResponse['claims']) =>
   dispatch({ type: 'ANALYZE_COMPLETED', claimCount: didQueueClaims ? claims.length : 0 });
   persistPanelState({ includeCards: true, includeQueue: true });
 
-  if (didQueueClaims) void processVerificationQueue();
+  if (didQueueClaims) void processVerificationQueue().catch((err) => console.error('[SW] processVerificationQueue error:', err));
 };
 
 const retryVerificationItem = async (
@@ -2091,7 +2091,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       syncVisibleTimelineState(message.payload.currentTime);
       dispatch({ type: 'PLAYBACK_UPDATED', currentTime: message.payload.currentTime });
       persistPanelState();
-      void processPlayback(message.payload.currentTime);
+      void processPlayback(message.payload.currentTime).catch((err) => console.error('[SW] processPlayback error:', err));
       sendResponse({ status: 'ok' });
       return;
     }
@@ -2109,7 +2109,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       flushPipelineForSeek(nextTime);
       persistPanelState({ includeCards: true, includeQueue: true });
-      void processPlayback(nextTime);
+      void processPlayback(nextTime).catch((err) => console.error('[SW] processPlayback error:', err));
       sendResponse({ status: 'ok' });
       return;
     }
@@ -2166,7 +2166,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       dispatch({ type: 'TRANSCRIPT_LOADED', chunkCount: currentTranscript.length, debug: transcriptDebug });
       persistPanelState({ includeTranscript: true });
       if (currentPlaybackState?.currentTime !== undefined && currentPlaybackState.paused !== true) {
-        void processPlayback(currentPlaybackState.currentTime);
+        void processPlayback(currentPlaybackState.currentTime).catch((err) => console.error('[SW] processPlayback error:', err));
       }
       console.log(`[SourceCheck/SW] Transcript loaded: ${currentTranscript.length} chunks`);
       sendResponse({ status: 'ok' });
