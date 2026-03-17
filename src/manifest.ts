@@ -44,11 +44,20 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
   manifest_version: 3,
   name: 'SourceCheck',
   version: '0.1.0',
-  permissions: ['sidePanel', 'storage', 'tabs'],
+  permissions: ['sidePanel', 'storage', 'declarativeNetRequest', 'declarativeNetRequestWithHostAccess'],
   host_permissions: [
     'https://www.youtube.com/*',
     getApiHostPermission(apiBase),
   ],
+  declarative_net_request: {
+    rule_resources: [
+      {
+        id: 'youtube_headers',
+        enabled: true,
+        path: 'rules.json',
+      },
+    ],
+  },
   background: {
     service_worker: 'src/background/service-worker.ts',
     type: 'module',

@@ -1,8 +1,9 @@
-import Redis from 'ioredis';
-
 // ---------------------------------------------------------------------------
 // Interface
 // ---------------------------------------------------------------------------
+
+// ioredis is dynamically imported to avoid Edge runtime compatibility issues
+// (ioredis uses Node.js Buffer APIs not available in Edge)
 
 /**
  * Minimal rate-limit store contract.
@@ -53,6 +54,9 @@ export class InMemoryRateLimitStore implements RateLimitStore {
     const current = this.buckets.get(key);
 
     if (!current || now - current.windowStartedAt >= windowMs) {
+      if (cost > maxPoints) {
+        return false;
+      }
       this.buckets.set(key, { points: cost, windowStartedAt: now });
       this.prune(now, windowMs);
       return true;
@@ -103,6 +107,9 @@ local win_ms  = tonumber(ARGV[3])
 local now_ms  = tonumber(ARGV[4])
 
 if pts == 0 or (now_ms - win) >= win_ms then
+  if cost > max_pts then
+    return 0
+  end
   redis.call('HMSET',   KEYS[1], 'pts', cost, 'win', now_ms)
   redis.call('PEXPIRE', KEYS[1], win_ms)
   return 1
@@ -125,19 +132,40 @@ return 1
  * etc.) the request is denied rather than allowed, so the rate limit cannot
  * be bypassed during a Redis outage.
  */
+// Dynamically import ioredis to avoid Edge runtime issues
+interface RedisClient {
+  eval(...args: (string | number)[]): Promise<unknown>;
+  on(event: string, callback: (err: Error) => void): void;
+}
+
+async function getRedisClient(redisUrl: string): Promise<RedisClient> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { default: Redis } = await import('ioredis') as any;
+  const client = new Redis(redisUrl, {
+    lazyConnect: true,
+    enableReadyCheck: false,
+    maxRetriesPerRequest: 0,
+    connectTimeout: 2_000,
+  });
+  client.on('error', (err: Error) => {
+    console.error('[SourceCheck/ratelimit] Redis error:', err.message);
+  });
+  return client as RedisClient;
+}
+
 export class RedisRateLimitStore implements RateLimitStore {
-  private readonly client: Redis;
+  private client: RedisClient | null = null;
+  private readonly redisUrl: string;
 
   constructor(redisUrl: string) {
-    this.client = new Redis(redisUrl, {
-      lazyConnect: true,
-      enableReadyCheck: false,
-      maxRetriesPerRequest: 0,
-      connectTimeout: 2_000,
-    });
-    this.client.on('error', (err) => {
-      console.error('[SourceCheck/ratelimit] Redis error:', err.message);
-    });
+    this.redisUrl = redisUrl;
+  }
+
+  private async getClient(): Promise<RedisClient> {
+    if (!this.client) {
+      this.client = await getRedisClient(this.redisUrl);
+    }
+    return this.client;
   }
 
   async tryConsume(
@@ -147,7 +175,8 @@ export class RedisRateLimitStore implements RateLimitStore {
     windowMs: number,
   ): Promise<boolean> {
     try {
-      const result = (await this.client.eval(
+      const client = await this.getClient();
+      const result = (await client.eval(
         RATE_LIMIT_LUA,
         1,
         `rl:${key}`,

@@ -169,6 +169,9 @@ const cleanTranscriptText = (value: string) =>
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -209,9 +212,8 @@ const splitTranscriptLines = (value: unknown): string[] =>
     .filter(Boolean);
 
 const decodeHtmlEntities = (value: string) => {
-  const textarea = document.createElement('textarea');
-  textarea.innerHTML = value;
-  return textarea.value;
+  const doc = new DOMParser().parseFromString(value, 'text/html');
+  return doc.body.textContent ?? value;
 };
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
@@ -614,20 +616,42 @@ const fetchFreshPlayerResponse = async (
 // This is more reliable than HTML parsing on SPA navigation because ytInitialPlayerResponse
 // in the window/scripts is stale (it holds the previous video's data), and the fresh HTML
 // fetch can fail or return a simplified page for programmatic requests.
+const extractInnerTubeApiKey = (ytWindow: any): string | null => {
+  // Try multiple extraction paths (in order of reliability)
+  const key =
+    ytWindow.ytcfg?.get?.('INNERTUBE_API_KEY') ||
+    ytWindow.yt?.config_?.INNERTUBE_API_KEY ||
+    ytWindow.ytcfg?.data_?.INNERTUBE_API_KEY ||
+    null;
+  
+  if (key && typeof key === 'string' && key.startsWith('AIza')) {
+    return key;
+  }
+  return null;
+};
+
+const extractInnerTubeClientVersion = (ytWindow: any): string => {
+  return (
+    ytWindow.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') ||
+    ytWindow.yt?.config_?.INNERTUBE_CLIENT_VERSION ||
+    ytWindow.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION ||
+    '2.20240101.00.00'
+  );
+};
+
 const fetchPlayerResponseFromInnerTube = async (
   videoId: string,
   signal?: AbortSignal
 ): Promise<Record<string, any> | null> => {
   try {
     const ytWindow = window as any;
-    const apiKey =
-      ytWindow.yt?.config_?.INNERTUBE_API_KEY ||
-      ytWindow.ytcfg?.data_?.INNERTUBE_API_KEY ||
-      'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-    const clientVersion =
-      ytWindow.yt?.config_?.INNERTUBE_CLIENT_VERSION ||
-      ytWindow.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION ||
-      '2.20240101.00.00';
+    const apiKey = extractInnerTubeApiKey(ytWindow);
+    
+    if (!apiKey) {
+      console.warn('[SourceCheck] No YouTube API key found in page config');
+      return null;
+    }
+    const clientVersion = extractInnerTubeClientVersion(ytWindow);
 
     const response = await fetch(
       `https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`,
@@ -864,6 +888,13 @@ const getOrderedCaptionTracks = (playerResponse: Record<string, any> | null): Ca
 
   return [...captionTracks]
     .filter((track): track is CaptionTrack => Boolean(track?.baseUrl))
+    .map(track => {
+      // CRITICAL FIX: YouTube returns unicode ampersands that break URL parameters
+      if (typeof track.baseUrl === 'string') {
+        track.baseUrl = track.baseUrl.replace(/\\u0026/g, '&').replace(/\\"/g, '"');
+      }
+      return track;
+    })
     .sort((left, right) => getTrackRank(left) - getTrackRank(right));
 };
 
@@ -1250,7 +1281,8 @@ const loadTranscriptFromPanel = async (
   signal?: AbortSignal,
   options?: { allowAutoOpen?: boolean }
 ): Promise<TranscriptPanelLoadResult> => {
-  const allowAutoOpen = options?.allowAutoOpen ?? true;
+  // Default to false to prevent accidental auto-opening. Caller must explicitly allow.
+  const allowAutoOpen = options?.allowAutoOpen ?? false;
   const existingSegments = scrapeTranscriptPanel();
   if (existingSegments.length > 0) {
     console.log(`[SourceCheck] Transcript panel already open with ${existingSegments.length} segments.`);
@@ -1489,6 +1521,12 @@ const fetchTranscriptChunks = async (
       const response = await fetch(candidate.url, {
         credentials: 'include',
         signal,
+        headers: {
+          'Accept': '*/*',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        }
       });
       const bodyText = await response.text();
 
@@ -1655,7 +1693,9 @@ export const extractTranscriptData = async (
   onFetchDebug?: TranscriptFetchDebugLogger,
   options?: TranscriptExtractionOptions,
 ): Promise<TranscriptExtractionResult> => {
-  const allowPanelAutoOpen = options?.allowPanelAutoOpen ?? true;
+  // Default to false to prevent auto-opening transcript panel on first attempt.
+  // Caller must explicitly pass allowPanelAutoOpen: true for fallback attempts.
+  const allowPanelAutoOpen = options?.allowPanelAutoOpen ?? false;
   let panelFallbackAttempted = false;
   let panelFallbackSucceeded = false;
   const withPanelState = (

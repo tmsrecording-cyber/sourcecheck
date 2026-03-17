@@ -568,7 +568,11 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
     });
     void sendTranscriptStatus(videoId, lastTranscriptDebug);
 
-    const allowAutoPanelFallback = !transcriptSuccessLockedForVideo &&
+    // Only open the native YouTube transcript panel after the non-UI extraction
+    // methods (window / scripts / html) have already failed on a prior attempt.
+    // This prevents the panel from popping open on the first page load.
+    const allowAutoPanelFallback = attempt >= 1 &&
+      !transcriptSuccessLockedForVideo &&
       !panelFallbackAttempted &&
       !panelFallbackSucceeded &&
       !autoPanelOpenDisabledAfterFailure;
@@ -645,7 +649,8 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
     if (
       extractionResult &&
       !extractionResult.transcript?.length &&
-      isTerminalTranscriptFailure(lastTranscriptDebug)
+      isTerminalTranscriptFailure(lastTranscriptDebug) &&
+      (attempt >= 1 || panelFallbackAttempted)
     ) {
       const result = await deliverTranscriptFailure(videoId, lastTranscriptDebug);
       if (result !== null) {
@@ -680,7 +685,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
     } else {
       transcriptRetryTimer = null;
     }
-  }, attempt === 0 ? 1000 : attempt < 4 ? 2500 : 5000);
+  }, (attempt === 0 || (attempt === 1 && !panelFallbackAttempted)) ? 1000 : attempt < 4 ? 2500 : 5000);
 };
 
 const schedulePlaybackInit = (attempt = 0) => {

@@ -181,6 +181,7 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
   eventLog: [],
+  selectedModel: 'gemini-3.1-flash-lite',
 };
 
 let runtimeState: WorkerRuntimeState = { ...INITIAL_RUNTIME_STATE };
@@ -423,51 +424,65 @@ const abortActiveRequests = () => {
 // Lazily acquired on the first API call; cleared when the browser closes
 // (chrome.storage.session lifetime).
 let cachedSessionToken: string | null = null;
+// In-flight registration promise — deduplicates concurrent callers so only
+// one /api/session/init request is ever sent at a time.
+let pendingSessionTokenRequest: Promise<string | null> | null = null;
 
 const getSessionToken = async (): Promise<string | null> => {
   if (cachedSessionToken !== null) {
     return cachedSessionToken || null;
   }
 
-  // Try session storage first (survives SW termination within a browser session).
-  try {
-    const stored = await chrome.storage.session.get(['apiSessionToken']);
-    if (stored.apiSessionToken && typeof stored.apiSessionToken === 'string') {
-      cachedSessionToken = stored.apiSessionToken;
-      return cachedSessionToken;
-    }
-  } catch {
-    // Session storage unavailable — fall through to registration.
+  // Dedup: if a registration request is already in flight, wait for it.
+  if (pendingSessionTokenRequest !== null) {
+    return pendingSessionTokenRequest;
   }
 
-  // Request a token from the backend. The backend validates the extension ID
-  // via ALLOWED_EXTENSION_IDS and signs the token with SESSION_SECRET.
-  try {
-    const res = await fetch(`${API_BASE}/api/session/init`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Extension-Id': chrome.runtime.id,
-      },
-      body: JSON.stringify({ extensionId: chrome.runtime.id }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const token: string = typeof data.token === 'string' ? data.token : '';
-      cachedSessionToken = token;
-      if (token) {
-        await chrome.storage.session.set({ apiSessionToken: token }).catch(() => {});
+  pendingSessionTokenRequest = (async () => {
+    // Try session storage first (survives SW termination within a browser session).
+    try {
+      const stored = await chrome.storage.session.get(['apiSessionToken']);
+      if (stored.apiSessionToken && typeof stored.apiSessionToken === 'string') {
+        cachedSessionToken = stored.apiSessionToken;
+        return cachedSessionToken;
       }
-      return token || null;
+    } catch {
+      // Session storage unavailable — fall through to registration.
     }
-  } catch {
-    // Backend unreachable or init failed — proceed without a token.
-    // On localhost (no SESSION_SECRET), the proxy allows tokenless requests.
-  }
 
-  cachedSessionToken = '';
-  return null;
+    // Request a token from the backend. The backend validates the extension ID
+    // via ALLOWED_EXTENSION_IDS and signs the token with SESSION_SECRET.
+    try {
+      const res = await fetch(`${API_BASE}/api/session/init`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Extension-Id': chrome.runtime.id,
+        },
+        body: JSON.stringify({ extensionId: chrome.runtime.id }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const token: string = typeof data.token === 'string' ? data.token : '';
+        cachedSessionToken = token;
+        if (token) {
+          await chrome.storage.session.set({ apiSessionToken: token }).catch(() => {});
+        }
+        return token || null;
+      }
+    } catch {
+      // Backend unreachable or init failed — proceed without a token.
+      // On localhost (no SESSION_SECRET), the proxy allows tokenless requests.
+    }
+
+    cachedSessionToken = '';
+    return null;
+  })().finally(() => {
+    pendingSessionTokenRequest = null;
+  });
+
+  return pendingSessionTokenRequest;
 };
 
 const buildApiHeaders = async (url: string, init: RequestInit = {}) => {
@@ -1168,9 +1183,11 @@ const hydrateState = async () => {
       'pendingTranscriptBuffer', 'pendingVerifications',
     ]),
     chrome.storage.local.get([TRANSCRIPT_SNAPSHOT_KEY, PENDING_TRANSCRIPT_BUFFER_KEY]),
+    chrome.storage.sync.get(['selectedModel']),
   ])
-    .then(([stored, localStored]) => {
+    .then(([stored, localStored, syncStored]) => {
       const storedRuntime = stored[WORKER_RUNTIME_STATE_KEY] as Partial<WorkerRuntimeState> | null | undefined;
+      const syncSelectedModel = syncStored?.selectedModel as string | undefined;
 
       // Restore canonical state from stored WorkerRuntimeState
       if (storedRuntime && typeof storedRuntime === 'object') {
@@ -1211,6 +1228,10 @@ const hydrateState = async () => {
           transcriptFetchLog,
           transcriptMessageStats: storedRuntime.transcriptMessageStats ?? INITIAL_RUNTIME_STATE.transcriptMessageStats,
           pendingTranscriptBufferSummary: storedRuntime.pendingTranscriptBufferSummary ?? INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary,
+          // Restore selectedModel from sync storage if not in session
+          selectedModel: (storedRuntime.selectedModel
+            ?? syncSelectedModel
+            ?? INITIAL_RUNTIME_STATE.selectedModel) as WorkerRuntimeState['selectedModel'],
         };
 
         debugStage = runtimeState.debugStage;
@@ -1371,7 +1392,12 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     );
     const verifyRes = await fetchWithTimeout(`${API_BASE}/api/verify-claim`, {
       method: 'POST',
-      body: JSON.stringify({ claim: item.claim, videoTitle: item.videoTitle, channelName: item.channelName }),
+      body: JSON.stringify({ 
+        claim: item.claim, 
+        videoTitle: item.videoTitle, 
+        channelName: item.channelName,
+        model: runtimeState.selectedModel,
+      }),
     });
     console.log(
       `[SourceCheck/SW] verify-claim response video=${item.videoId} status=${verifyRes.status}`
@@ -1570,6 +1596,7 @@ const askVideoQuestion = async (question: string) => {
     currentTime,
     transcriptContext: getTranscriptContext(currentTime),
     sourceCards: getRelevantSourceCards(currentTime),
+    model: runtimeState.selectedModel,  // Include selected model
   };
   if (payload.transcriptContext.length === 0 && payload.sourceCards.length === 0) {
     throw new Error('No transcript or source cards are available yet. Let the video play a little longer.');
@@ -1625,6 +1652,15 @@ const processPlayback = async (currentTime: number) => {
   const chunksToProcess = currentTranscript.slice(startIndex, endIndex + 1);
   if (chunksToProcess.length === 0) return;
 
+  // CLOG DEBLOCKER: If we have very little text (e.g. fragments like "Heat."),
+  // wait for more transcript history before calling the API, unless this is
+  // the very last available chunk in the transcript.
+  const combinedText = chunksToProcess.map((c) => c.text).join(' ');
+  const wordCount = combinedText.trim().split(/\s+/).length;
+  if (wordCount < 10 && currentIndex < currentTranscript.length - 1) {
+    return;
+  }
+
   const backlogChunks = Math.max(0, currentIndex - lastProcessedIndex);
   const now = Date.now();
   if (now - lastAnalyzedAt < getAnalysisIntervalMs(backlogChunks)) return;
@@ -1650,6 +1686,7 @@ const processPlayback = async (currentTime: number) => {
         channelName: activeVideo.channel,
         chunks: chunksToProcess,
         currentTimestamp: currentTime,
+        model: runtimeState.selectedModel,
       }),
     });
     console.log(
@@ -1976,6 +2013,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         markTranscriptUnavailable();
         persistPanelState({ includeQueue: true });
       }
+      sendResponse({ status: 'ok' });
+      return;
+    }
+
+    if (message.type === 'MODEL_CHANGED') {
+      runtimeState.selectedModel = message.model;
+      await chrome.storage.sync.set({ selectedModel: message.model });
+      persistPanelState();
+      console.log('[SourceCheck/SW] Model changed to:', message.model);
       sendResponse({ status: 'ok' });
       return;
     }

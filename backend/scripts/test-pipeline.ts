@@ -9,16 +9,56 @@
 //   → source card
 
 const API_BASE = process.env.API_BASE || 'http://localhost:3000';
-const CLIENT_TOKEN = process.env.EXTENSION_API_TOKEN || '';
+const EXTENSION_ID = process.env.EXTENSION_ID || 'local-dev-extension';
 
-const buildHeaders = () => {
+const isLocalApiHost = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '::1';
+  } catch {
+    return false;
+  }
+};
+
+const getSessionToken = async () => {
+  const res = await fetch(`${API_BASE}/api/session/init`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Extension-Id': EXTENSION_ID,
+    },
+    body: JSON.stringify({ extensionId: EXTENSION_ID }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => '');
+    throw new Error(
+      `Session init failed (${res.status}). ` +
+        'Check ALLOWED_EXTENSION_IDS and EXTENSION_ID. ' +
+        (errorText ? `Body: ${errorText.slice(0, 200)}` : '')
+    );
+  }
+
+  const data = await res.json().catch(() => ({}));
+  const token = typeof (data as { token?: unknown }).token === 'string' ? (data as { token: string }).token : '';
+  if (!token && !isLocalApiHost(API_BASE)) {
+    throw new Error(
+      'Session init returned an empty token on a non-local API_BASE. ' +
+        'Set SESSION_SECRET on the deployed backend.'
+    );
+  }
+
+  return token;
+};
+
+const buildHeaders = (token: string) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    Origin: 'http://localhost:3000',
+    'X-Extension-Id': EXTENSION_ID,
   };
 
-  if (CLIENT_TOKEN) {
-    headers['X-Extension-Token'] = CLIENT_TOKEN;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   return headers;
@@ -41,10 +81,11 @@ const TEST_CHUNKS = [
 
 async function testAnalyzeChunk() {
   console.log('\n=== STEP 1: Claim Extraction (Gemini, no search) ===\n');
+  const token = await getSessionToken();
 
   const response = await fetch(`${API_BASE}/api/analyze-chunk`, {
     method: 'POST',
-    headers: buildHeaders(),
+    headers: buildHeaders(token),
     body: JSON.stringify({
       videoId: 'test_video_123',
       videoTitle: 'The Science of Cold Exposure',
@@ -76,10 +117,11 @@ async function testAnalyzeChunk() {
 async function testVerifyClaim(claim: any) {
   console.log(`\n=== STEP 2: Verification (Gemini + Google Search) ===`);
   console.log(`Verifying: "${claim.claimText}"\n`);
+  const token = await getSessionToken();
 
   const response = await fetch(`${API_BASE}/api/verify-claim`, {
     method: 'POST',
-    headers: buildHeaders(),
+    headers: buildHeaders(token),
     body: JSON.stringify({
       claim,
       videoTitle: 'The Science of Cold Exposure',

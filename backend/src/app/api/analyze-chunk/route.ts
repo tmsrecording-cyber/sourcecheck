@@ -10,13 +10,22 @@ import type {
   TranscriptChunk,
 } from '@/types/shared';
 
+type RawCandidate = {
+  claim_text: string;
+  exact_quote: string;
+  claim_type: ClaimType;
+  verifiability: number;
+  value: number;
+  speaker_confidence: number;
+  reason: string;
+};
+
 type RawExtraction = {
   entities?: unknown;
   has_claim?: unknown;
-  claim_text?: unknown;
-  exact_quote?: unknown;
   action_state?: unknown;
   reason?: unknown;
+  candidates?: RawCandidate[] | null;
 };
 
 const VALID_MODEL_ACTION_STATES = new Set<Exclude<ExtractionActionState, 'PARSE_ERROR'>>([
@@ -36,19 +45,40 @@ const CLAIM_EXTRACTION_SCHEMA = {
       items: { type: 'string' },
     },
     has_claim: { type: 'boolean' },
-    claim_text: {
-      anyOf: [{ type: 'string' }, { type: 'null' }],
-    },
-    exact_quote: {
-      anyOf: [{ type: 'string' }, { type: 'null' }],
-    },
     action_state: {
       type: 'string',
       enum: ['VERIFYING', 'REJECTED', 'BUFFERING'],
     },
     reason: { type: 'string' },
+    candidates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          claim_text: { type: 'string' },
+          exact_quote: { type: 'string' },
+          claim_type: {
+            type: 'string',
+            enum: ['canonical', 'study', 'statistic', 'historical', 'surprising'],
+          },
+          verifiability: { type: 'number' },
+          value: { type: 'number' },
+          speaker_confidence: { type: 'number' },
+          reason: { type: 'string' },
+        },
+        required: [
+          'claim_text',
+          'exact_quote',
+          'claim_type',
+          'verifiability',
+          'value',
+          'speaker_confidence',
+          'reason',
+        ],
+      },
+    },
   },
-  required: ['entities', 'has_claim', 'claim_text', 'exact_quote', 'action_state', 'reason'],
+  required: ['entities', 'has_claim', 'action_state', 'reason'],
   additionalProperties: false,
 } as const;
 
@@ -61,16 +91,30 @@ const resolveClaimTimestamp = (chunks: TranscriptChunk[], exactQuote: string, fa
     return fallback;
   }
 
-  const matchedChunk = chunks.find((chunk) => {
-    const normalizedChunk = normalizeText(chunk.text);
-    return normalizedChunk.includes(normalizedQuote) || normalizedQuote.includes(normalizedChunk);
-  });
+  // Combine all chunks into one continuous string for robust matching.
+  const combinedTranscript = normalizeText(chunks.map((c) => c.text).join(' '));
+  const quoteIndex = combinedTranscript.indexOf(normalizedQuote);
 
-  return matchedChunk?.startTime ?? fallback;
+  if (quoteIndex === -1) {
+    return fallback;
+  }
+
+  // Find the chunk that contains the start of the quote.
+  let currentPos = 0;
+  for (const chunk of chunks) {
+    const chunkLen = normalizeText(chunk.text).length + 1; // +1 for the space used in join
+    if (quoteIndex >= currentPos && quoteIndex < currentPos + chunkLen) {
+      return chunk.startTime;
+    }
+    currentPos += chunkLen;
+  }
+
+  return chunks[0].startTime;
 };
 
 const inferConfidence = (claimType: ClaimType): number => {
   switch (claimType) {
+    case 'canonical':  return 0.90;
     case 'study':      return 0.88;
     case 'statistic':  return 0.85;
     case 'historical': return 0.80;
@@ -79,6 +123,13 @@ const inferConfidence = (claimType: ClaimType): number => {
 };
 
 const inferClaimType = (claimText: string): ClaimType => {
+  if (
+    /\b(law|theorem|principle|axiom|postulate)\b/i.test(claimText) &&
+    /\b(states?|says?|holds?|shows?|proves?)\b/i.test(claimText)
+  ) {
+    return 'canonical';
+  }
+
   if (/\b(study|research|paper|journal|trial|experiment|data)\b/i.test(claimText)) {
     return 'study';
   }
@@ -92,6 +143,15 @@ const inferClaimType = (claimText: string): ClaimType => {
   }
 
   return 'surprising';
+};
+
+// Anchor validation: returns true only if the exact_quote can be found within
+// the transcript window. Rejects hallucinated quotes that aren't in the text.
+const findAnchorInWindow = (chunks: TranscriptChunk[], exactQuote: string): boolean => {
+  const normalizedQuote = normalizeText(exactQuote);
+  if (!normalizedQuote) return false;
+  const combinedTranscript = normalizeText(chunks.map((c) => c.text).join(' '));
+  return combinedTranscript.includes(normalizedQuote);
 };
 
 const validateAnalyzeChunkRequest = (body: AnalyzeChunkRequest) => {
@@ -186,46 +246,71 @@ export async function POST(request: NextRequest) {
     const { data: rawExtraction, inputTokens, outputTokens } = await askGeminiJSON<RawExtraction>(
       prompt,
       800,
-      CLAIM_EXTRACTION_SCHEMA
+      CLAIM_EXTRACTION_SCHEMA,
+      parsedBody.model  // Pass client-selected model
     );
 
     const entities = Array.isArray(rawExtraction?.entities)
       ? rawExtraction.entities.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       : [];
-    const claimText = typeof rawExtraction?.claim_text === 'string' && rawExtraction.claim_text.trim().length > 0
-      ? rawExtraction.claim_text.trim()
-      : null;
-    const exactQuote = typeof rawExtraction?.exact_quote === 'string' && rawExtraction.exact_quote.trim().length > 0
-      ? rawExtraction.exact_quote.trim()
-      : null;
-    const requestedHasClaim = rawExtraction?.has_claim === true;
-    const hasClaim = requestedHasClaim && claimText !== null;
-    const malformedClaimPayload = requestedHasClaim && claimText === null;
+    // ---- Candidate extraction with anchor validation ----
+    // If the model returns a `candidates` array, validate each one's exact_quote
+    // against the transcript window. Reject any candidate whose quote can't be
+    // found in the text — this catches hallucinated quotes.
+    let claimText: string | null = null;
+    let exactQuote: string | null = null;
+    let claimType: ClaimType | null = null;
+    let allCandidatesRejected = false;
+
+    const rawCandidates = Array.isArray(rawExtraction?.candidates) ? rawExtraction.candidates : null;
+    if (rawCandidates && rawCandidates.length > 0) {
+      const validCandidates = rawCandidates.filter((candidate) => {
+        const quote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
+        return quote && findAnchorInWindow(parsedBody.chunks, quote);
+      });
+
+      if (validCandidates.length === 0) {
+        allCandidatesRejected = true;
+      } else {
+        const best = validCandidates[0];
+        claimText = typeof best.claim_text === 'string' && best.claim_text.trim() ? best.claim_text.trim() : null;
+        exactQuote = typeof best.exact_quote === 'string' && best.exact_quote.trim() ? best.exact_quote.trim() : null;
+        claimType = best.claim_type;
+      }
+    }
+
+    const requestedHasClaim = rawExtraction?.has_claim === true || (rawCandidates !== null && !allCandidatesRejected && claimText !== null);
+    const hasClaim = !allCandidatesRejected && claimText !== null;
+    const malformedClaimPayload = !allCandidatesRejected && requestedHasClaim && claimText === null;
     const rawActionState = VALID_MODEL_ACTION_STATES.has(
       rawExtraction?.action_state as Exclude<ExtractionActionState, 'PARSE_ERROR'>
     )
       ? rawExtraction.action_state as Exclude<ExtractionActionState, 'PARSE_ERROR'>
       : null;
-    const actionState = hasClaim
-      ? 'VERIFYING'
-      : rawActionState && rawActionState !== 'VERIFYING'
-        ? rawActionState
-        : 'BUFFERING';
-    const reason = malformedClaimPayload
-      ? 'Model marked a claim but returned no usable claim text.'
-      : typeof rawExtraction?.reason === 'string' && rawExtraction.reason.trim().length > 0
-      ? rawExtraction.reason.trim()
-      : (hasClaim ? 'Claim detected.' : 'Awaiting end of statement...');
-    const inferredClaimType = claimText ? inferClaimType(claimText) : null;
+    const actionState = allCandidatesRejected
+      ? 'REJECTED'
+      : hasClaim
+        ? 'VERIFYING'
+        : rawActionState && rawActionState !== 'VERIFYING'
+          ? rawActionState
+          : 'BUFFERING';
+    const reason = allCandidatesRejected
+      ? 'All candidate quotes were not found in the transcript window.'
+      : malformedClaimPayload
+        ? 'Model marked a claim but returned no usable claim text.'
+        : typeof rawExtraction?.reason === 'string' && rawExtraction.reason.trim().length > 0
+          ? rawExtraction.reason.trim()
+          : (hasClaim ? 'Claim detected.' : 'Awaiting end of statement...');
+    const finalClaimType = claimType ?? (claimText ? inferClaimType(claimText) : null);
 
     const claims: ExtractedClaim[] = hasClaim && claimText
       ? [{
           id: crypto.randomUUID(),
           claimText,
-          claimType: inferredClaimType!,
+          claimType: finalClaimType!,
           exactQuote: exactQuote || claimText,
           timestampSeconds: resolveClaimTimestamp(parsedBody.chunks, exactQuote || claimText, approximateTimestamp),
-          confidence: inferConfidence(inferredClaimType!),
+          confidence: inferConfidence(finalClaimType!),
         }]
       : [];
 

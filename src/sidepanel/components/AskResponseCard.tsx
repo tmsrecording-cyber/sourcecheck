@@ -29,7 +29,7 @@ export const AskResponseCard = ({
       initial={prefersReducedMotion ? false : { opacity: 0, y: 12, scale: 0.985 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={transition}
-      className="relative pl-[76px]"
+      className="relative pl-[72px]"
     >
       <div className="absolute left-0 top-[14px] w-[36px] pr-1 text-right">
         <span className="rail-timestamp font-mono text-[10px] font-medium tracking-[0.05em] text-accentSoft/76">

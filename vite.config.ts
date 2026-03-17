@@ -51,5 +51,6 @@ export default defineConfig(({ mode, command }) => {
 
   return {
     plugins: [react(), crx({ manifest: createManifest(apiBase) })],
+    publicDir: 'public',
   };
 });

@@ -1,5 +1,6 @@
-const DEFAULT_MODEL = 'gemini-3-flash-preview';
-const DEFAULT_25_THINKING_BUDGET = 128;
+// Single canonical default - must be in ALLOWED_MODELS
+const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_THINKING_BUDGET = 128;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -25,6 +26,7 @@ type GeminiJsonSchema = Record<string, unknown>;
 type GeminiCallOptions = {
   responseMimeType?: string;
   responseJsonSchema?: GeminiJsonSchema;
+  model?: string;  // Allow dynamic model selection from client
 };
 
 // Minimal JSON Schema validator covering the subset used in this codebase:
@@ -113,9 +115,6 @@ export function validateAgainstSchema(data: unknown, schema: GeminiJsonSchema): 
   return null; // Unknown/unsupported schema construct — pass through.
 }
 
-const stripCodeFences = (value: string) =>
-  value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-
 const extractBalancedJsonValue = (value: string) => {
   const startIndex = value.search(/[{[]/);
   if (startIndex === -1) {
@@ -161,18 +160,130 @@ const extractBalancedJsonValue = (value: string) => {
   return null;
 };
 
-const parseJsonResponse = <T>(rawText: string) => {
-  const cleaned = stripCodeFences(rawText);
+const extractBalancedJsonValueFromIndex = (value: string, startIndex: number) => {
+  const startChar = value[startIndex];
+  if (startChar !== '{' && startChar !== '[') {
+    return null;
+  }
 
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    const extracted = extractBalancedJsonValue(cleaned);
-    if (!extracted) {
-      throw new Error('No JSON object or array found in Gemini response.');
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+
+  for (let index = startIndex; index < value.length; index += 1) {
+    const character = value[index];
+
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (character === '\\') {
+        isEscaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
     }
 
-    return JSON.parse(extracted) as T;
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (character === '{' || character === '[') {
+      depth += 1;
+      continue;
+    }
+
+    if (character === '}' || character === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+};
+
+const cleanJsonSyntax = (value: string) => {
+  // Strip trailing commas only outside of string literals.
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (escaped) {
+      result += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inString) {
+      result += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      result += ch;
+      continue;
+    }
+    if (!inString && ch === ',') {
+      // Look ahead past whitespace to see if the next non-whitespace char closes a container.
+      let j = i + 1;
+      while (j < value.length && (value[j] === ' ' || value[j] === '\n' || value[j] === '\r' || value[j] === '\t')) {
+        j++;
+      }
+      if (j < value.length && (value[j] === '}' || value[j] === ']')) {
+        // Skip the trailing comma.
+        continue;
+      }
+    }
+    result += ch;
+  }
+  return result;
+};
+
+/**
+ * Extracts and parses a JSON object from a raw string, which may include
+ * conversational text or markdown code fences.
+ *
+ * This function is exported for testing purposes.
+ * @internal
+ */
+export const parseJsonResponse = <T>(rawText: string): T => {
+  // Gemini Flash can sometimes wrap the JSON in code fences with conversational
+  // text before or after. Prioritize extracting from a ```json block if present.
+  // If multiple fenced blocks exist, this uses the content of the first one.
+  const fencedContentMatch = rawText.match(/```(?:json)?\s*([\s\S]+?)\s*```/i);
+  const candidate = fencedContentMatch ? (fencedContentMatch[1] || '').trim() : rawText.trim();
+  const parseErrorMessage = 'No JSON object or array found in Gemini response.';
+
+  try {
+    // First attempt: parse the candidate text directly (after cleaning syntax).
+    // This works if the candidate is a clean JSON object.
+    return JSON.parse(cleanJsonSyntax(candidate)) as T;
+  } catch {
+    // Second attempt: If the first parse fails, the candidate might still contain
+    // a valid JSON object surrounded by other text (e.g., if no code fences were used).
+    for (let index = 0; index < candidate.length; index += 1) {
+      const character = candidate[index];
+      if (character !== '{' && character !== '[') {
+        continue;
+      }
+
+      const extracted = extractBalancedJsonValueFromIndex(candidate, index);
+      if (!extracted) {
+        continue;
+      }
+
+      try {
+        return JSON.parse(cleanJsonSyntax(extracted)) as T;
+      } catch {
+        // Keep scanning: benign brace-like prose can precede the real JSON payload.
+      }
+    }
+
+    throw new Error(parseErrorMessage);
   }
 };
 
@@ -209,20 +320,21 @@ const trimModelText = (value: string) => value.trim();
 const truncateForLog = (value: string, maxChars: number = 220) =>
   value.replace(/\s+/g, ' ').trim().slice(0, maxChars);
 
+// Returns new normalized objects instead of mutating the originals.
 const dedupeGroundingSources = (sources: GroundingSource[]): GroundingSource[] => {
   const seenUrls = new Set<string>();
+  const uniqueSources: GroundingSource[] = [];
 
-  return sources.filter((source) => {
+  for (const source of sources) {
     const normalizedUrl = source.url.trim();
     if (!normalizedUrl || seenUrls.has(normalizedUrl)) {
-      return false;
+      continue;
     }
 
     seenUrls.add(normalizedUrl);
-    source.url = normalizedUrl;
-    source.title = source.title.trim() || 'Unknown source';
-    return true;
-  });
+    uniqueSources.push({ url: normalizedUrl, title: source.title.trim() || 'Unknown source' });
+  }
+  return uniqueSources;
 };
 
 const buildEmptyResponseError = (finishReason: GeminiFinishReason | undefined, model: string) => {
@@ -278,7 +390,7 @@ const getThinkingBudget = (model: string) => {
     }
   }
 
-  return DEFAULT_25_THINKING_BUDGET;
+  return DEFAULT_THINKING_BUDGET;
 };
 
 interface GeminiResponse {
@@ -427,6 +539,15 @@ export async function askGeminiWithSearch(
   return callGemini(prompt, maxTokens, true, options);
 }
 
+// Allowed models for security - prevents abuse of expensive models
+const ALLOWED_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-lite-preview',
+];
+
 /**
  * Core Gemini API call — shared by both grounded and ungrounded paths.
  */
@@ -437,9 +558,22 @@ async function callGemini(
   options: GeminiCallOptions = {}
 ): Promise<GeminiResponse> {
   const apiKey = process.env.GEMINI_API_KEY;
-  const model = getModel();
+  
+  // Security: Validate model against whitelist, fallback if invalid
+  const requestedModel = options.model || getModel();
+  const model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
+  if (requestedModel !== model) {
+    console.warn(`[gemini.ts] Invalid model '${requestedModel}' requested, using '${model}'`);
+  }
   const thinkingBudget = getThinkingBudget(model);
   const requestTimeoutMs = getRequestTimeoutMs();
+
+  if (useGrounding && thinkingBudget !== null) {
+    console.warn(
+      '[gemini.ts] `thinkingConfig` is ignored when Google Search grounding is enabled. ' +
+        'The model will use grounding instead of answering from training data.'
+    );
+  }
 
   if (!apiKey) {
     throw new GeminiError('AUTH_ERROR', 'GEMINI_API_KEY not set in environment variables.', 500);
@@ -467,7 +601,7 @@ async function callGemini(
     // Add Google Search grounding tool if requested
     if (useGrounding) {
       body.tools = [
-        { google_search: {} }
+        { googleSearch: {} }
       ];
     }
 
@@ -520,10 +654,15 @@ async function callGemini(
 
       // Extract text — filter out thinking/reasoning parts (thought=true) so they
       // don't corrupt JSON responses from thinking-capable models like Gemini 3.x.
-      const text = trimModelText(data.candidates?.[0]?.content?.parts
-        ?.filter((part) => !part.thought)
-        ?.map((part) => part.text || '')
-        .join('') || '');
+      const rawTextParts = data.candidates?.[0]?.content?.parts || [];
+      const isMixedOutput = rawTextParts.some(p => p.thought) && rawTextParts.some(p => !p.thought);
+
+      const text = trimModelText(
+        rawTextParts
+          .filter((part) => isMixedOutput ? !part.thought : true)
+          .map((part) => part.text || '')
+          .join('')
+      );
 
       if (!text) {
         const finishReason = data.candidates?.[0]?.finishReason as GeminiFinishReason | undefined;
@@ -587,11 +726,13 @@ async function callGemini(
 export async function askGeminiJSON<T = unknown>(
   prompt: string,
   maxTokens: number = 1000,
-  schema?: GeminiJsonSchema
+  schema?: GeminiJsonSchema,
+  model?: string
 ): Promise<{ data: T; inputTokens: number; outputTokens: number }> {
   const response = await askGemini(prompt, maxTokens, {
     responseMimeType: 'application/json',
     ...(schema ? { responseJsonSchema: schema } : {}),
+    ...(model ? { model } : {}),
   });
   const data = parseGeminiJsonResponse<T>(response, schema, false);
 
@@ -609,7 +750,8 @@ export async function askGeminiJSON<T = unknown>(
 export async function askGeminiJSONWithSearch<T = unknown>(
   prompt: string,
   maxTokens: number = 1000,
-  schema?: GeminiJsonSchema
+  schema?: GeminiJsonSchema,
+  model?: string
 ): Promise<{
   data: T;
   inputTokens: number;
@@ -620,7 +762,7 @@ export async function askGeminiJSONWithSearch<T = unknown>(
   // Gemini model versions (e.g. gemini-3.1-flash-lite-preview rejects the combination).
   // We rely on prompt-based JSON instructions + parseJsonResponse() instead.
   // The schema is enforced via post-hoc validation (validateAgainstSchema) below.
-  const response = await askGeminiWithSearch(prompt, maxTokens);
+  const response = await askGeminiWithSearch(prompt, maxTokens, { model });
   const data = parseGeminiJsonResponse<T>(response, schema, true);
 
   return {

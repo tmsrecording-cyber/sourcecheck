@@ -13,26 +13,89 @@ interface RawVerification {
   sourceTitle: string;
   sourceType: string;
   nuance: string;
+  evidenceSnippet?: string | null;
 }
 
 const MAX_CLAIM_TEXT_LENGTH = 700;
 const MAX_METADATA_FIELD_LENGTH = 300;
 const MAX_NUANCE_LENGTH = 600;
+const FALLBACK_NO_SOURCE_COPY = 'No grounded source attached.';
+
+type UnverifiableCategory =
+  | 'no_strong_match'
+  | 'missing_context'
+  | 'needs_primary_source';
 
 // Phrases that assert definite verdicts — inappropriate when no grounded
 // sources exist to back them up. Covers both negative AND positive certainty.
 const NEGATIVE_CERTAINTY_RE =
   /\b(this is false|fabricat(ed|ion)|no credible record|clearly false|proven false|definitively (false|wrong|incorrect)|debunked|never happened|completely false|entirely false)\b/i;
 const POSITIVE_CERTAINTY_RE =
-  /\b(confirmed|verified|well.documented|widely reported|established fact|proven true|definitively (true|correct|accurate)|backed by|supported by)\b/i;
+  /\b(confirmed|verified|well[-\s]?documented|widely reported|established fact|proven true|definitively (true|correct|accurate)|backed by|supported by)\b/i;
+const MISSING_CONTEXT_RE =
+  /\b(missing context|needs context|more context|depends on|unclear|not specific|missing details|timeframe|population|definition)\b/i;
+const PRIMARY_SOURCE_RE =
+  /\b(study|paper|journal|trial|dataset|registry|archive|official|record|filing|report|guideline|census|publication|meta-analysis|original source)\b/i;
 
 // When the card ends up unverifiable with no grounding, scrub any training-data
 // nuance that sounds stronger than the evidence warrants — whether positive or negative.
 const guardUnverifiableNuance = (nuance: string, hasGrounding: boolean): string => {
   if (!hasGrounding && (NEGATIVE_CERTAINTY_RE.test(nuance) || POSITIVE_CERTAINTY_RE.test(nuance))) {
-    return 'Could not find web sources to check this claim.';
+    return 'We could not verify this claim with a reliable web source.';
   }
   return nuance;
+};
+
+const inferUnverifiableCategory = (params: {
+  claimText: string;
+  claimType: string;
+  sourceType: string;
+  nuance: string;
+  sourceTitle: string;
+}): UnverifiableCategory => {
+  const contextCombined = `${params.claimText} ${params.nuance} ${params.sourceTitle}`.trim();
+  const sourceCombined = `${params.claimText} ${params.sourceTitle}`.trim();
+
+  if (MISSING_CONTEXT_RE.test(contextCombined)) {
+    return 'missing_context';
+  }
+
+  if (
+    params.claimType === 'study' ||
+    params.claimType === 'canonical' ||
+    params.sourceType === 'academic_paper' ||
+    params.sourceType === 'official_source' ||
+    PRIMARY_SOURCE_RE.test(sourceCombined)
+  ) {
+    return 'needs_primary_source';
+  }
+
+  return 'no_strong_match';
+};
+
+const resolveUnverifiableLanguage = (params: {
+  category: UnverifiableCategory;
+  hasGrounding: boolean;
+}) => {
+  switch (params.category) {
+    case 'missing_context':
+      return {
+        sourceTitle: 'More context needed',
+        nuance: 'The claim needs specifics like timeframe, population, or definition.',
+      };
+    case 'needs_primary_source':
+      return {
+        sourceTitle: 'Needs primary source',
+        nuance: 'This likely needs a paper, dataset, or official record.',
+      };
+    case 'no_strong_match':
+      return {
+        sourceTitle: 'No strong web match',
+        nuance: params.hasGrounding
+          ? 'Search results mention the topic, but do not resolve this exact claim.'
+          : 'We could not verify this claim with a reliable web source.',
+      };
+  }
 };
 
 const VERIFICATION_SCHEMA = {
@@ -42,9 +105,31 @@ const VERIFICATION_SCHEMA = {
     sourceTitle: { type: 'string' },
     sourceType: { type: 'string', enum: ['academic_paper', 'news_article', 'official_source', 'wikipedia', 'other'] },
     nuance: { type: 'string' },
+    evidenceSnippet: { anyOf: [{ type: 'string' }, { type: 'null' }] },
   },
   required: ['status', 'sourceTitle', 'sourceType', 'nuance'],
   additionalProperties: false,
+};
+
+const MAX_SNIPPET_LENGTH = 200;
+
+/**
+ * Sanitize the raw evidenceSnippet from the model.
+ * Returns a clean string only when it is genuinely useful, or undefined otherwise.
+ */
+const sanitizeEvidenceSnippet = (
+  raw: unknown,
+  nuance: string,
+  status: string
+): string | undefined => {
+  if (status === 'unverifiable') return undefined;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length < 15) return undefined;
+  const sliced = trimmed.slice(0, MAX_SNIPPET_LENGTH);
+  const normalizeForCompare = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  if (normalizeForCompare(sliced) === normalizeForCompare(nuance)) return undefined;
+  return sliced;
 };
 
 const normalizeValue = (value: string) =>
@@ -80,6 +165,11 @@ const validateVerifyClaimRequest = (body: VerifyClaimRequest) => {
 
   if (!Number.isFinite(body.claim.timestampSeconds) || body.claim.timestampSeconds < 0) {
     return 'claim.timestampSeconds must be a non-negative number.';
+  }
+
+  const VALID_CLAIM_TYPES = ['study', 'statistic', 'historical', 'surprising', 'canonical'];
+  if (!VALID_CLAIM_TYPES.includes(body.claim.claimType)) {
+    return 'Invalid claimType.';
   }
 
   return null;
@@ -167,7 +257,7 @@ export async function POST(request: NextRequest) {
     const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType);
 
     const { data: rawVerification, inputTokens, outputTokens, sources } =
-      await askGeminiJSONWithSearch<RawVerification>(prompt, 500, VERIFICATION_SCHEMA);
+      await askGeminiJSONWithSearch<RawVerification>(prompt, 500, VERIFICATION_SCHEMA, body.model);
 
     // ---- Validate status ----
     const validStatuses: VerificationStatus[] = ['supported', 'partial', 'disputed', 'unverifiable'];
@@ -175,12 +265,16 @@ export async function POST(request: NextRequest) {
       ? (rawVerification.status as VerificationStatus)
       : 'unverifiable';
 
-    // ---- Trust guard: no grounding sources = no evidence-backed verdict ----
-    // If Gemini returned no grounding chunks the model answered from training data
-    // alone. Downgrade any positive/negative verdict to unverifiable so cards never
-    // show supported/partial/disputed without real web evidence behind them.
-    const hasGrounding = sources.length > 0;
-    const status: VerificationStatus = hasGrounding ? parsedStatus : 'unverifiable';
+    // ---- Get source URL from grounding metadata ----
+    // Gemini returns the actual URLs it used in groundingChunks.
+    // Fall back to empty string if none available or no quality match.
+    const bestSourceUrl = selectBestSourceUrl(rawVerification.sourceTitle || '', sources);
+
+    // ---- Trust guard: no quality grounding source = no evidence-backed verdict ----
+    // If Gemini returned no grounding chunks or we couldn't match its cited
+    // source to a URL, the card must show as unverifiable.
+    const hasQualityGrounding = bestSourceUrl !== '';
+    const status: VerificationStatus = hasQualityGrounding ? parsedStatus : 'unverifiable';
 
     // ---- Validate source type ----
     const validSourceTypes = ['academic_paper', 'news_article', 'official_source', 'wikipedia', 'other'] as const;
@@ -188,35 +282,71 @@ export async function POST(request: NextRequest) {
       ? (rawVerification.sourceType as typeof validSourceTypes[number])
       : 'other';
 
-    // ---- Get source URL from grounding metadata ----
-    // Gemini returns the actual URLs it used in groundingChunks.
-    // Fall back to empty string if none available.
-    const bestSourceUrl = hasGrounding
-      ? selectBestSourceUrl(rawVerification.sourceTitle || '', sources)
-      : '';
-
-    // ---- Resolve source title ----
-    // When ungrounded, always replace the model's source title — it may cite
-    // specific papers/outlets from training data that we cannot link to.
+    // ---- Resolve source title, type, URL, and nuance ----
     const rawSourceTitle = typeof rawVerification.sourceTitle === 'string'
       ? rawVerification.sourceTitle.trim()
       : '';
-    const sourceTitle = hasGrounding
-      ? (rawSourceTitle || 'Unknown source')
-      : 'No web source found';
-    const resolvedSourceType = hasGrounding ? sourceType : 'other';
+    const rawNuanceData = typeof rawVerification.nuance === 'string'
+      ? rawVerification.nuance
+      : 'No additional context available.';
+    
+    // Strip markdown-style citations [1], [2] etc injected by Gemini during search grounding
+    const fullNuance = rawNuanceData.replace(/\[\d+\]/g, '').trim();
+    const rawNuance = fullNuance.slice(0, MAX_NUANCE_LENGTH);
+
+    // When unverifiable, infer a more specific category and use trust-preserving copy.
+    const unresolvedCategory = status === 'unverifiable'
+      ? inferUnverifiableCategory({
+          claimText: claim.claimText,
+          claimType: claim.claimType,
+          sourceType: rawVerification.sourceType,
+          nuance: fullNuance, // Use full nuance for inference (before truncation)
+          sourceTitle: rawSourceTitle,
+        })
+      : null;
+    const unresolvedLanguage = unresolvedCategory
+      ? resolveUnverifiableLanguage({
+          category: unresolvedCategory,
+          hasGrounding: hasQualityGrounding,
+        })
+      : null;
+
+    const sourceTitle = unresolvedLanguage
+      ? unresolvedLanguage.sourceTitle
+      : hasQualityGrounding
+        ? (rawSourceTitle || 'Unknown source')
+        : FALLBACK_NO_SOURCE_COPY;
+    const resolvedSourceType = unresolvedLanguage ? 'other' : hasQualityGrounding ? sourceType : 'other';
+    const resolvedSourceUrl = unresolvedLanguage ? '' : bestSourceUrl;
+    const resolvedNuance = (
+      unresolvedLanguage
+        ? unresolvedLanguage.nuance
+        : guardUnverifiableNuance(rawNuance, hasQualityGrounding)
+    ).slice(0, MAX_NUANCE_LENGTH);
+
+    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+
+    const evidenceSnippet = sanitizeEvidenceSnippet(
+      rawVerification.evidenceSnippet,
+      resolvedNuance,
+      status
+    );
 
     const sourceCard: SourceCard = {
-      id: crypto.randomUUID(),
+      id,
       claim,
       status,
       sourceTitle: sourceTitle.slice(0, MAX_METADATA_FIELD_LENGTH),
-      sourceUrl: bestSourceUrl,
+      sourceUrl: resolvedSourceUrl,
       sourceType: resolvedSourceType,
-      nuance: guardUnverifiableNuance(
-        String(typeof rawVerification.nuance === 'string' ? rawVerification.nuance : 'No additional context available.').slice(0, MAX_NUANCE_LENGTH),
-        hasGrounding,
-      ),
+      nuance: resolvedNuance,
+      ...(evidenceSnippet ? { evidenceSnippet } : {}),
       timestampSeconds: claim.timestampSeconds,
       verifiedAt: new Date().toISOString(),
     };
@@ -224,8 +354,8 @@ export async function POST(request: NextRequest) {
     console.info('[verify-claim]', {
       parsedStatus,
       status: sourceCard.status,
-      hasGrounding,
-      sourceCount: sources.length,
+      hasQualityGrounding,
+      sourceCount: Array.isArray(sources) ? sources.length : 0,
       inputTokens,
       outputTokens,
     });

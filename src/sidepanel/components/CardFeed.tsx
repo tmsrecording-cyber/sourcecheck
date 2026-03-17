@@ -1,9 +1,9 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 
 const SHOW_DEBUG =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('debug') === '1';
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import type {
   AskQuestionSource,
   AnalysisStatus,
@@ -16,7 +16,6 @@ import { SourceCard as LiveResultCard } from './SourceCard';
 import { AskResponseCard } from './AskResponseCard';
 import { getContextForEntity, type ContextSnippet } from './thoughtContext';
 import { formatTime } from '../utils/formatTime';
-import { panelTones } from '../styles/panelTokens';
 
 interface CardFeedProps {
   askHistory?: Array<{
@@ -39,15 +38,35 @@ interface CardFeedProps {
   pinToTop?: () => void;
   onEntitySelect?: (entityLabel: string) => void;
   onRetryTranscript?: () => void;
+  selectedModel?: string;
+  activeTab?: 'live' | 'history';
 }
 
-const RAIL_TONE = {
-  accent: panelTones.status.accent,
-  soft: panelTones.status.accentSoft,
-  supported: panelTones.status.supported,
-  partial: panelTones.status.partial,
-  disputed: panelTones.status.disputed,
-  muted: panelTones.status.neutral,
+const RAIL_STYLE = {
+  accent: { 
+    from: 'from-sc-accent', 
+    node: 'bg-sc-accent shadow-[0_0_0_4px_rgba(200,163,106,0.18)]' 
+  },
+  soft: { 
+    from: 'from-sc-accent-soft', 
+    node: 'bg-sc-accent-soft shadow-[0_0_0_4px_rgba(231,210,173,0.18)]' 
+  },
+  supported: { 
+    from: 'from-sc-supported', 
+    node: 'bg-sc-supported shadow-[0_0_0_4px_rgba(137,176,134,0.18)]' 
+  },
+  partial: { 
+    from: 'from-sc-partial', 
+    node: 'bg-sc-partial shadow-[0_0_0_4px_rgba(196,143,83,0.18)]' 
+  },
+  disputed: { 
+    from: 'from-sc-disputed', 
+    node: 'bg-sc-disputed shadow-[0_0_0_4px_rgba(198,111,93,0.18)]' 
+  },
+  muted: { 
+    from: 'from-sc-neutral', 
+    node: 'bg-sc-neutral shadow-[0_0_0_4px_rgba(122,109,95,0.18)]' 
+  },
 } as const;
 
 const VERDICT_META: Record<
@@ -55,28 +74,28 @@ const VERDICT_META: Record<
   {
     label: string;
     tone: string;
-    railTone: string;
+    railStyle: { from: string; node: string };
   }
 > = {
   supported: {
     label: 'Supported',
-    tone: 'text-supported',
-    railTone: RAIL_TONE.supported,
+    tone: 'text-sc-supported',
+    railStyle: RAIL_STYLE.supported,
   },
   partial: {
     label: 'Mixed',
-    tone: 'text-partial',
-    railTone: RAIL_TONE.partial,
+    tone: 'text-sc-partial',
+    railStyle: RAIL_STYLE.partial,
   },
   disputed: {
     label: 'Unsupported',
-    tone: 'text-disputed',
-    railTone: RAIL_TONE.disputed,
+    tone: 'text-sc-disputed',
+    railStyle: RAIL_STYLE.disputed,
   },
   unverifiable: {
     label: 'Unresolved',
-    tone: 'text-textMuted',
-    railTone: RAIL_TONE.muted,
+    tone: 'text-sc-muted',
+    railStyle: RAIL_STYLE.muted,
   },
 };
 
@@ -156,6 +175,42 @@ const HISTORY_ROW_TRANSITION = {
   ease: [0.16, 1, 0.3, 1] as const,
 };
 
+// TRUE Transformer hinge animation - cards fold down from top like a hinge
+const transformerVariants = {
+  initial: { 
+    opacity: 0, 
+    rotateX: -85,
+    y: -20, 
+    transformPerspective: 1200, 
+    transformOrigin: "top center" as const
+  },
+  animate: { 
+    opacity: 1, 
+    rotateX: 0, 
+    y: 0,
+    transition: { 
+      type: "spring" as const, 
+      stiffness: 280, 
+      damping: 22, 
+      mass: 0.8 
+    }
+  },
+  exit: { 
+    opacity: 0, 
+    rotateX: 60, 
+    scale: 0.9, 
+    transformOrigin: "bottom center" as const,
+    transition: { duration: 0.25, ease: "easeIn" as const }
+  }
+};
+
+const TRANSFORMER_TRANSITION = {
+  type: "spring" as const,
+  stiffness: 280,
+  damping: 22,
+  mass: 0.8
+};
+
 const NUMERIC_SIGNAL_PATTERN =
   /\b(\d+(?:\.\d+)?%?|one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|million|billion)\b/i;
 const TIME_SIGNAL_PATTERN =
@@ -212,15 +267,20 @@ const shouldHighlightEntity = (value: string) => {
     return true;
   }
 
+  // Acronyms (e.g. AI, MMO, FDA)
   if (/^[A-Z0-9]{2,6}$/.test(rawToken)) {
     return true;
   }
 
-  // Prefer precision over recall in live reading mode: highlight mixed-case
-  // tokens (e.g. PyTorch) but avoid generic sentence-start words ("Then").
+  // FIX: If word is ALL CAPS and longer than 6 chars, it's shouting
+  // from YouTube captions, not a real entity
+  if (rawToken === rawToken.toUpperCase() && rawToken.length > 6) {
+    return false;
+  }
+
+  // Proper Noun detection (Title Case like "Elon", "Microsoft")
   return (
-    /^[A-Z][A-Za-z0-9'-]{3,}$/.test(rawToken) &&
-    /[A-Z]/.test(rawToken.slice(1)) &&
+    /^[A-Z][a-z0-9'-]{2,}$/.test(rawToken) &&
     !NON_ENTITY_TITLECASE.has(normalizedToken)
   );
 };
@@ -517,41 +577,50 @@ const getThoughtReadout = (
 
 const RailEntry = ({
   timestampSeconds,
-  tone,
+  style,
   glow = false,
   children,
 }: {
   timestampSeconds: number | null;
-  tone: string;
+  style: { from: string; node: string };
   glow?: boolean;
   children: ReactNode;
 }) => (
-  <div className="relative pl-[76px]">
+  <div className="relative pl-[72px]">
     {timestampSeconds !== null && (
       <div className="absolute left-0 top-[14px] w-[36px] pr-1 text-right">
-        <span className="rail-timestamp font-mono text-[10px] font-medium tracking-[0.05em]">
+        <span className="rail-timestamp font-mono text-[10px] font-medium tracking-[0.05em] text-sc-muted opacity-60">
           {formatTime(timestampSeconds)}
         </span>
       </div>
     )}
+    {/* Phase 3: Intensified Diamond Node Glow */}
     <span
-      className={`rail-node${glow ? ' rail-node-live' : ''}`}
-      style={{ background: tone, boxShadow: `0 0 0 4px ${tone}20` }}
+      className={`rail-node absolute h-2 w-2 left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
+      style={{ 
+        top: '10px',
+        borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.5)`,
+        boxShadow: '0 0 12px rgba(var(--model-accent-rgb, 168, 199, 250), 0.6), inset 0 0 4px rgba(255, 255, 255, 0.8)'
+      }}
     />
+    {/* HUD Precise Connector - touches card edge */}
     <span
-      className="rail-connector"
-      style={{ background: `linear-gradient(90deg, ${tone}, rgba(0, 0, 0, 0))` }}
+      className={`rail-connector absolute h-[1px] w-[20px] left-[57px] bg-gradient-to-r to-transparent opacity-90 transition-all duration-300 ${style.from}`}
+      style={{ 
+        top: '14px',
+        background: `linear-gradient(to right, rgb(var(--model-accent-rgb, 168, 199, 250)), transparent)`
+      }}
     />
     {children}
   </div>
 );
 
 const SkeletonCard = () => (
-  <RailEntry timestampSeconds={null} tone={RAIL_TONE.muted}>
-    <div className="feed-card ml-1 px-4 py-4">
-      <div className="skeleton h-4 w-16" />
-      <div className="mt-3 skeleton h-4 w-full" />
-      <div className="mt-2 skeleton h-4 w-4/5" />
+  <RailEntry timestampSeconds={null} style={RAIL_STYLE.muted}>
+    <div className="feed-card ml-1 px-4 py-4 border border-sc-border-soft bg-sc-surface-0 shadow-sc-soft opacity-40">
+      <div className="skeleton animate-pulse bg-sc-surface-2 h-4 w-16 rounded" />
+      <div className="mt-3 skeleton animate-pulse bg-sc-surface-2 h-4 w-full rounded" />
+      <div className="mt-2 skeleton animate-pulse bg-sc-surface-2 h-4 w-4/5 rounded" />
     </div>
   </RailEntry>
 );
@@ -745,16 +814,20 @@ const LiveReadingStrip = ({
   const showFooterCursor = showCursor;
 
   return (
-    <RailEntry timestampSeconds={timestampSeconds} tone={RAIL_TONE.accent}>
-      <div className={`reading-strip relative ml-1${secondary ? ' reading-strip-secondary' : ' reading-strip-primary'}`}>
+    <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE.accent}>
+      <div className={`reading-strip relative ml-2${secondary ? ' reading-strip-secondary' : ' reading-strip-primary'}`}>
+        {/* HUD Active Scan Overlay */}
+        {!secondary && <div className="active-scan-overlay" />}
         <div className="reading-strip-header">
           <div className="reading-kicker">
             <span className="reading-kicker-mark" aria-hidden="true" />
-            <span>{secondary ? 'Reading now' : 'Live Transcript'}</span>
+            <span className="font-mono text-[9px] font-bold tracking-[0.12em] uppercase opacity-70">
+              {secondary ? 'Reading now' : 'Live Transcript'}
+            </span>
           </div>
           <div className="reading-meta" aria-hidden="true">
             <span className="reading-meta-dot" data-tone={hudState.tone} />
-            {SHOW_DEBUG && <span className="reading-meta-label">{hudState.label}</span>}
+            {SHOW_DEBUG && <span className="font-mono text-[9px] font-medium tracking-tight opacity-40">{hudState.label}</span>}
           </div>
         </div>
 
@@ -764,23 +837,23 @@ const LiveReadingStrip = ({
         </p>
 
         {activeContextSnippet && (
-          <div className="reading-context">
+          <div className="reading-context mt-4">
             <div className="reading-context-meta">
-              <span>{activeContextSnippet.category} detected</span>
-              <span>{activeContextSnippet.category}</span>
+              <span className="font-mono text-[8px] font-bold tracking-widest uppercase opacity-40">{activeContextSnippet.category} detected</span>
+              <span className="px-1.5 py-0.5 rounded-sm bg-accent/10 text-accent font-mono text-[7px] font-bold tracking-tighter uppercase">{activeContextSnippet.category}</span>
             </div>
-            <p className="reading-context-title">{activeContextSnippet.title}</p>
-            <p className="reading-context-copy">{activeContextSnippet.description}</p>
+            <p className="reading-context-title mt-2 leading-snug">{activeContextSnippet.title}</p>
+            <p className="reading-context-copy mt-1.5 leading-relaxed opacity-80">{activeContextSnippet.description}</p>
           </div>
         )}
 
-        <div className="reading-footer-shell">
-          <p className="reading-footer-line" data-state={thoughtReadout.state}>
-            <span className="reading-terminal-prefix" aria-hidden="true">
+        <div className="reading-footer-shell mt-4">
+          <p className="reading-footer-line font-mono text-[9px] font-medium tracking-wide" data-state={thoughtReadout.state}>
+            <span className="reading-terminal-prefix opacity-50" aria-hidden="true">
               &gt;
             </span>
-            <span>{thoughtReadout.message}</span>
-            {showFooterCursor && <span className="typing-cursor" aria-hidden="true" />}
+            <span className="ml-1.5">{thoughtReadout.message}</span>
+            {showFooterCursor && <span className="typing-cursor ml-1" aria-hidden="true" />}
           </p>
         </div>
       </div>
@@ -797,7 +870,7 @@ const LiveCheckingCard = ({
   timestampSeconds: number | null;
   claimText: string;
 }) => (
-  <RailEntry timestampSeconds={timestampSeconds} tone={RAIL_TONE.soft} glow>
+  <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE.soft} glow>
     <div className="feed-card feed-card-checking relative ml-1 px-4 py-4 card-enter">
       <div className="investigation-sweep" />
 
@@ -846,8 +919,16 @@ const StateCard = ({
   actionLabel?: string;
   onAction?: () => void;
 }) => (
-  <RailEntry timestampSeconds={timestampSeconds} tone={tone}>
-    <div className="feed-card state-card ml-1 px-4 py-4">
+  <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE[tone as keyof typeof RAIL_STYLE] || RAIL_STYLE.muted}>
+    <div className="feed-card state-card ml-1 px-4 py-4 relative overflow-hidden">
+      <div
+        className="absolute top-4 right-4 h-12 w-12 opacity-[0.03] pointer-events-none"
+        style={{
+          background: 'currentColor',
+          clipPath: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+          color: 'var(--sc-accent)',
+        }}
+      />
       <div className={`status-badge ${badgeTone}`}>{badgeLabel}</div>
       <p className="state-card-title mt-3 text-[16px] font-semibold leading-[1.4] tracking-[-0.014em] text-textMain">
         {headline}
@@ -866,7 +947,46 @@ const StateCard = ({
   </RailEntry>
 );
 
-/* ── Checked claim row ── */
+/* ── Status Icons ── */
+const StatusIcon = ({ status }: { status: VerificationStatus }) => {
+  const icons = {
+    supported: (
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <path d="M2 5L4 7L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    ),
+    partial: (
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <path d="M2 5H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    ),
+    disputed: (
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <path d="M3 3L7 7M7 3L3 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    ),
+    unverifiable: (
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <circle cx="5" cy="5" r="1" fill="currentColor"/>
+      </svg>
+    ),
+  };
+
+  const statusClass = {
+    supported: 'status-icon-supported',
+    partial: 'status-icon-partial',
+    disputed: 'status-icon-disputed',
+    unverifiable: 'status-icon-neutral',
+  };
+
+  return (
+    <span className={`status-icon ${statusClass[status]}`}>
+      {icons[status]}
+    </span>
+  );
+};
+
+/* ── Checked claim row with 3D fold ── */
 
 const CheckedClaimRow = ({
   card,
@@ -884,36 +1004,66 @@ const CheckedClaimRow = ({
     ? card.sourceTitle.trim()
     : 'No web source found.';
   const nuanceLine = card.nuance?.trim();
-  const transition = prefersReducedMotion
-    ? { duration: 0 }
-    : HISTORY_ROW_TRANSITION;
+
+  // 3D fold content variants
+  const foldVariants = {
+    hidden: {
+      rotateX: -90,
+      opacity: 0,
+      transformOrigin: 'top center' as const,
+      transformPerspective: 1200,
+      height: 0,
+      transition: {
+        duration: prefersReducedMotion ? 0 : 0.35,
+        ease: [0.16, 1, 0.3, 1] as [number, number, number, number],
+      },
+    },
+    visible: {
+      rotateX: 0,
+      opacity: 1,
+      transformOrigin: 'top center' as const,
+      transformPerspective: 1200,
+      height: 'auto',
+      transition: {
+        duration: prefersReducedMotion ? 0 : 0.4,
+        ease: [0.16, 1, 0.3, 1] as [number, number, number, number],
+      },
+    },
+  };
+
+  const chevronVariants = {
+    collapsed: { rotate: 0 },
+    expanded: { rotate: 180 },
+  };
 
   return (
     <motion.div
       layout
-      className="relative"
-      initial={prefersReducedMotion ? false : { opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={transition}
+      className="relative transformer-card"
+      initial={prefersReducedMotion ? false : { opacity: 0, rotateX: 45, scale: 0.96, transformPerspective: 1000 }}
+      animate={{ opacity: 1, rotateX: 0, scale: 1 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
     >
-      <RailEntry timestampSeconds={card.timestampSeconds} tone={verdictMeta.railTone}>
+      <RailEntry timestampSeconds={card.timestampSeconds} style={verdictMeta.railStyle}>
         <div className={`history-entry ml-1${isExpanded ? ' history-entry-expanded' : ''}`}>
           <span
-            className="history-entry-accent"
+            className={`history-entry-accent ${verdictMeta.railStyle.node.split(' ')[0]}`}
             aria-hidden="true"
-            style={{ background: verdictMeta.railTone }}
           />
 
           <button
             type="button"
-            className="history-row"
+            className="history-row focus-ring"
             onClick={onToggle}
             aria-expanded={isExpanded}
             aria-controls={detailId}
           >
-            <span className={`verdict-chip ${verdictMeta.tone}`}>{verdictMeta.label}</span>
+            <div className="flex items-center gap-2">
+              <StatusIcon status={card.status} />
+              <span className={`verdict-chip ${verdictMeta.tone}`}>{verdictMeta.label}</span>
+            </div>
             <p
-              className="history-claim-text min-w-0 flex-1 text-[13px] leading-[1.45] text-textMain/92"
+              className="history-claim-text min-w-0 flex-1 text-[13px] leading-[1.45] text-textMain/92 font-ui"
               style={{
                 display: '-webkit-box',
                 WebkitLineClamp: 1,
@@ -923,28 +1073,40 @@ const CheckedClaimRow = ({
             >
               {card.nuance?.trim() || card.claim.claimText}
             </p>
+            <motion.div
+              className="ml-2 text-sc-muted/60"
+              variants={chevronVariants}
+              initial="collapsed"
+              animate={isExpanded ? 'expanded' : 'collapsed'}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M3.5 5.25L7 8.75L10.5 5.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </motion.div>
           </button>
 
           <AnimatePresence initial={false}>
             {isExpanded && (
               <motion.div
                 id={detailId}
-                className="history-detail"
-                initial={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={transition}
+                className="history-detail fold-container"
+                variants={foldVariants}
+                initial="hidden"
+                animate="visible"
+                exit="hidden"
+                style={{ transformStyle: 'preserve-3d', overflow: 'hidden' }}
               >
                 <div className="history-detail-inner pb-2 pt-1">
                   <div className="history-detail-panel">
                     <div className="history-detail-line">
-                      <span className="history-detail-label">Best source found</span>
+                      <span className="history-detail-label font-mono">Best source found</span>
                       {card.sourceUrl && card.sourceTitle?.trim() ? (
                         <a
                           href={card.sourceUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="history-detail-link"
+                          className="electric-hover history-detail-link"
                         >
                           {supportLine}
                         </a>
@@ -985,6 +1147,8 @@ export const CardFeed = ({
   pinToTop,
   onEntitySelect,
   onRetryTranscript,
+  activeTab = 'live',
+  selectedModel = 'gemini-3.1-flash-lite',
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
@@ -1012,6 +1176,7 @@ export const CardFeed = ({
   const showResumeLive =
     !isPinned &&
     isLiveReading &&
+    activeTab === 'live' &&
     (cards.length > 0 || pendingClaims.length > 0 || Boolean(currentScanPreview));
 
   useEffect(() => {
@@ -1024,11 +1189,16 @@ export const CardFeed = ({
     }
   }, [expandedClaimId, olderCards]);
 
+  // Dynamic model accent color for HUD lighting
+  const modelAccentRgb = selectedModel === 'gemini-3.1-flash-lite' 
+    ? '168, 199, 250' // Gemini Blue
+    : '215, 174, 251'; // Gemini Purple
+
   return (
-    <div className="relative">
+    <div className="relative" style={{ '--model-accent-rgb': modelAccentRgb } as CSSProperties}>
       <div
         className="relative flex flex-col gap-3 px-3 pb-4 pt-2"
-        style={FEED_RAIL_LAYOUT}
+        style={{ ...FEED_RAIL_LAYOUT, '--model-accent-rgb': modelAccentRgb } as CSSProperties}
       >
         <div className="signal-rail" />
 
@@ -1037,7 +1207,7 @@ export const CardFeed = ({
         ) : (
           <>
             {/* Primary: reading strip when nothing else to show */}
-            {showReadingState && !latestCheckedCard && !latestPendingClaim && (
+            {activeTab === 'live' && showReadingState && !latestCheckedCard && !latestPendingClaim && (
               <LiveReadingStrip
                 timestampSeconds={activeReadingTimestamp}
                 previewText={activePreview}
@@ -1055,12 +1225,13 @@ export const CardFeed = ({
                 <motion.div
                   key={latestCheckedCard.id}
                   layout
-                  initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={prefersReducedMotion ? undefined : { opacity: 0, y: -8, scale: 0.97 }}
-                  transition={HISTORY_ROW_TRANSITION}
+                  className="transformer-card"
+                  initial={prefersReducedMotion ? false : transformerVariants.initial}
+                  animate={transformerVariants.animate}
+                  exit={prefersReducedMotion ? undefined : transformerVariants.exit}
+                  transition={TRANSFORMER_TRANSITION}
                 >
-                  <RailEntry timestampSeconds={latestCheckedCard.timestampSeconds} tone={VERDICT_META[latestCheckedCard.status].railTone}>
+                  <RailEntry timestampSeconds={latestCheckedCard.timestampSeconds} style={VERDICT_META[latestCheckedCard.status].railStyle}>
                     <LiveResultCard {...latestCheckedCard} isLatest />
                   </RailEntry>
                 </motion.div>
@@ -1069,14 +1240,15 @@ export const CardFeed = ({
 
             {/* Pending check */}
             <AnimatePresence mode="popLayout">
-              {latestPendingClaim && (
+              {activeTab === 'live' && latestPendingClaim && (
                 <motion.div
                   key={latestPendingClaim.id}
                   layout
-                  initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={prefersReducedMotion ? undefined : { opacity: 0, scale: 0.97 }}
-                  transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                  className="transformer-card"
+                  initial={prefersReducedMotion ? false : transformerVariants.initial}
+                  animate={transformerVariants.animate}
+                  exit={prefersReducedMotion ? undefined : transformerVariants.exit}
+                  transition={{ ...TRANSFORMER_TRANSITION, duration: 0.45 }}
                 >
                   <LiveCheckingCard
                     timestampSeconds={checkingTimestamp}
@@ -1093,7 +1265,7 @@ export const CardFeed = ({
                   badgeLabel="Transcript unavailable"
                   badgeTone="text-partial"
                   timestampSeconds={null}
-                  tone={RAIL_TONE.partial}
+                  tone="partial"
                   headline="Transcript unavailable"
                   supportLine="No usable captions were returned for this video."
                   actionLabel="Retry transcript"
@@ -1104,7 +1276,7 @@ export const CardFeed = ({
                   badgeLabel="Error"
                   badgeTone="text-disputed"
                   timestampSeconds={null}
-                  tone={RAIL_TONE.disputed}
+                  tone="disputed"
                   headline="Something went wrong."
                   supportLine="Refresh the YouTube tab to try again."
                 />
@@ -1113,7 +1285,7 @@ export const CardFeed = ({
                   badgeLabel={status === 'loading' ? 'Loading' : 'Idle'}
                   badgeTone={status === 'loading' ? 'text-accentSoft' : 'text-textMuted'}
                   timestampSeconds={null}
-                  tone={status === 'loading' ? RAIL_TONE.soft : RAIL_TONE.muted}
+                  tone={status === 'loading' ? 'soft' : 'muted'}
                   headline={status === 'loading' ? 'Loading transcript…' : 'Waiting for video.'}
                   supportLine={
                     status === 'loading'
@@ -1127,7 +1299,7 @@ export const CardFeed = ({
             {/* Older checked claims */}
             {olderCards.length > 0 && (
               <motion.div layout className="flex flex-col">
-                <motion.div layout className="pl-[76px]">
+                <motion.div layout className="pl-[72px]">
                   <div className="ml-1">
                     <p className="feed-section-label">Checked so far</p>
                   </div>
@@ -1145,9 +1317,16 @@ export const CardFeed = ({
               </motion.div>
             )}
 
+            {/* Empty history state */}
+            {activeTab === 'history' && cards.length === 0 && askHistory.length === 0 && (
+              <div className="pl-[72px] py-8">
+                <p className="text-[12px] text-sc-muted/60 font-sc italic">No checked claims yet. Results will appear here as claims are verified.</p>
+              </div>
+            )}
+
             {askHistory.length > 0 && (
               <motion.div layout className="flex flex-col gap-2">
-                <motion.div layout className="pl-[76px]">
+                <motion.div layout className="pl-[72px]">
                   <div className="ml-1">
                     <p className="feed-section-label feed-section-label-qa">Q&A History</p>
                   </div>

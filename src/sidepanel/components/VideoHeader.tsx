@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import type { AnalysisStatus, PlaybackState, SourceCard, VerificationStatus } from '../../../shared/types';
 import { formatTime } from '../utils/formatTime';
-import { panelTones } from '../styles/panelTokens';
 
 interface VideoHeaderProps {
   title: string;
@@ -18,50 +17,50 @@ const STATUS_META: Record<
   {
     label: string;
     tone: string;
-    accent: string;
+    accentClass: string;
   }
 > = {
   idle: {
     label: 'Idle',
-    tone: 'text-textMuted',
-    accent: panelTones.status.neutral,
+    tone: 'text-sc-muted',
+    accentClass: 'text-sc-neutral',
   },
   loading: {
     label: 'Loading',
-    tone: 'text-accentSoft',
-    accent: panelTones.status.accentSoft,
+    tone: 'text-sc-accent-soft',
+    accentClass: 'text-sc-accent-soft',
   },
   monitoring: {
     label: 'Monitoring',
-    tone: 'text-accent',
-    accent: panelTones.status.accent,
+    tone: 'text-sc-accent',
+    accentClass: 'text-sc-accent',
   },
   verifying: {
     label: 'Checking',
-    tone: 'text-partial',
-    accent: panelTones.status.partial,
+    tone: 'text-sc-partial',
+    accentClass: 'text-sc-partial',
   },
   ready: {
     label: 'Ready',
-    tone: 'text-textMuted',
-    accent: panelTones.status.supported,
+    tone: 'text-sc-muted',
+    accentClass: 'text-sc-supported',
   },
   'no-transcript': {
     label: 'Transcript unavailable',
-    tone: 'text-partial',
-    accent: panelTones.status.partial,
+    tone: 'text-sc-partial',
+    accentClass: 'text-sc-partial',
   },
   error: {
     label: 'Error',
-    tone: 'text-disputed',
-    accent: panelTones.status.disputed,
+    tone: 'text-sc-disputed',
+    accentClass: 'text-sc-disputed',
   },
 };
 
 const VERDICT_TICK: Record<VerificationStatus, string> = {
-  supported: 'bg-supported',
-  partial: 'bg-partial',
-  disputed: 'bg-disputed',
+  supported: 'bg-sc-supported',
+  partial: 'bg-sc-partial',
+  disputed: 'bg-sc-disputed',
   unverifiable: 'bg-white/20',
 };
 
@@ -103,8 +102,6 @@ export const VideoHeader = ({
   const truthScore = useMemo(() => {
     if (!cards.length) return null;
 
-    // Only score claims that had real evidence — unverifiable claims are
-    // not wrong, they're just uncheckable, so they shouldn't tank the score.
     const scorable = cards.filter((card) => card.status !== 'unverifiable');
     if (!scorable.length) return null;
 
@@ -113,13 +110,27 @@ export const VideoHeader = ({
 
     return Math.round(average * 100);
   }, [cards]);
-  const scoreColor = truthScore === null
-    ? undefined
-    : truthScore >= 65
-      ? panelTones.status.supported
-      : truthScore >= 38
-        ? panelTones.status.accent
-        : panelTones.status.disputed;
+
+  // Truth Score color coding per design spec:
+  // 75% - 100%: sc-supported (Google Green)
+  // 45% - 74%: sc-accent (Gold/Orange)
+  // 0% - 44%: sc-disputed (Google Red)
+  const scoreClass = truthScore === null
+    ? ''
+    : truthScore >= 75
+      ? 'text-sc-supported'
+      : truthScore >= 45
+        ? 'text-sc-accent'
+        : 'text-sc-disputed';
+
+  const scoreBgClass = truthScore === null
+    ? ''
+    : truthScore >= 75
+      ? 'bg-sc-supported'
+      : truthScore >= 45
+        ? 'bg-sc-accent'
+        : 'bg-sc-disputed';
+
   const isActive = status === 'monitoring' || status === 'verifying';
   const syncLabel = status === 'ready'
     ? 'Fully synced'
@@ -145,91 +156,89 @@ export const VideoHeader = ({
     null;
 
   return (
-    <header className="video-header-shell mx-3 mt-3 border-b border-surfaceBorder px-4 pb-2 pt-3">
-      {/* Title + badge */}
-      <div className="flex items-start justify-between gap-3">
+    <header className="glass-deep mx-3 mt-3 px-4 pb-4 pt-4 rounded-md">
+      {/* Title + badge - HUD Compressed Typography */}
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1
-            className="video-header-title text-[14.5px] font-semibold leading-[1.28] tracking-[-0.016em] text-textMain"
-            style={{
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}
+            className="text-[13px] font-semibold tracking-tight leading-[1.3] text-sc-text line-clamp-2"
           >
             {title}
           </h1>
         </div>
 
         <div className={[
-          'status-badge mt-0.5 shrink-0',
+          'px-2 py-0.5 rounded-sm font-mono text-[9.5px] font-bold tracking-wider uppercase bg-sc-surface-2 border border-sc-border-soft shrink-0',
           statusMeta.tone,
-          isActive ? 'status-badge-live' : '',
+          isActive ? 'animate-pulse-glow shadow-sc-hero' : '',
         ].join(' ')}>
           {statusMeta.label}
         </div>
       </div>
 
-      {/* Meta row: channel · anchor */}
+      {/* Meta row: channel · anchor - HUD Monospace */}
       <div className="mt-2 flex items-center justify-between gap-2">
-        <p className="video-header-meta min-w-0 truncate text-[10.5px]">
+        <p className="truncate text-[11px] font-mono text-sc-muted uppercase tracking-widest opacity-80">
           {channel}
-          <span className="mx-1 opacity-40">·</span>
+          <span className="mx-1.5 opacity-30">·</span>
           {anchorCopy}
         </p>
         {truthScore === null && syncLabel && (
-          <span className="video-header-sync shrink-0 text-[9px]">{syncLabel}</span>
+          <span className="shrink-0 font-mono text-[9px] font-semibold tracking-wider uppercase text-sc-muted opacity-40">{syncLabel}</span>
         )}
       </div>
 
-      {/* Truth score — the number that makes you keep looking */}
+      {/* Truth Score - Enhanced per design spec */}
       {truthScore !== null && (
-        <div className="truth-score-row mt-2.5">
-          <div className="flex items-center justify-between">
-            <span className="truth-score-label">Accuracy so far</span>
-            <span className="truth-score-value" style={{ color: scoreColor }}>{truthScore}%</span>
+        <div className="mt-4">
+          <div className="flex items-end justify-between">
+            <span className="truth-score-label text-[9px] font-bold tracking-[0.12em] uppercase text-sc-muted/60 pb-0.5 font-sc">
+              Accuracy Score
+            </span>
+            <span className={`truth-score-value ${scoreClass}`}>{truthScore}%</span>
           </div>
-          <div className="truth-score-bar mt-1.5">
+          <div className="truth-score-bar mt-2 w-full border border-sc-border-soft/50">
             <div
-              className="truth-score-fill"
-              style={{ width: `${truthScore}%`, background: scoreColor }}
+              className={`truth-score-fill ${scoreBgClass}`}
+              style={{ width: `${truthScore}%` }}
             />
           </div>
         </div>
       )}
 
-      {/* Compact status line — what the system is doing right now */}
+      {/* Compact status line */}
       {statusLineCopy && (
-        <p className="mt-[6px] text-[10px] leading-[1.4] tracking-[0.02em]" style={{ color: statusMeta.accent, opacity: 0.72 }}>
+        <p className={`mt-3 text-[10.5px] font-medium leading-relaxed tracking-wide italic opacity-85 font-sc ${statusMeta.accentClass}`}>
           {statusLineCopy}
         </p>
       )}
 
-      {/* Compact timeline */}
-      <div className="relative mt-2 h-[18px]">
-        <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-surfaceBorder" />
+      {/* Enhanced Timeline with Spectrum Gradient */}
+      <div className="relative mt-4 h-5">
+        {/* Base track with spectrum gradient */}
+        <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full timeline-spectrum-track opacity-40" />
+        
+        {/* Active progress with glow */}
         <div
-          className="absolute left-0 top-1/2 h-[4px] -translate-y-1/2 rounded-full bg-[linear-gradient(90deg,rgba(113,106,91,0.3),rgba(200,163,106,0.35))] transition-[width] duration-500"
-          style={{ width: `${progress}%` }}
+          className="absolute left-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full timeline-spectrum-progress transition-[width] duration-500"
+          style={{ width: `${Math.max(progress, scanProgress)}%` }}
         />
+        
+        {/* Scan head - diamond shaped with drift animation */}
         <div
-          className="timeline-spectrum absolute left-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full transition-[width] duration-500"
-          style={{ width: `${scanProgress}%` }}
-        />
-        {/* Scan head */}
-        <div
-          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 transition-[left] duration-500"
+          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 transition-[left] duration-500 z-10"
           style={{ left: `${scanProgress}%` }}
         >
-          <div className="scan-burst" aria-hidden="true" />
-          <div
-            className={`h-[10px] w-[10px] rotate-45 border bg-transparent${isActive ? ' scan-head-live' : ''}`}
-            style={{ borderColor: isActive ? statusMeta.accent : `${statusMeta.accent}88` }}
+          <div 
+            className={`h-3 w-3 rotate-45 border-2 bg-sc-bg-0 transition-colors shadow-[0_0_10px_rgba(var(--model-accent-rgb,168,199,250),0.5),inset_0_0_4px_#fff] ${
+              isActive 
+                ? 'border-sc-accent animate-scan-head-drift' 
+                : 'border-sc-line-strong'
+            }`}
           />
         </div>
 
-        {/* Verdict ticks */}
+        {/* Verdict ticks - diamond shape with color coding */}
         {playbackState?.duration && timelineCards.map((card) => {
           const pct = Math.min(99, Math.max(1, (card.timestampSeconds / playbackState.duration) * 100));
 
@@ -239,7 +248,7 @@ export const VideoHeader = ({
               className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{ left: `${pct}%` }}
             >
-              <div className={`h-[5px] w-[5px] rotate-45 ${VERDICT_TICK[card.status]}`} />
+              <div className={`timeline-diamond timeline-diamond-${card.status}`} />
             </div>
           );
         })}

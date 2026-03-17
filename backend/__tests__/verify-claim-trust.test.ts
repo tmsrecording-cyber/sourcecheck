@@ -3,7 +3,7 @@
  *
  * When Gemini returns no grounding sources, the card must:
  *   1. Status = 'unverifiable' regardless of model verdict
- *   2. sourceTitle replaced with generic fallback
+ *   2. sourceTitle replaced with trust-preserving fallback language
  *   3. sourceType forced to 'other'
  *   4. sourceUrl is empty
  *   5. Nuance scrubbed of both positive and negative certainty language
@@ -37,7 +37,7 @@ function makeVerifyRequest(overrides: Record<string, unknown> = {}) {
   const body = {
     claim: {
       claimText: 'The earth is flat.',
-      claimType: 'factual',
+      claimType: 'study',
       timestampSeconds: 42,
     },
     videoTitle: 'Test Video',
@@ -72,9 +72,10 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('No web source found');
+    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
     expect(json.sourceCard.sourceType).toBe('other');
     expect(json.sourceCard.sourceUrl).toBe('');
+    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
   });
 
   it('downgrades disputed verdict to unverifiable when no grounding sources', async () => {
@@ -94,7 +95,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('No web source found');
+    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
     expect(json.sourceCard.sourceType).toBe('other');
   });
 
@@ -114,7 +115,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.nuance).toBe('Could not find web sources to check this claim.');
+    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
   });
 
   it('scrubs negative certainty language from ungrounded nuance', async () => {
@@ -133,7 +134,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.nuance).toBe('Could not find web sources to check this claim.');
+    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
   });
 
   it('preserves neutral nuance even when ungrounded', async () => {
@@ -152,35 +153,32 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(makeVerifyRequest());
     const json = await res.json();
 
-    // Neutral language should pass through — only assertive certainty is scrubbed.
-    expect(json.sourceCard.nuance).toBe('No relevant data found for this specific claim.');
+    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
+    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
   });
 
-  it('keeps grounded response intact when sources are present', async () => {
+  it('uses missing-context language when the unresolved outcome lacks specifics', async () => {
     mockAskGemini.mockResolvedValue({
       data: {
-        status: 'supported',
-        sourceTitle: 'WHO Report 2024',
-        sourceType: 'official_source',
-        nuance: 'Confirmed by WHO guidelines published in 2024.',
+        status: 'unverifiable',
+        sourceTitle: '',
+        sourceType: 'other',
+        nuance: 'Missing context about timeframe and population.',
       },
       inputTokens: 10,
       outputTokens: 20,
-      sources: [{ title: 'WHO Report 2024', url: 'https://who.int/report' }],
+      sources: [],
     });
 
     const res = await POST(makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.status).toBe('supported');
-    expect(json.sourceCard.sourceTitle).toBe('WHO Report 2024');
-    expect(json.sourceCard.sourceType).toBe('official_source');
-    expect(json.sourceCard.sourceUrl).toBe('https://who.int/report');
-    // Nuance with positive language is fine when grounded
-    expect(json.sourceCard.nuance).toBe('Confirmed by WHO guidelines published in 2024.');
+    expect(json.sourceCard.status).toBe('unverifiable');
+    expect(json.sourceCard.sourceTitle).toBe('More context needed');
+    expect(json.sourceCard.nuance).toBe('The claim needs specifics like timeframe, population, or definition.');
   });
 
-  it('returns an empty sourceUrl when grounded source titles do not match at all', async () => {
+  it('keeps grounded response intact when sources are present', async () => {
     mockAskGemini.mockResolvedValue({
       data: {
         status: 'supported',
@@ -199,9 +197,31 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.status).toBe('supported');
-    expect(json.sourceCard.sourceTitle).toBe('WHO Report 2024');
-    expect(json.sourceCard.sourceType).toBe('official_source');
+    expect(json.sourceCard.status).toBe('unverifiable');
+    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
+    expect(json.sourceCard.sourceType).toBe('other');
     expect(json.sourceCard.sourceUrl).toBe('');
+  });
+
+  it('preserves grounded disputed behavior', async () => {
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'disputed',
+        sourceTitle: 'Reuters Fact Check',
+        sourceType: 'news_article',
+        nuance: 'Major sources disagree on the size of the effect.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [{ title: 'Reuters Fact Check', url: 'https://example.com/reuters' }],
+    });
+
+    const res = await POST(makeVerifyRequest());
+    const json = await res.json();
+
+    expect(json.sourceCard.status).toBe('disputed');
+    expect(json.sourceCard.sourceTitle).toBe('Reuters Fact Check');
+    expect(json.sourceCard.sourceUrl).toBe('https://example.com/reuters');
+    expect(json.sourceCard.nuance).toBe('Major sources disagree on the size of the effect.');
   });
 });

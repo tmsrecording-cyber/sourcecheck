@@ -204,7 +204,8 @@ export async function POST(request: NextRequest) {
     const { data: rawAnswer } = await askGeminiJSON<RawAskVideoResponse>(
       prompt,
       900,
-      ASK_VIDEO_SCHEMA
+      ASK_VIDEO_SCHEMA,
+      body.model  // Pass client-selected model
     );
 
     const answer = typeof rawAnswer?.answer === 'string' && rawAnswer.answer.trim()

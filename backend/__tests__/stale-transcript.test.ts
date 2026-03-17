@@ -143,8 +143,8 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
 
     // App.tsx reads 'transcriptSnapshot' from local storage to populate transcript.
     // If the key used in remove() ever drifts, the clear-on-failure mechanism breaks.
-    const removeCall = chrome.storage.local.remove.mock.calls.find(
-      ([key]: [unknown]) => key === 'transcriptSnapshot'
+    const removeCall = (chrome.storage.local.remove.mock.calls as unknown[][]).find(
+      ([key]) => key === 'transcriptSnapshot'
     );
     expect(removeCall).toBeDefined();
   });
@@ -203,40 +203,30 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
 // re-added, these tests would fail immediately.
 // ---------------------------------------------------------------------------
 describe('Fix 5 Part B: App.tsx storage listener propagates null transcript to React state', () => {
-  const appSource = readFileSync(
-    resolve(__dirname, '../../src/sidepanel/App.tsx'),
+  const storageHookSource = readFileSync(
+    resolve(__dirname, '../../src/sidepanel/hooks/useExtensionStorage.ts'),
     'utf-8'
   );
 
-  it('PASS: null guard "if (nextTranscript !== null)" is absent from storage listener', () => {
-    // The bug was: if (nextTranscript !== null) { setTranscript(nextTranscript); }
-    // The fix:          setTranscript(nextTranscript);   // null propagates
-    // If the guard is re-added, this assertion fails.
-    expect(appSource).not.toMatch(/if\s*\(\s*nextTranscript\s*!==\s*null\s*\)/);
+  const stateUtilsSource = readFileSync(
+    resolve(__dirname, '../../src/sidepanel/utils/state.ts'),
+    'utf-8'
+  );
+
+  it('PASS: storage listener does not guard against null transcript', () => {
+    // The hook derives `nextTranscript` from readTranscriptSnapshotForVideo(...),
+    // then must call setTranscript(nextTranscript) without null-guarding.
+    expect(storageHookSource).not.toMatch(/if\s*\(\s*nextTranscript\s*!==\s*null\s*\)/);
   });
 
-  it('PASS: setTranscript is called unconditionally with nextTranscript', () => {
-    // The unconditional call must be present for null to clear the stale UI state.
-    expect(appSource).toMatch(/setTranscript\(nextTranscript\)/);
+  it('PASS: storage listener sets transcript unconditionally', () => {
+    expect(storageHookSource).toMatch(/setTranscript\(nextTranscript\)/);
   });
 
-  it('PASS: readTranscriptSnapshotForVideo returns null for undefined (chrome.storage.local.remove path)', () => {
+  it('PASS: readTranscriptSnapshotForVideo returns null for undefined snapshotValue', () => {
     // When the worker calls chrome.storage.local.remove('transcriptSnapshot'), Chrome
-    // fires storage.onChanged with newValue === undefined. App.tsx passes that to
-    // readTranscriptSnapshotForVideo, which must return null so setTranscript(null)
-    // clears the stale state. Inspect the function body for the falsy guard.
-    const guardMatch = appSource.match(
-      /const readTranscriptSnapshotForVideo[\s\S]*?if\s*\(!snapshotValue/
-    );
-    expect(
-      guardMatch,
-      'readTranscriptSnapshotForVideo must guard against falsy snapshotValue (undefined) with an early return null'
-    ).not.toBeNull();
-
-    // The guard must return null (not throw or return []).
-    const nullReturnMatch = appSource.match(
-      /if\s*\(!snapshotValue[\s\S]*?return null/
-    );
-    expect(nullReturnMatch).not.toBeNull();
+    // fires storage.onChanged with newValue === undefined. The helper must return
+    // null so setTranscript(null) clears stale UI state.
+    expect(stateUtilsSource).toMatch(/if\s*\(!snapshotValue[\s\S]*?return null/);
   });
 });

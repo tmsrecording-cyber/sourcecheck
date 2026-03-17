@@ -7,38 +7,41 @@
 
 export const EXTRACTION_SYSTEM_PROMPT = `
 You are the claim extraction engine for SourceCheck, a YouTube fact-checking side panel.
-Your job: find the ONE claim in this transcript chunk that a viewer would most want checked — or reject it if nothing is worth checking.
+Your job: find the most valuable checkable claims in this transcript chunk. Focus on STEM facts, laws of nature, and verifiable statistics.
 
 Output a strict JSON object:
 {
-  "entities": ["array", "of", "proper nouns", "or", "core subjects"],
+  "entities": ["array of proper nouns or core subjects"],
   "has_claim": boolean,
-  "claim_text": "The isolated, verifiable statement (if has_claim is true, else null)",
-  "exact_quote": "A short verbatim quote from the transcript supporting claim_text (if has_claim is true, else null)",
   "action_state": "VERIFYING" | "REJECTED" | "BUFFERING",
-  "reason": "Short string explaining the decision"
+  "reason": "Short string explaining the decision",
+  "candidates": [
+    {
+      "claim_text": "Clean factual assertion",
+      "exact_quote": "Verbatim quote from transcript",
+      "claim_type": "canonical" | "study" | "statistic" | "historical" | "surprising",
+      "verifiability": 0.0-1.0,
+      "value": 0.0-1.0 (STEM/scientific facts = 1.0),
+      "speaker_confidence": 0.0-1.0,
+      "reason": "Why this is a good candidate"
+    }
+  ]
 }
 
 WHAT TO EXTRACT (high-value claims only):
-- Specific numbers or statistics cited as fact ("dopamine increases 250%", "99% of species went extinct")
-- Named events with dates or outcomes ("NASA launched Voyager in 1977")
-- Cause-and-effect statements with specifics ("cold exposure increases norepinephrine by 200-300%")
-- Claims about named studies, papers, or data ("a Harvard study found...")
-- Concrete scale/frequency claims ("there are 200 billion stars in the Milky Way")
+- STEM & Academic: Laws of physics, chemical properties, mathematical theorems, biological processes.
+- Specific numbers: Citations of fact ("dopamine increases 250%", "99% of species went extinct").
+- Named events: Dates or outcomes of specific occurrences.
+- Cause-and-effect: Specific mechanisms ("cold exposure increases norepinephrine").
+- Data-driven: Claims about named studies or research papers.
 
-WHAT TO REJECT (these waste the viewer's time):
-- Vague descriptions of topics ("AI is changing everything", "Google is working on robotics")
-- General summaries without a checkable fact ("they're pursuing both specific and general approaches")
-- Opinions, preferences, or predictions ("I think this will be huge")
-- Restatements of obvious or well-known context ("YouTube is a video platform")
-- Broad "most/many/some" claims with no specifics ("many experts believe...")
-- Anything where the speaker is clearly speculating or narrating, not asserting a fact
+WHAT TO REJECT:
+- Vague descriptions or general summaries.
+- Opinions, preferences, or future predictions.
+- Well-known common knowledge ("The sun is hot").
+- Unfinished thoughts or fragments (use BUFFERING).
 
-THE KEY TEST: Could a fact-checker look this up and come back with "yes, confirmed" or "no, that number is wrong"? If the answer is "there's nothing concrete to check," reject it.
-
-ENTITIES: Always extract specific proper nouns and key subjects, even when rejecting the claim.
-
-BUFFERING: If a specific claim is starting but unfinished ("The crazy thing about the development timeline is..."), use BUFFERING.
+Ranking: If multiple claims exist, provide them in the "candidates" array. The system will prioritize high-value STEM and canonical facts.
 `;
 
 export function buildClaimExtractionPrompt(
@@ -59,11 +62,11 @@ Return ONLY valid JSON. No markdown, no backticks, no explanation.
 
 Important:
 - Prefer concise entity labels.
-- If there is a clear claim, set action_state to "VERIFYING" and make claim_text the clean factual assertion.
-- When has_claim is true, exact_quote must be copied verbatim from the transcript rather than paraphrased.
-- If the thought is unfinished, use "BUFFERING".
+- If there are clear claims, set action_state to "VERIFYING" and populate the "candidates" array.
+- In each candidate, "exact_quote" must be copied verbatim from the transcript (not paraphrased).
+- If the thought is unfinished and a claim is likely coming but not yet complete, use "BUFFERING" and set "candidates" to [].
 - If the segment is not worth checking, use "REJECTED" with the best matching reason.
-- claim_text and exact_quote must be null when has_claim is false.
+- "candidates" must be [] when "has_claim" is false.
 - entities should never be null; use [] if nothing stands out.`;
 }
 

@@ -107,6 +107,8 @@ export async function proxy(request: NextRequest) {
   // The verified identity returned here is derived solely from the validated
   // Origin header / session token payload and is used as the rate-limit bucket key.
   const authResult = await isAuthorizedRequest(request);
+  console.log(`[SourceCheck/proxy] ${request.method} ${request.nextUrl.pathname} - Authorized: ${authResult.authorized}${authResult.authorized ? ` (${authResult.identity})` : ''}`);
+
   if (!authResult.authorized) {
     return NextResponse.json(
       { error: 'Request not authorized.' },
@@ -358,14 +360,70 @@ function safeParseOrigin(origin: string) {
 // Session token issuance and verification
 // ---------------------------------------------------------------------------
 
+// Base64url encoding for Edge runtime (btoa/atob not available, Buffer not available)
+const base64urlChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+function bytesToBase64url(bytes: Uint8Array): string {
+  let result = '';
+  let i = 0;
+  while (i < bytes.length) {
+    const b1 = bytes[i++];
+    const b2 = i < bytes.length ? bytes[i++] : 0;
+    const b3 = i < bytes.length ? bytes[i++] : 0;
+    
+    const bitmap = (b1 << 16) | (b2 << 8) | b3;
+    
+    result += base64urlChars[(bitmap >> 18) & 63];
+    result += base64urlChars[(bitmap >> 12) & 63];
+    result += i - 2 < bytes.length ? base64urlChars[(bitmap >> 6) & 63] : '';
+    result += i - 1 < bytes.length ? base64urlChars[bitmap & 63] : '';
+  }
+  return result;
+}
+
+function base64urlToBytes(input: string): Uint8Array {
+  const padLength = (4 - (input.length % 4)) % 4;
+  const padded = input + '='.repeat(padLength);
+  
+  const lookup: Record<string, number> = {};
+  for (let i = 0; i < base64urlChars.length; i++) {
+    lookup[base64urlChars[i]] = i;
+  }
+  lookup['+'] = 62;
+  lookup['/'] = 63;
+  
+  const bytes: number[] = [];
+  let i = 0;
+  while (i < padded.length) {
+    const c1 = lookup[padded[i++]] ?? 0;
+    const c2 = lookup[padded[i++]] ?? 0;
+    const c3 = lookup[padded[i++]] ?? 0;
+    const c4 = lookup[padded[i++]] ?? 0;
+    
+    const bitmap = (c1 << 18) | (c2 << 12) | (c3 << 6) | c4;
+    
+    bytes.push((bitmap >> 16) & 255);
+    if (padded[i - 2] !== '=') bytes.push((bitmap >> 8) & 255);
+    if (padded[i - 1] !== '=') bytes.push(bitmap & 255);
+  }
+  
+  return new Uint8Array(bytes);
+}
+
+function stringToBytes(str: string): Uint8Array {
+  return new TextEncoder().encode(str);
+}
+
+function bytesToString(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+
 function tokenBase64url(input: string): string {
-  // btoa works on ASCII/latin1; our payload is ASCII JSON — safe.
-  return btoa(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  return bytesToBase64url(stringToBytes(input));
 }
 
 function tokenFromBase64url(input: string): string {
-  const padded = input + '=='.slice(0, (4 - (input.length % 4)) % 4);
-  return atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+  return bytesToString(base64urlToBytes(input));
 }
 
 function generateNonce(): string {
@@ -455,16 +513,20 @@ function bytesToHex(bytes: Uint8Array) {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function timingSafeEqual(left: string, right: string) {
-  if (left.length !== right.length) {
+function timingSafeEqual(left: unknown, right: unknown) {
+  if (typeof left !== 'string' || typeof right !== 'string') {
     return false;
   }
 
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  // Always iterate over the longer length so runtime does not reveal which
+  // string is shorter, preventing length-based timing oracle attacks.
+  const maxLen = Math.max(left.length, right.length);
+  let mismatch = left.length ^ right.length; // non-zero if lengths differ
+  for (let index = 0; index < maxLen; index += 1) {
+    const l = index < left.length ? left.charCodeAt(index) : 0;
+    const r = index < right.length ? right.charCodeAt(index) : 0;
+    mismatch |= l ^ r;
   }
-
   return mismatch === 0;
 }
 
@@ -478,13 +540,17 @@ function timingSafeEqual(left: string, right: string) {
  * Identity comes from a completed isAuthorizedRequest call — it is derived
  * from the validated Origin header / session token and cannot be spoofed.
  *
- * The bucket key is `${identity}:${pathname}`.  Separate identities (i.e.
- * separate session subjects / extension installs) never share a bucket.
+ * The bucket key is `${identity}:ip:${clientIp}:${pathname}`. Rate limiting
+ * is per-IP to prevent one abusive user from throttling all users.
  */
 async function applyRateLimit(request: NextRequest, identity: string): Promise<boolean> {
   const path = request.nextUrl.pathname;
   const cost = RATE_LIMIT_COST_BY_PATH[path] || 1;
-  const bucketKey = `${identity}:${path}`;
+  // Rate limit by IP to prevent one abusive user from throttling everyone
+  const clientIp = request.headers.get('x-forwarded-for') || 
+                   request.headers.get('x-real-ip') || 
+                   'unknown';
+  const bucketKey = `${identity}:ip:${clientIp}:${path}`;
 
   if (!process.env.REDIS_URL && !isLocalApiHost(request.nextUrl.hostname)) {
     if (!warnedMissingRedis) {

@@ -20,11 +20,25 @@ GEMINI_MODEL=gemini-2.5-pro
 
 If `GEMINI_MODEL` is unset, the backend falls back to the current fast default in code.
 
-If you deploy the backend anywhere other than `localhost`, set both
-`ALLOWED_EXTENSION_IDS` and `EXTENSION_API_TOKEN` in `.env.local` or your hosting provider.
-The extension must be built with matching `VITE_API_BASE` and `VITE_EXTENSION_API_TOKEN`
-values so the manifest host permissions and request headers line up with the deployed API.
-When `EXTENSION_API_TOKEN` is set, extension requests are also timestamp-signed per request.
+If you deploy the backend anywhere other than `localhost`, set:
+
+- `ALLOWED_EXTENSION_IDS` (comma-separated list of permitted extension IDs)
+- `SESSION_SECRET` (enables backend-issued bearer session tokens)
+- `REDIS_URL` (recommended for durable rate limits across restarts/instances)
+
+The extension must be built with `VITE_API_BASE` pointing at the deployed API origin so the
+manifest `host_permissions` line up with runtime requests.
+
+Session auth flow (production):
+
+1. Extension calls `POST /api/session/init` with `X-Extension-Id` and `{ extensionId }`.
+2. Backend returns `{ token }` signed with `SESSION_SECRET`.
+3. Extension includes `Authorization: Bearer <token>` on subsequent API calls.
+
+Local dev notes:
+
+- On `localhost`, requests can run without a token when `SESSION_SECRET` is unset.
+- When `SESSION_SECRET` is set, localhost requests also require a bearer token (except `/api/session/init`).
 
 ## 3. Run the dev server
 ```bash
