@@ -217,9 +217,23 @@ const splitTranscriptLines = (value: unknown): string[] =>
     .map((line) => cleanTranscriptText(line))
     .filter(Boolean);
 
-const decodeHtmlEntities = (value: string) => {
-  const doc = new DOMParser().parseFromString(value, 'text/html');
-  return doc.body.textContent ?? value;
+const decodeHtmlEntities = (value: string): string => {
+  if (typeof value !== 'string' || !value) {
+    return '';
+  }
+  try {
+    const doc = new DOMParser().parseFromString(value, 'text/html');
+    return doc.body?.textContent ?? value;
+  } catch (e) {
+    // Fallback: manual HTML entity decoding if DOMParser fails
+    return value
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&nbsp;/g, ' ');
+  }
 };
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>

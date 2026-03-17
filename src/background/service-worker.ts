@@ -581,13 +581,21 @@ const formatPlaybackTime = (seconds: number) => {
   return `${minutes}:${remainder.toString().padStart(2, '0')}`;
 };
 
-const summarizeErrorForLog = (error: unknown) => {
+const summarizeErrorForLog = (error: unknown): Record<string, unknown> => {
+  if (error === null || error === undefined) {
+    return { type: 'nullish', value: String(error) };
+  }
+  
   if (!(error instanceof Error)) {
-    return { type: typeof error };
+    return { 
+      type: typeof error, 
+      value: typeof error === 'object' ? JSON.stringify(error) : String(error) 
+    };
   }
 
   const summary: Record<string, unknown> = {
     name: error.name,
+    message: error.message,
   };
 
   if ('code' in error && typeof error.code === 'string') {
@@ -596,6 +604,10 @@ const summarizeErrorForLog = (error: unknown) => {
 
   if ('status' in error && typeof error.status === 'number') {
     summary.status = error.status;
+  }
+  
+  if (error.stack) {
+    summary.stack = error.stack.split('\n').slice(0, 3).join(' | ');
   }
 
   return summary;
