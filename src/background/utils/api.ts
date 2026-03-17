@@ -1,4 +1,4 @@
-import { API_BASE, REQUEST_TIMEOUT_MS } from '../config';
+import { API_BASE, REQUEST_TIMEOUT_MS } from '../../config';
 import type { GeminiModelOption } from '../../../shared/types';
 
 interface FetchPayload {
