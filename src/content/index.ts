@@ -580,7 +580,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
       videoId,
       attempt: transcriptAttemptCount,
     });
-    void sendTranscriptStatus(videoId, lastTranscriptDebug);
+    void sendTranscriptStatus(videoId, lastTranscriptDebug).catch(silentCatch);
 
     // Only open the native YouTube transcript panel after the non-UI extraction
     // methods (window / scripts / html) have already failed on a prior attempt.
@@ -595,7 +595,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
         void deliverTranscriptFetchDebug(videoId, {
           at: Date.now(),
           ...entry,
-        });
+        }).catch(silentCatch);
       }, {
         allowPanelAutoOpen: allowAutoPanelFallback,
       }),
@@ -623,7 +623,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
         autoPanelOpenDisabledAfterFailure = true;
       }
       lastTranscriptDebug = withAttemptCount(extractionResult.debug, transcriptAttemptCount);
-      void sendTranscriptStatus(videoId, lastTranscriptDebug);
+      void sendTranscriptStatus(videoId, lastTranscriptDebug).catch(silentCatch);
     }
 
     if (extractionResult?.transcript?.length) {
