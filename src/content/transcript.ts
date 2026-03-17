@@ -1717,10 +1717,9 @@ const fetchTranscriptChunks = async (
     emitTranscriptFetchDebug(onFetchDebug, 'html', 'fetch_started', `${candidate.format} ${candidate.url}`);
 
     try {
-      // Force an anonymous request to bypass auth-token mismatches
-      // YouTube WAF blocks credentialed requests without proper X-Youtube-Identity-Token
+      // Use credentials for caption requests - YouTube now requires auth
       const response = await fetch(candidate.url, {
-        credentials: 'omit', 
+        credentials: 'include', 
         signal
       });
       
