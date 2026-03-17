@@ -1,5 +1,5 @@
 // Single canonical default - must be in ALLOWED_MODELS
-const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const DEFAULT_THINKING_BUDGET = 128;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 
