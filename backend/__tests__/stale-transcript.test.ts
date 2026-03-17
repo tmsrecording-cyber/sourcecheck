@@ -224,8 +224,10 @@ describe('Fix 5 Part B: App.tsx storage listener propagates null transcript to R
     expect(storageHookSource).not.toMatch(/if\s*\(\s*nextTranscript\s*!==\s*null\s*\)/);
   });
 
-  it('PASS: storage listener sets transcript unconditionally', () => {
-    expect(storageHookSource).toMatch(/setTranscript\(nextTranscript\)/);
+  it('PASS: storage listener queues transcript update unconditionally', () => {
+    // With debouncing, updates are queued via queueUpdate() and flushed asynchronously.
+    // The important thing is that nextTranscript (even if null) is queued without guards.
+    expect(storageHookSource).toMatch(/queueUpdate\('transcript',\s*nextTranscript\)/);
   });
 
   it('PASS: readTranscriptSnapshotForVideo returns null for undefined snapshotValue', () => {

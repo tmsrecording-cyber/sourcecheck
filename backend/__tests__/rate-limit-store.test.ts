@@ -12,7 +12,7 @@
  * RedisRateLimitStore:
  *   - Allows when Lua script returns 1
  *   - Denies when Lua script returns 0
- *   - Fails closed (denies) when Redis throws
+ *   - Gracefully degrades to in-memory store when Redis throws
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -124,10 +124,14 @@ describe('RedisRateLimitStore', () => {
     expect(await store.tryConsume('k', 2, 10, 60_000)).toBe(false);
   });
 
-  it('fails closed (denies) when Redis throws', async () => {
+  it('gracefully degrades to in-memory store when Redis throws', async () => {
     mockRedisInstance.eval.mockRejectedValueOnce(new Error('Connection refused'));
     const store = new RedisRateLimitStore('redis://localhost:6379');
-    expect(await store.tryConsume('k', 2, 10, 60_000)).toBe(false);
+    // First call fails over to in-memory fallback and allows the request
+    expect(await store.tryConsume('k', 2, 10, 60_000)).toBe(true);
+    // Subsequent calls use the in-memory store (same quota tracking)
+    expect(await store.tryConsume('k', 5, 10, 60_000)).toBe(true);
+    expect(await store.tryConsume('k', 4, 10, 60_000)).toBe(false); // 2+5+4=11 > 10
   });
 
   it('prefixes the bucket key with "rl:" when calling eval', async () => {
