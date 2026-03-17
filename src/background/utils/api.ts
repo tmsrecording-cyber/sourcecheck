@@ -149,7 +149,7 @@ export async function fetchWithBYOK(
   const hasCustomKey = customApiKey && customApiKey.trim() !== '';
   const modelToUse = hasCustomKey && selectedModel
     ? selectedModel
-    : 'gemini-2.5-flash-lite-preview';
+    : 'gemini-2.5-flash-lite';
   
   // Build payload with model
   const requestPayload = { ...payload, model: modelToUse };

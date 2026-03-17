@@ -275,14 +275,18 @@ async function isAuthorizedRequest(request: NextRequest): Promise<AuthResult> {
   const origin = request.headers.get('origin');
   const extensionId = request.headers.get('x-extension-id')?.trim() || '';
 
+  console.log(`[SourceCheck/auth] Debug: origin=${origin}, extensionId=${extensionId}, pathname=${request.nextUrl.pathname}`);
+
   // Chrome extension service workers do NOT send an Origin header on
   // programmatic fetch() calls. When Origin is absent but X-Extension-Id
   // is present, treat it as a service-worker request from the extension.
   if (!origin && extensionId) {
+    console.log('[SourceCheck/auth] No origin, has extensionId - service worker path');
     return authorizeExtensionServiceWorker(request, extensionId);
   }
 
   if (!origin || !isAllowedOrigin(origin, request)) {
+    console.log(`[SourceCheck/auth] Origin check failed: origin=${origin}, allowed=${origin ? isAllowedOrigin(origin, request) : 'N/A'}`);
     return { authorized: false };
   }
 
@@ -363,23 +367,36 @@ async function verifyBearerSessionToken(
 
 export function isAllowedOrigin(origin: string, request: NextRequest) {
   const parsedOrigin = safeParseOrigin(origin);
+  console.log(`[SourceCheck/auth] isAllowedOrigin: origin=${origin}, parsedOrigin=${parsedOrigin?.protocol}//${parsedOrigin?.hostname}`);
+  
   if (!parsedOrigin) {
+    console.log('[SourceCheck/auth] parsedOrigin is null');
     return false;
   }
 
   if (parsedOrigin.protocol === 'chrome-extension:') {
-    return isAllowedExtensionOrigin(parsedOrigin.hostname, request.nextUrl.hostname);
+    const result = isAllowedExtensionOrigin(parsedOrigin.hostname, request.nextUrl.hostname);
+    console.log(`[SourceCheck/auth] chrome-extension check: hostname=${parsedOrigin.hostname}, apiHostname=${request.nextUrl.hostname}, result=${result}`);
+    return result;
   }
 
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  // Allow localhost and YouTube for content script requests
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+    origin === 'https://www.youtube.com' ||
+    origin === 'https://youtube.com';
 }
 
 export function isAllowedExtensionOrigin(extensionId: string, apiHostname: string) {
+  console.log(`[SourceCheck/auth] isAllowedExtensionOrigin: extensionId=${extensionId}, apiHostname=${apiHostname}`);
+  
   if (!extensionId) {
+    console.log('[SourceCheck/auth] No extensionId');
     return false;
   }
 
   const allowedExtensionIds = getAllowedExtensionIds();
+  console.log(`[SourceCheck/auth] allowedExtensionIds.size=${allowedExtensionIds.size}, isLocalApiHost=${isLocalApiHost(apiHostname)}`);
+  
   if (allowedExtensionIds.size > 0) {
     return allowedExtensionIds.has(extensionId);
   }
@@ -395,8 +412,10 @@ export function isAllowedExtensionOrigin(extensionId: string, apiHostname: strin
           'Set ALLOWED_EXTENSION_IDS before deploying.'
       );
     }
+    console.log('[SourceCheck/auth] Allowing on localhost');
     return true;
   }
+  console.log('[SourceCheck/auth] Not localhost, denying');
   return false;
 }
 

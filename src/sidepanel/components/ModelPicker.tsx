@@ -11,7 +11,7 @@ interface ModelPickerProps {
 const MODEL_ICONS: Record<GeminiModelOption, React.ReactNode> = {
   'gemini-3.1-flash-lite': <Zap size={12} />,
   'gemini-3-flash': <Brain size={12} />,
-  'gemini-2.5-flash-lite-preview': <Cpu size={12} />,
+  'gemini-2.5-flash-lite': <Cpu size={12} />,
 };
 
 const SPEED_LABELS: Record<ModelConfig['speed'], string> = {

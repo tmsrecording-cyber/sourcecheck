@@ -546,8 +546,7 @@ const ALLOWED_MODELS = [
   'gemini-3.1-flash-lite',
   'gemini-3.1-flash-lite-preview',
   'gemini-3-flash',
-  'gemini-2.5-flash-lite-preview',
-  'gemini-2.5-flash-lite-preview',
+  'gemini-2.5-flash-lite',
 ];
 
 // Freemium tier model restrictions
@@ -555,8 +554,8 @@ const ALLOWED_MODELS = [
 const FREE_TIER_MODELS = [
   'gemini-3.1-flash-lite',
   'gemini-3.1-flash-lite-preview',
-  'gemini-2.5-flash-lite-preview',
-  'gemini-2.5-flash-lite-preview',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-lite',
 ];
 const PRO_TIER_MODELS = ALLOWED_MODELS; // Pro gets all allowed models
 

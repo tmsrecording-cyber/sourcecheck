@@ -8,7 +8,7 @@ interface SettingsPanelProps {
 }
 
 const MODEL_LABELS: Record<GeminiModel, string> = {
-  'gemini-2.5-flash-lite-preview': 'Gemini 2.5 Flash Lite',
+  'gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
   'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash-Lite Preview',
   'gemini-3-flash-preview': 'Gemini 3 Flash Preview',
 };

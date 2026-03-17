@@ -1381,7 +1381,7 @@ const hydrateState = async () => {
           // Restore selectedModel from sync storage if not in session
           // Validate against allowed models to prevent corrupted values
           selectedModel: (() => {
-            const VALID_MODELS: GeminiModelOption[] = ['gemini-3.1-flash-lite', 'gemini-3-flash', 'gemini-2.5-flash-lite-preview'];
+            const VALID_MODELS: GeminiModelOption[] = ['gemini-3.1-flash-lite', 'gemini-3-flash', 'gemini-2.5-flash-lite'];
             const model = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
             return (VALID_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
           })(),
