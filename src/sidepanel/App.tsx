@@ -12,8 +12,6 @@ import type {
   AskQuestionResponse,
   AskQuestionSource,
   AnalysisStatus,
-  WorkerRuntimeState,
-  GeminiModelOption,
 } from '../../shared/types';
 
 const SHOW_DEBUG =
@@ -61,7 +59,7 @@ const PanelShell = ({
             }}
           />
           <span
-            className={`rail-connector absolute h-[1px] w-[14px] left-[26px] bg-gradient-to-r to-transparent opacity-82 ${error ? 'from-sc-disputed' : 'from-sc-accent-soft'}`}
+            className={`rail-connector absolute h-[1px] w-[14px] left-[26px] bg-gradient-to-r to-transparent opacity-80 ${error ? 'from-sc-disputed' : 'from-sc-accent-soft'}`}
             style={{
               top: '14px',
             }}

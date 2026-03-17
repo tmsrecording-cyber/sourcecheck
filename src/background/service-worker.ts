@@ -19,6 +19,7 @@ import {
   WorkerLifecycle,
   WorkerRuntimeState,
   DebugEvent,
+  GeminiModelOption,
 } from '../../shared/types';
 import {
   API_BASE,
@@ -1236,9 +1237,12 @@ const hydrateState = async () => {
           transcriptMessageStats: storedRuntime.transcriptMessageStats ?? INITIAL_RUNTIME_STATE.transcriptMessageStats,
           pendingTranscriptBufferSummary: storedRuntime.pendingTranscriptBufferSummary ?? INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary,
           // Restore selectedModel from sync storage if not in session
-          selectedModel: (storedRuntime.selectedModel
-            ?? syncSelectedModel
-            ?? INITIAL_RUNTIME_STATE.selectedModel) as WorkerRuntimeState['selectedModel'],
+          // Validate against allowed models to prevent corrupted values
+          selectedModel: (() => {
+            const VALID_MODELS: GeminiModelOption[] = ['gemini-3.1-flash-lite', 'gemini-3-flash', 'gemini-2.5-flash-lite'];
+            const model = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
+            return VALID_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel;
+          })(),
         };
 
         debugStage = runtimeState.debugStage;
@@ -1456,6 +1460,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       );
       return;
     }
+    // Pass 500 as status to indicate server error for retry delay calculation
     if (await retryVerificationItem(item, runGeneration, 500)) {
       console.warn('[SourceCheck/SW] Verification queue error, retrying.', summarizeErrorForLog(error));
       return;
@@ -2112,7 +2117,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      if (!targetTab.url?.includes(`youtube.com/watch?v=${videoId}`)) {
+      const urlObj = targetTab.url ? new URL(targetTab.url) : null;
+      const urlVideoId = urlObj?.searchParams.get('v');
+      if (urlVideoId !== videoId) {
         sendResponse({ status: 'error', error: 'The source tab no longer matches the active video.' });
         return;
       }
