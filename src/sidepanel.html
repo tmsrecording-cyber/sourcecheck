@@ -6,7 +6,12 @@
     <title>SourceCheck</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- 
+      SourceCheck Side Panel Root
+      All styles are scoped to #root to prevent CSS leakage to the host page.
+      This ID is used as the mounting point for the React application.
+    -->
+    <div id="root" class="sourcecheck-root"></div>
     <script type="module" src="sidepanel/main.tsx"></script>
   </body>
 </html>

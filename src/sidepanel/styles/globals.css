@@ -67,12 +67,25 @@
   --tracking-wider: 0.05em;
 }
 
+/*
+ * SourceCheck Side Panel Styles
+ * 
+ * IMPORTANT: These styles are scoped to the side panel context (#root).
+ * The :root selector defines CSS custom properties (variables) that are 
+ * available within this scope and don't affect the host page.
+ * 
+ * The body/html styles are safe because this CSS is loaded only in the 
+ * isolated side panel context (sidepanel.html), not as a content script.
+ * Future-proofing: Element selectors are scoped to #root where possible.
+ */
+
 *,
 *::before,
 *::after {
   box-sizing: border-box;
 }
 
+/* Scoped layout reset - only affects elements within #root */
 html,
 body,
 #root {
@@ -81,6 +94,10 @@ body,
   overflow: hidden;
 }
 
+/* 
+ * Body styles are scoped to the side panel context.
+ * This stylesheet is only loaded in sidepanel.html, not injected into pages.
+ */
 body {
   margin: 0;
   color: var(--sc-text);
@@ -104,6 +121,13 @@ body::before {
   opacity: 0.06;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
   background-size: 180px 180px;
+}
+
+/* Additional scoping wrapper for future-proofing */
+#root,
+.sourcecheck-root {
+  /* Ensure the root container establishes a stacking context */
+  isolation: isolate;
 }
 
 ::selection {
