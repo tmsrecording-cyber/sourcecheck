@@ -14,7 +14,7 @@ import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get('origin');
-  if (!isAllowedOrigin(origin)) {
+  if (!isAllowedOrigin(origin, request)) {
     return new NextResponse(null, { status: 403 });
   }
   return new NextResponse(null, {
