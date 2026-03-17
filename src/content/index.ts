@@ -45,6 +45,20 @@ class ContextInvalidatedError extends Error {}
 const isContextInvalidated = (error: unknown): boolean =>
   error instanceof Error && error.message.includes('Extension context invalidated');
 
+/**
+ * Silently handle promise rejections that may be caused by extension context invalidation.
+ * Use this instead of .catch(console.error) to avoid polluting the host page console
+ * when the extension reloads or updates.
+ */
+const silentCatch = (error: unknown): void => {
+  if (isContextInvalidated(error) || (error instanceof Error && error.message.includes('Extension context'))) {
+    // Extension was reloaded — this is expected, don't log
+    return;
+  }
+  // Log other unexpected errors
+  console.error('[SourceCheck]', error);
+};
+
 const safeSendMessage = async (message: unknown) => {
   try {
     if (!chrome.runtime?.id) {
@@ -727,7 +741,7 @@ const scheduleTranscriptDeadline = (videoId: string) => {
           autoPanelOpenDisabledAfterFailure = true;
           console.log('[SourceCheck] terminal transcript failure locked');
         }
-      }).catch(console.error);
+      }).catch(silentCatch);
     }
     return;
   }
@@ -836,12 +850,12 @@ const checkVideoState = async () => {
 };
 
 // Track listener references for cleanup
-const ytNavigateListener = () => { void checkVideoState().catch(console.error); };
-const loadListener = () => { void checkVideoState().catch(console.error); };
+const ytNavigateListener = () => { void checkVideoState().catch(silentCatch); };
+const loadListener = () => { void checkVideoState().catch(silentCatch); };
 
 window.addEventListener('yt-navigate-finish', ytNavigateListener);
 window.addEventListener('load', loadListener);
-void checkVideoState().catch(console.error);
+void checkVideoState().catch(silentCatch);
 
 // Cleanup function for extension reload
 if (chrome.runtime?.id) {

@@ -168,6 +168,15 @@ type YouTubeWindow = Window & {
       };
     };
   };
+  // YouTube's internal config API (may be undefined in some contexts)
+  ytcfg?: {
+    get?: (key: string) => string | undefined;
+    data_?: Record<string, string>;
+  };
+  // YouTube's legacy config object (may be undefined in some contexts)
+  yt?: {
+    config_?: Record<string, string>;
+  };
 };
 
 const cleanTranscriptText = (value: string) =>
@@ -657,7 +666,7 @@ const extractInnerTubeApiKeyFromHtml = (html: string): string | null => {
 // This is more reliable than HTML parsing on SPA navigation because ytInitialPlayerResponse
 // in the window/scripts is stale (it holds the previous video's data), and the fresh HTML
 // fetch can return a simplified page for programmatic requests.
-const extractInnerTubeApiKey = (ytWindow: any, html?: string): string | null => {
+const extractInnerTubeApiKey = (ytWindow: YouTubeWindow, html?: string): string | null => {
   // Try direct window access first (may work in some contexts)
   const key =
     ytWindow.ytcfg?.get?.('INNERTUBE_API_KEY') ||
@@ -691,7 +700,7 @@ const extractInnerTubeClientVersionFromHtml = (html: string): string => {
   return '2.20240101.00.00';
 };
 
-const extractInnerTubeClientVersion = (ytWindow: any, html?: string): string => {
+const extractInnerTubeClientVersion = (ytWindow: YouTubeWindow, html?: string): string => {
   const version =
     ytWindow.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') ||
     ytWindow.yt?.config_?.INNERTUBE_CLIENT_VERSION ||
@@ -713,7 +722,7 @@ const fetchPlayerResponseFromInnerTube = async (
   signal?: AbortSignal
 ): Promise<Record<string, any> | null> => {
   try {
-    const ytWindow = window as any;
+    const ytWindow = window as YouTubeWindow;
     
     // Get HTML for regex extraction (Manifest V3 safe - content script can read DOM)
     const pageHtml = document.documentElement.innerHTML;
