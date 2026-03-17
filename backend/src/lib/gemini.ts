@@ -604,6 +604,16 @@ async function callGemini(
     model = fallbackModel;
   }
   
+  // DEBUG: Log model selection process
+  console.log('[gemini.ts] Model selection:', {
+    requestedModel,
+    afterAllowlistCheck: ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL,
+    finalModel: model,
+    inAllowedModels: ALLOWED_MODELS.includes(requestedModel),
+    inTierModels: allowedForTier.includes(model),
+    tier,
+  });
+  
   if (requestedModel !== model) {
     console.warn(`[gemini.ts] Invalid/tier-restricted model '${requestedModel}' requested, using '${model}'`);
   }
