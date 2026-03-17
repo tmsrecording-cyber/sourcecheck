@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
 import { buildClaimExtractionPrompt } from '@/lib/prompts';
+import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -215,6 +216,17 @@ const validateAnalyzeChunkRequest = (body: AnalyzeChunkRequest) => {
   return null;
 };
 
+export async function OPTIONS(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (!isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 403 });
+  }
+  return new NextResponse(null, {
+    status: 200,
+    headers: getCorsHeaders(request),
+  });
+}
+
 export async function POST(request: NextRequest) {
   let body: AnalyzeChunkRequest | null = null;
 
@@ -224,10 +236,12 @@ export async function POST(request: NextRequest) {
 
     const validationError = validateAnalyzeChunkRequest(parsedBody);
     if (validationError) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: validationError },
         { status: 400 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
     const combinedText = parsedBody.chunks
@@ -328,7 +342,7 @@ export async function POST(request: NextRequest) {
       outputTokens,
     });
 
-    return NextResponse.json<AnalyzeChunkResponse>({
+    const response = NextResponse.json<AnalyzeChunkResponse>({
       entities,
       has_claim: hasClaim,
       claim_text: claimText,
@@ -340,6 +354,8 @@ export async function POST(request: NextRequest) {
         endIndex: parsedBody.chunks[parsedBody.chunks.length - 1].index,
       },
     });
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
 
   } catch (error: unknown) {
     console.error('[analyze-chunk] Error:', {
@@ -356,7 +372,7 @@ export async function POST(request: NextRequest) {
         code: error.code,
         status: error.status,
       });
-      return NextResponse.json<AnalyzeChunkResponse>({
+      const response = NextResponse.json<AnalyzeChunkResponse>({
         entities: [],
         has_claim: false,
         claim_text: null,
@@ -368,25 +384,33 @@ export async function POST(request: NextRequest) {
           endIndex: body.chunks[body.chunks.length - 1].index,
         },
       });
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
     if (isGeminiError(error) && error.code === 'RATE_LIMITED') {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: 'Rate limited. Please wait a moment and try again.' },
         { status: 429 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
     if (isGeminiError(error) && error.code === 'AUTH_ERROR') {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: 'Server configuration error. Contact support.' },
         { status: 500 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { error: 'Failed to analyze transcript chunk.' },
       { status: 500 }
     );
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
   }
 }

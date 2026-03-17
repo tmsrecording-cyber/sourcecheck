@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSONWithSearch, isGeminiError } from '@/lib/gemini';
 import { buildGroundedVerificationPrompt } from '@/lib/prompts';
+import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import type {
   VerifyClaimRequest,
   VerifyClaimResponse,
@@ -237,16 +238,29 @@ const selectBestSourceUrl = (
   return bestScore > 0 ? bestSource.url : '';
 };
 
+export async function OPTIONS(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (!isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 403 });
+  }
+  return new NextResponse(null, {
+    status: 200,
+    headers: getCorsHeaders(request),
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body: VerifyClaimRequest = await request.json();
 
     const validationError = validateVerifyClaimRequest(body);
     if (validationError) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: validationError },
         { status: 400 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
     const { claim } = body;
@@ -360,7 +374,9 @@ export async function POST(request: NextRequest) {
       outputTokens,
     });
 
-    return NextResponse.json<VerifyClaimResponse>({ sourceCard });
+    const response = NextResponse.json<VerifyClaimResponse>({ sourceCard });
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
 
   } catch (error: unknown) {
     console.error('[verify-claim] Error:', {
@@ -370,15 +386,19 @@ export async function POST(request: NextRequest) {
     });
 
     if (isGeminiError(error) && error.code === 'RATE_LIMITED') {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: 'Rate limited. Please wait a moment.' },
         { status: 429 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { error: 'Failed to verify claim.' },
       { status: 500 }
     );
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
   }
 }

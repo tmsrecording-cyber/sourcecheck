@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
 import { buildVideoQuestionPrompt } from '@/lib/prompts';
+import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import type {
   AskQuestionResponse,
   AskQuestionSource,
@@ -180,16 +181,29 @@ const sanitizeSources = (
   return sanitized;
 };
 
+export async function OPTIONS(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (!isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 403 });
+  }
+  return new NextResponse(null, {
+    status: 200,
+    headers: getCorsHeaders(request),
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body: AskVideoQuestionRequest = await request.json();
 
     const validationError = validateAskVideoRequest(body);
     if (validationError) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: validationError },
         { status: 400 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
     const prompt = buildVideoQuestionPrompt({
@@ -213,10 +227,12 @@ export async function POST(request: NextRequest) {
       : FALLBACK_ANSWER;
     const sources = sanitizeSources(rawAnswer?.sources, body.sourceCards || []);
 
-    return NextResponse.json<AskQuestionResponse>({
+    const response = NextResponse.json<AskQuestionResponse>({
       answer,
       sources,
     });
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
   } catch (error: unknown) {
     console.error('[ask-video] Error:', {
       name: error instanceof Error ? error.name : typeof error,
@@ -225,22 +241,28 @@ export async function POST(request: NextRequest) {
     });
 
     if (isGeminiError(error) && error.code === 'RATE_LIMITED') {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: 'Rate limited. Please wait a moment and try again.' },
         { status: 429 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
     if (isGeminiError(error) && error.code === 'AUTH_ERROR') {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: 'Server configuration error. Contact support.' },
         { status: 500 }
       );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
     }
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { error: 'Failed to answer the question.' },
       { status: 500 }
     );
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
   }
 }
