@@ -54,6 +54,11 @@ function makeChromeMock() {
         get: vi.fn().mockResolvedValue({}),
         set: vi.fn().mockImplementation((_data: unknown, cb?: () => void) => { cb?.(); }),
       },
+      sync: {
+        // Model preference storage
+        get: vi.fn().mockResolvedValue({}),
+        set: vi.fn().mockImplementation((_data: unknown, cb?: () => void) => { cb?.(); }),
+      },
       onChanged: {
         addListener: vi.fn(),
       },
