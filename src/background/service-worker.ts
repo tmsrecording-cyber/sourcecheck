@@ -1054,6 +1054,19 @@ const logAnalysisResult = (
 const getVerificationSkipReason = (claim: ExtractedClaim) => {
   const key = getClaimKey(claim);
 
+  // Filter out claim fragments that are too short or lack substance
+  const claimWords = claim.claimText.trim().split(/\s+/).length;
+  if (claimWords < 5) {
+    return `claim too short (${claimWords} words)`;
+  }
+
+  // Filter claims without concrete entities (numbers, dates, proper nouns)
+  // A verifiable claim should have SOME concrete reference
+  const hasConcreteReference = /\d+|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b|\b[A-Z][a-z]+ (?:University|Institute|Center|Study|Research|Lab|Corp|Inc|Ltd)\b|\b(?:WHO|CDC|FDA|UN|NASA|MIT|Harvard|Stanford)\b/i.test(claim.claimText);
+  if (!hasConcreteReference && claim.claimText.length < 40) {
+    return 'claim lacks concrete references for verification';
+  }
+
   if (claim.confidence < MIN_CONFIDENCE) {
     return `confidence ${claim.confidence.toFixed(2)} below threshold ${MIN_CONFIDENCE.toFixed(2)}`;
   }

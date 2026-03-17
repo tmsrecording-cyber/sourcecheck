@@ -28,20 +28,37 @@ Output a strict JSON object:
   ]
 }
 
+CLAIM QUALITY CRITERIA:
+For a claim to be worth checking, it MUST be:
+1. Concrete and specific (has numbers, dates, named entities, or clear causality)
+2. Verifiable through web search (not opinion, not prediction, not personal experience)
+3. Substantial enough to be meaningful (not trivial wordplay or obvious restatements)
+
+Scoring guidance:
+- verifiability: 0.9+ for claims with specific numbers/dates/names; 0.7-0.8 for general facts; <0.6 for vague/opinion claims (reject these)
+- value: 1.0 for STEM/scientific facts; 0.8 for significant statistics; 0.6 for historical events; 0.4 for surprising trivia
+- speaker_confidence: how certain the speaker sounds (not your certainty)
+
 WHAT TO EXTRACT (high-value claims only):
 - STEM & Academic: Laws of physics, chemical properties, mathematical theorems, biological processes.
 - Specific numbers: Citations of fact ("dopamine increases 250%", "99% of species went extinct").
-- Named events: Dates or outcomes of specific occurrences.
-- Cause-and-effect: Specific mechanisms ("cold exposure increases norepinephrine").
-- Data-driven: Claims about named studies or research papers.
+- Named events: Dates or outcomes of specific occurrences with clear actors.
+- Cause-and-effect: Specific mechanisms ("cold exposure increases norepinephrine by 200%").
+- Data-driven: Claims about named studies, research papers, or official reports.
 
-WHAT TO REJECT:
-- Vague descriptions or general summaries.
-- Opinions, preferences, or future predictions.
-- Well-known common knowledge ("The sun is hot").
-- Unfinished thoughts or fragments (use BUFFERING).
+WHAT TO REJECT (low-quality claims):
+- Vague descriptions without specifics: "AI is transformative" or "this is important"
+- Pure opinions: "I think", "I believe", "in my opinion", "obviously"
+- Future predictions: "will happen", "going to", "predicts"
+- Personal anecdotes: "I experienced", "my friend said"
+- Well-known common knowledge: "The sun is hot", "water is wet"
+- Incomplete sentence fragments that don't form a complete claim
+- Claims with no entities, numbers, or concrete references to check
 
-Ranking: If multiple claims exist, provide them in the "candidates" array. The system will prioritize high-value STEM and canonical facts.
+BUFFERING (unfinished thoughts):
+Use when the speaker is mid-sentence and a complete claim hasn't emerged yet.
+
+Ranking: Sort candidates by (verifiability × value × speaker_confidence). Return highest first.
 `;
 
 export function buildClaimExtractionPrompt(

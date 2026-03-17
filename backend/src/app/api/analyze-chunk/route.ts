@@ -200,17 +200,18 @@ function findAnchorInWindow(chunks: TranscriptChunk[], exactQuote: string): bool
 }
 
 const inferConfidence = (claimType: ClaimType): number => {
+  // Base confidence by claim type - canonical and study claims are most reliable
   switch (claimType) {
     case 'canonical':
-      return 0.90;
+      return 0.92;
     case 'study':
-      return 0.88;
+      return 0.89;
     case 'statistic':
-      return 0.85;
+      return 0.86;
     case 'historical':
-      return 0.80;
+      return 0.82;
     case 'surprising':
-      return 0.72;
+      return 0.75;
   }
 };
 
@@ -260,15 +261,38 @@ function normalizeClaimResult(
     : null;
 
   if (rawCandidates && rawCandidates.length > 0) {
+    // Filter candidates with valid quotes found in transcript
     const validCandidates = rawCandidates.filter((candidate) => {
       const quote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
       return quote && findAnchorInWindow(chunks, quote);
     });
 
-    if (validCandidates.length === 0) {
+    // Score and rank candidates by quality (verifiability × value × speaker_confidence)
+    const scoredCandidates = validCandidates
+      .map((candidate) => {
+        const verifiability = typeof candidate.verifiability === 'number' 
+          ? Math.max(0, Math.min(1, candidate.verifiability)) 
+          : 0.5;
+        const value = typeof candidate.value === 'number' 
+          ? Math.max(0, Math.min(1, candidate.value)) 
+          : 0.5;
+        const speakerConfidence = typeof candidate.speaker_confidence === 'number' 
+          ? Math.max(0, Math.min(1, candidate.speaker_confidence)) 
+          : 0.5;
+        // Composite score weighted toward verifiability and value
+        const compositeScore = (verifiability * 0.4) + (value * 0.35) + (speakerConfidence * 0.25);
+        return { candidate, compositeScore, verifiability };
+      })
+      // Filter out low-verifiability candidates (< 0.6) - not concrete enough to check
+      .filter((scored) => scored.verifiability >= 0.6)
+      // Sort by composite score descending
+      .sort((a, b) => b.compositeScore - a.compositeScore);
+
+    if (scoredCandidates.length === 0) {
       allCandidatesRejected = true;
     } else {
-      const best = validCandidates[0];
+      // Take the highest-scoring candidate
+      const best = scoredCandidates[0].candidate;
       claimText = typeof best.claim_text === 'string' && best.claim_text.trim()
         ? best.claim_text.trim()
         : null;
