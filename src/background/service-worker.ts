@@ -27,6 +27,7 @@ import {
   MIN_CONFIDENCE,
   REQUEST_TIMEOUT_MS,
 } from '../config';
+import { fetchWithBYOK } from './utils/api';
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
 
@@ -1401,17 +1402,14 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     console.log(
       `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds}`
     );
-    const verifyRes = await fetchWithTimeout(`${API_BASE}/api/verify-claim`, {
-      method: 'POST',
-      body: JSON.stringify({ 
-        claim: item.claim, 
-        videoTitle: item.videoTitle, 
-        channelName: item.channelName,
-        model: runtimeState.selectedModel,
-      }),
-    });
+    const { sourceCard } = await fetchWithBYOK('/api/verify-claim', {
+      claim: item.claim, 
+      videoTitle: item.videoTitle, 
+      channelName: item.channelName,
+      model: runtimeState.selectedModel,
+    }) as VerifyClaimResponse;
     console.log(
-      `[SourceCheck/SW] verify-claim response video=${item.videoId} status=${verifyRes.status}`
+      `[SourceCheck/SW] verify-claim success video=${item.videoId} card=${sourceCard.status}`
     );
 
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) {
@@ -1421,21 +1419,6 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       );
       return;
     }
-
-    if (!verifyRes.ok) {
-      if (shouldRetryVerification(verifyRes.status)) {
-        console.warn('[SourceCheck/SW] verify-claim failed with retryable status', verifyRes.status);
-        await retryVerificationItem(item, runGeneration, verifyRes.status);
-        return;
-      }
-      console.warn('[SourceCheck/SW] verify-claim failed with status', verifyRes.status);
-      removePendingClaimByKey(item.key);
-      dispatch({ type: 'VERIFY_COMPLETED' });
-      persistPanelState({ includeCards: true, includeQueue: true });
-      return;
-    }
-
-    const { sourceCard }: VerifyClaimResponse = await verifyRes.json();
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) {
       console.warn(
         `[SourceCheck/SW] skipped card insert because session changed video=${item.videoId} ` +
@@ -1616,18 +1599,11 @@ const askVideoQuestion = async (question: string) => {
   console.log(
     `[SourceCheck/SW] ask-video request video=${currentVideoInfo.videoId} endpoint=${API_BASE}/api/ask-video transcriptContext=${payload.transcriptContext.length} sourceCards=${payload.sourceCards.length}`
   );
-  const response = await fetchWithTimeout(`${API_BASE}/api/ask-video`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }, REQUEST_TIMEOUT_MS + 10_000);
+  const result = await fetchWithBYOK('/api/ask-video', payload, REQUEST_TIMEOUT_MS + 10_000) as AskQuestionResponse;
   console.log(
-    `[SourceCheck/SW] ask-video response video=${currentVideoInfo.videoId} status=${response.status}`
+    `[SourceCheck/SW] ask-video success video=${currentVideoInfo.videoId}`
   );
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Ask failed: ${response.status} ${errorText}`);
-  }
-  return response.json() as Promise<AskQuestionResponse>;
+  return result;
 };
 
 const processPlayback = async (currentTime: number) => {
@@ -1721,37 +1697,19 @@ const processPlayback = async (currentTime: number) => {
       lastChunk: chunksToProcess[chunksToProcess.length - 1]?.text?.slice(0, 50),
     });
 
-    const analyzeRes = await fetchWithTimeout(analyzeEndpoint, {
-      method: 'POST',
-      body: JSON.stringify({
-        videoId: requestVideoId,
-        videoTitle: activeVideo.title,
-        channelName: activeVideo.channel,
-        chunks: chunksToProcess,
-        currentTimestamp: currentTime,
-        model: runtimeState.selectedModel,
-      }),
-    });
+    const extraction = await fetchWithBYOK('/api/analyze-chunk', {
+      videoId: requestVideoId,
+      videoTitle: activeVideo.title,
+      channelName: activeVideo.channel,
+      chunks: chunksToProcess,
+      currentTimestamp: currentTime,
+      model: runtimeState.selectedModel,
+    }) as AnalyzeChunkResponse;
     console.log('[Pipeline] API Response:', {
       videoId: requestVideoId,
-      status: analyzeRes.status,
-      ok: analyzeRes.ok,
+      hasClaim: extraction.has_claim,
+      claimCount: extraction.claims?.length || 0,
     });
-
-    if (runGeneration !== processingGeneration || currentVideoInfo?.videoId !== requestVideoId) return;
-
-    if (!analyzeRes.ok) {
-      if (analyzeRes.status === 429 || analyzeRes.status >= 500) {
-        console.warn(`[SourceCheck/SW] analyze-chunk ${analyzeRes.status}, backing off.`);
-        return;
-      }
-      // For 4xx errors, do NOT advance lastProcessedIndex — the catch block
-      // handles cleanup and leaves the index untouched so these chunks can be
-      // retried on the next scan tick instead of being skipped permanently.
-      throw new Error(`Analyze failed: ${analyzeRes.status}`);
-    }
-
-    const extraction: AnalyzeChunkResponse = await analyzeRes.json();
     console.log('[Pipeline] Parsed Response:', {
       videoId: requestVideoId,
       hasClaim: extraction.has_claim,
