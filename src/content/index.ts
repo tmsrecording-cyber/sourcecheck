@@ -835,9 +835,23 @@ const checkVideoState = async () => {
   scheduleTranscriptLoad(videoId);
 };
 
-window.addEventListener('yt-navigate-finish', () => { void checkVideoState().catch(console.error); });
-window.addEventListener('load', () => { void checkVideoState().catch(console.error); });
+// Track listener references for cleanup
+const ytNavigateListener = () => { void checkVideoState().catch(console.error); };
+const loadListener = () => { void checkVideoState().catch(console.error); };
+
+window.addEventListener('yt-navigate-finish', ytNavigateListener);
+window.addEventListener('load', loadListener);
 void checkVideoState().catch(console.error);
+
+// Cleanup function for extension reload
+if (chrome.runtime?.id) {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === 'CONTENT_SCRIPT_CLEANUP') {
+      window.removeEventListener('yt-navigate-finish', ytNavigateListener);
+      window.removeEventListener('load', loadListener);
+    }
+  });
+}
 
 if (chrome.runtime?.id) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { issueSessionToken } from '@/proxy';
+import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 
 // POST /api/session/init
 //
@@ -10,11 +11,25 @@ import { issueSessionToken } from '@/proxy';
 //
 // Returns { token: string } — empty string when SESSION_SECRET is not
 // configured (local dev without a secret, proxy still allows the call through).
+
+export async function OPTIONS(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (!isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 403 });
+  }
+  return new NextResponse(null, {
+    status: 200,
+    headers: getCorsHeaders(request),
+  });
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
 
   if (!body || typeof body.extensionId !== 'string' || !body.extensionId.trim()) {
-    return NextResponse.json({ error: 'extensionId is required.' }, { status: 400 });
+    const response = NextResponse.json({ error: 'extensionId is required.' }, { status: 400 });
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
   }
 
   const extensionId = body.extensionId.trim();
@@ -24,10 +39,14 @@ export async function POST(request: NextRequest) {
   // before this handler runs; we check consistency here as defence-in-depth.
   const headerExtensionId = request.headers.get('x-extension-id')?.trim() || '';
   if (headerExtensionId && headerExtensionId !== extensionId) {
-    return NextResponse.json({ error: 'extensionId mismatch.' }, { status: 403 });
+    const response = NextResponse.json({ error: 'extensionId mismatch.' }, { status: 403 });
+    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+    return response;
   }
 
   const token = await issueSessionToken(extensionId);
 
-  return NextResponse.json({ token });
+  const response = NextResponse.json({ token });
+  Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+  return response;
 }
