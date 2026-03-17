@@ -553,6 +553,8 @@ const ALLOWED_MODELS = [
 // Freemium tier model restrictions
 // Free tier: only light/fast models; Pro tier: all models
 const FREE_TIER_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite-preview',
   'gemini-2.5-flash-lite',
   'gemini-2.5-flash-lite-preview',
 ];
