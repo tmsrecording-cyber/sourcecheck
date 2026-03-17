@@ -28,6 +28,7 @@ type GeminiCallOptions = {
   responseJsonSchema?: GeminiJsonSchema;
   model?: string;  // Allow dynamic model selection from client
   tier?: 'free' | 'pro';  // User tier for model access control
+  customApiKey?: string;  // BYOK: User's own API key
 };
 
 // Minimal JSON Schema validator covering the subset used in this codebase:
@@ -580,7 +581,8 @@ async function callGemini(
   useGrounding: boolean,
   options: GeminiCallOptions = {}
 ): Promise<GeminiResponse> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  // Use custom API key if provided (BYOK), otherwise use environment key
+  const apiKey = options.customApiKey || process.env.GEMINI_API_KEY;
   
   // Security: Validate model against whitelist and tier restrictions
   const requestedModel = options.model || getModel();
@@ -765,12 +767,14 @@ export async function askGeminiJSON<T = unknown>(
   prompt: string,
   maxTokens: number = 1000,
   schema?: GeminiJsonSchema,
-  model?: string
+  model?: string,
+  customApiKey?: string
 ): Promise<{ data: T; inputTokens: number; outputTokens: number }> {
   const response = await askGemini(prompt, maxTokens, {
     responseMimeType: 'application/json',
     ...(schema ? { responseJsonSchema: schema } : {}),
     ...(model ? { model } : {}),
+    ...(customApiKey ? { customApiKey } : {}),
   });
   const data = parseGeminiJsonResponse<T>(response, schema, false);
 
@@ -789,7 +793,8 @@ export async function askGeminiJSONWithSearch<T = unknown>(
   prompt: string,
   maxTokens: number = 1000,
   schema?: GeminiJsonSchema,
-  model?: string
+  model?: string,
+  customApiKey?: string
 ): Promise<{
   data: T;
   inputTokens: number;
@@ -800,7 +805,7 @@ export async function askGeminiJSONWithSearch<T = unknown>(
   // Gemini model versions (e.g. gemini-3.1-flash-lite-preview rejects the combination).
   // We rely on prompt-based JSON instructions + parseJsonResponse() instead.
   // The schema is enforced via post-hoc validation (validateAgainstSchema) below.
-  const response = await askGeminiWithSearch(prompt, maxTokens, { model });
+  const response = await askGeminiWithSearch(prompt, maxTokens, { model, customApiKey });
   const data = parseGeminiJsonResponse<T>(response, schema, true);
 
   return {

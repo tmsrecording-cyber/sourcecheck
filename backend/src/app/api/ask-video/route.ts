@@ -206,6 +206,9 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
+    // Extract BYOK header - user can provide their own API key
+    const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+
     const prompt = buildVideoQuestionPrompt({
       question: body.question,
       videoTitle: body.videoTitle || 'Unknown Video',
@@ -219,7 +222,8 @@ export async function POST(request: NextRequest) {
       prompt,
       900,
       ASK_VIDEO_SCHEMA,
-      body.model  // Pass client-selected model
+      body.model,  // Pass client-selected model
+      customApiKey  // BYOK: Pass user's API key if provided
     );
 
     const answer = typeof rawAnswer?.answer === 'string' && rawAnswer.answer.trim()

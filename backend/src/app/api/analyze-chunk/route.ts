@@ -244,6 +244,9 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
+    // Extract BYOK header - user can provide their own API key
+    const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+
     const combinedText = parsedBody.chunks
       .map((chunk) => chunk.text)
       .join('\n\n');
@@ -261,7 +264,8 @@ export async function POST(request: NextRequest) {
       prompt,
       800,
       CLAIM_EXTRACTION_SCHEMA,
-      parsedBody.model  // Pass client-selected model
+      parsedBody.model,  // Pass client-selected model
+      customApiKey  // BYOK: Pass user's API key if provided
     );
 
     const entities = Array.isArray(rawExtraction?.entities)

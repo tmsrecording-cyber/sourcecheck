@@ -119,6 +119,23 @@ export async function proxy(request: NextRequest) {
     );
   }
 
+  // Check for BYOK (Bring Your Own Key) header
+  // If user provides their own API key, skip rate limiting and use their key
+  const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+  const hasCustomKey = customApiKey && customApiKey.length > 0;
+  
+  if (hasCustomKey) {
+    console.log(`[SourceCheck/proxy] BYOK request detected for ${authResult.identity}, skipping rate limit`);
+    // Add the custom key to the request headers for downstream API routes
+    const response = NextResponse.next();
+    response.headers.set('X-Custom-Api-Key', customApiKey);
+    
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+    return response;
+  }
+
   if (!(await applyRateLimit(request, authResult.identity))) {
     const retryAfter = Math.ceil(getRateLimitWindowMs() / 1000);
     return NextResponse.json(
@@ -156,6 +173,33 @@ async function exceedsRequestSizeLimit(request: NextRequest) {
   if (contentLength) {
     const parsed = Number.parseInt(contentLength, 10);
     if (Number.isFinite(parsed) && parsed > maxRequestBytes) {
+      return true;
+    }
+  }
+  
+  // If no content-length (chunked encoding), check with a streaming reader
+  // to prevent memory exhaustion from huge requests
+  if (!contentLength) {
+    try {
+      const cloned = request.clone();
+      const reader = cloned.body?.getReader();
+      if (!reader) return false;
+      
+      let totalBytes = 0;
+      const chunk = await reader.read();
+      // Accumulate chunks up to max + 1 to detect overflow
+      while (!chunk.done) {
+        totalBytes += chunk.value?.length || 0;
+        if (totalBytes > maxRequestBytes) {
+          reader.cancel();
+          return true;
+        }
+        // Read next chunk
+        const next = await reader.read();
+        if (next.done) break;
+      }
+      return false;
+    } catch {
       return true;
     }
   }
@@ -547,11 +591,28 @@ async function applyRateLimit(request: NextRequest, identity: string): Promise<b
   const path = request.nextUrl.pathname;
   const cost = RATE_LIMIT_COST_BY_PATH[path] || 1;
   // Rate limit by IP to prevent one abusive user from throttling everyone
-  // Extract first IP from x-forwarded-for (format: "client, proxy1, proxy2")
-  const forwardedFor = request.headers.get('x-forwarded-for');
-  const clientIp = forwardedFor 
-    ? forwardedFor.split(',')[0].trim()
-    : request.headers.get('x-real-ip') || 'unknown';
+  // Only trust X-Forwarded-For when behind a known proxy (TRUSTED_PROXY_COUNT env var)
+  const trustedProxyCount = parseInt(process.env.TRUSTED_PROXY_COUNT || '0', 10);
+  let clientIp: string;
+  
+  if (trustedProxyCount > 0) {
+    // We're behind trusted proxies, can use X-Forwarded-For
+    // Take the IP that's N hops from the end (closest to our infrastructure)
+    const forwardedFor = request.headers.get('x-forwarded-for');
+    if (forwardedFor) {
+      const ips = forwardedFor.split(',').map(ip => ip.trim()).filter(Boolean);
+      // Get IP from the correct position (accounting for trusted proxies)
+      const ipIndex = Math.max(0, ips.length - trustedProxyCount - 1);
+      clientIp = ips[ipIndex] || 'unknown';
+    } else {
+      clientIp = request.headers.get('x-real-ip') || 'unknown';
+    }
+  } else {
+    // Direct connection - don't trust X-Forwarded-For (client can spoof it)
+    // Use the connection remote address if available, otherwise fallback
+    clientIp = 'unknown';
+  }
+  
   const bucketKey = `${identity}:ip:${clientIp}:${path}`;
 
   if (!process.env.REDIS_URL && !isLocalApiHost(request.nextUrl.hostname)) {
