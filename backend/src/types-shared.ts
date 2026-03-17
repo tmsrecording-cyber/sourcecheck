@@ -202,6 +202,8 @@ export interface VerifyClaimRequest {
   videoTitle: string;
   channelName: string;
   model?: GeminiModelOption;         // optional model selection
+  /** Surrounding transcript context to help verify ambiguous claims */
+  contextTranscript?: string;
 }
 
 /** Verification status levels */

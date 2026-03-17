@@ -263,7 +263,7 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const { claim } = body;
+    const { claim, contextTranscript } = body;
 
     // Extract BYOK header - user can provide their own API key
     const customApiKey = request.headers.get('x-custom-api-key')?.trim();
@@ -271,7 +271,7 @@ export async function POST(request: NextRequest) {
     // ---- Single Gemini call with Google Search grounding ----
     // Gemini searches the web automatically and returns both
     // the verification JSON and the grounding source URLs.
-    const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType);
+    const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType, contextTranscript);
 
     const { data: rawVerification, inputTokens, outputTokens, sources } =
       await askGeminiJSONWithSearch<RawVerification>(prompt, 500, VERIFICATION_SCHEMA, body.model, customApiKey);

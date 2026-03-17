@@ -935,9 +935,10 @@ const getEffectivePlaybackRate = () => {
   return playbackRate && Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1;
 };
 
-const MAX_CHUNK_BATCH_SIZE = 19;
+const MAX_CHUNK_BATCH_SIZE = 24;
+const MIN_CHUNK_BATCH_SIZE = 12; // Increased from 8 to ensure sufficient context
 const getChunkBatchSize = () =>
-  Math.min(MAX_CHUNK_BATCH_SIZE, Math.max(8, Math.ceil(getEffectivePlaybackRate() * 8)));
+  Math.min(MAX_CHUNK_BATCH_SIZE, Math.max(MIN_CHUNK_BATCH_SIZE, Math.ceil(getEffectivePlaybackRate() * 10)));
 
 const getAnalysisIntervalMs = (backlogChunks = 0) => {
   const baseIntervalMs = Math.max(8_000, Math.round(CHUNK_INTERVAL_MS / getEffectivePlaybackRate()));
@@ -1668,11 +1669,23 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     console.log(
       `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds}`
     );
+    // Gather surrounding transcript context for better verification
+    // Get chunks within 30 seconds of the claim timestamp
+    const contextWindowSeconds = 30;
+    const contextChunks = currentTranscript.filter(
+      (chunk) => Math.abs(chunk.startTime - item.claim.timestampSeconds) <= contextWindowSeconds
+    );
+    const contextTranscript = contextChunks
+      .sort((a, b) => a.startTime - b.startTime)
+      .map((c) => c.text)
+      .join(' ');
+
     const { sourceCard } = await fetchWithBYOK('/api/verify-claim', {
       claim: item.claim, 
       videoTitle: item.videoTitle, 
       channelName: item.channelName,
       model: runtimeState.selectedModel,
+      contextTranscript: contextTranscript || undefined,
     }) as VerifyClaimResponse;
     console.log(
       `[SourceCheck/SW] verify-claim success video=${item.videoId} card=${sourceCard.status}`
