@@ -55,38 +55,57 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
       ? Math.max(0, Math.floor(candidate.transcriptChunkCount as number))
       : INITIAL_RUNTIME_STATE.transcriptChunkCount,
     transcriptFetchLog: Array.isArray(candidate.transcriptFetchLog)
-      ? (candidate.transcriptFetchLog as any[]).filter((entry) =>
-          entry &&
-          typeof entry === 'object' &&
-          Number.isFinite(entry.at) &&
-          typeof entry.source === 'string' &&
-          typeof entry.step === 'string' &&
-          typeof entry.message === 'string'
-        )
+      ? candidate.transcriptFetchLog.filter((entry: unknown) => {
+          if (!entry || typeof entry !== 'object') return false;
+          const e = entry as { at?: unknown; source?: unknown; step?: unknown; message?: unknown };
+          return (
+            Number.isFinite(e.at) &&
+            typeof e.source === 'string' &&
+            typeof e.step === 'string' &&
+            typeof e.message === 'string'
+          );
+        })
       : INITIAL_RUNTIME_STATE.transcriptFetchLog,
-    pendingTranscriptBufferSummary: candidate.pendingTranscriptBufferSummary
-      && typeof (candidate.pendingTranscriptBufferSummary as any).present === 'boolean'
-      && Number.isFinite((candidate.pendingTranscriptBufferSummary as any).receivedCount)
-      && Number.isFinite((candidate.pendingTranscriptBufferSummary as any).totalCount)
-      ? {
-          present: (candidate.pendingTranscriptBufferSummary as any).present,
-          receivedCount: Math.max(0, Math.floor((candidate.pendingTranscriptBufferSummary as any).receivedCount)),
-          totalCount: Math.max(0, Math.floor((candidate.pendingTranscriptBufferSummary as any).totalCount)),
-        }
-      : INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary,
-    transcriptMessageStats: candidate.transcriptMessageStats
-      && typeof candidate.transcriptMessageStats === 'object'
-      && Number.isFinite((candidate.transcriptMessageStats as any).startsSeen)
-      && Number.isFinite((candidate.transcriptMessageStats as any).appendsSeen)
-      && Number.isFinite((candidate.transcriptMessageStats as any).loadedSeen)
-      && Number.isFinite((candidate.transcriptMessageStats as any).failedSeen)
-      ? {
-          startsSeen: Math.max(0, Math.floor((candidate.transcriptMessageStats as any).startsSeen)),
-          appendsSeen: Math.max(0, Math.floor((candidate.transcriptMessageStats as any).appendsSeen)),
-          loadedSeen: Math.max(0, Math.floor((candidate.transcriptMessageStats as any).loadedSeen)),
-          failedSeen: Math.max(0, Math.floor((candidate.transcriptMessageStats as any).failedSeen)),
-        }
-      : INITIAL_RUNTIME_STATE.transcriptMessageStats,
+    pendingTranscriptBufferSummary: (() => {
+      const summary = candidate.pendingTranscriptBufferSummary;
+      if (!summary || typeof summary !== 'object') {
+        return INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary;
+      }
+      const s = summary as { present?: unknown; receivedCount?: unknown; totalCount?: unknown };
+      if (
+        typeof s.present === 'boolean' &&
+        Number.isFinite(s.receivedCount) &&
+        Number.isFinite(s.totalCount)
+      ) {
+        return {
+          present: s.present,
+          receivedCount: Math.max(0, Math.floor(s.receivedCount as number)),
+          totalCount: Math.max(0, Math.floor(s.totalCount as number)),
+        };
+      }
+      return INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary;
+    })(),
+    transcriptMessageStats: (() => {
+      const stats = candidate.transcriptMessageStats;
+      if (!stats || typeof stats !== 'object') {
+        return INITIAL_RUNTIME_STATE.transcriptMessageStats;
+      }
+      const s = stats as { startsSeen?: unknown; appendsSeen?: unknown; loadedSeen?: unknown; failedSeen?: unknown };
+      if (
+        Number.isFinite(s.startsSeen) &&
+        Number.isFinite(s.appendsSeen) &&
+        Number.isFinite(s.loadedSeen) &&
+        Number.isFinite(s.failedSeen)
+      ) {
+        return {
+          startsSeen: Math.max(0, Math.floor(s.startsSeen as number)),
+          appendsSeen: Math.max(0, Math.floor(s.appendsSeen as number)),
+          loadedSeen: Math.max(0, Math.floor(s.loadedSeen as number)),
+          failedSeen: Math.max(0, Math.floor(s.failedSeen as number)),
+        };
+      }
+      return INITIAL_RUNTIME_STATE.transcriptMessageStats;
+    })(),
     sourceCards: Array.isArray(candidate.sourceCards) ? candidate.sourceCards : INITIAL_RUNTIME_STATE.sourceCards,
     pendingClaims: Array.isArray(candidate.pendingClaims) ? candidate.pendingClaims : INITIAL_RUNTIME_STATE.pendingClaims,
     chunksScanned: Number.isFinite(candidate.chunksScanned)
