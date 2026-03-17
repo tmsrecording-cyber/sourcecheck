@@ -37,6 +37,8 @@ const MAX_VERIFICATION_RETRIES = 2;
 const MAX_CONCURRENT_VERIFICATIONS = 2;
 const PLAYHEAD_LEASH_SECONDS = 15;
 const MAX_SOURCE_CARDS = 150;
+const MAX_PENDING_CLAIMS = 100;      // Prevent unbounded growth during long videos
+const MAX_VERIFICATION_QUEUE = 50;   // Limit queued verifications
 const TRANSCRIPT_LOAD_TIMEOUT_MS = 65_000;
 const TRANSCRIPT_SNAPSHOT_KEY = 'transcriptSnapshot';
 const PENDING_TRANSCRIPT_BUFFER_KEY = 'pendingTranscriptBuffer';
@@ -44,6 +46,12 @@ const WORKER_RUNTIME_STATE_KEY = 'workerRuntimeState';
 const MAX_EVENT_LOG = 80;
 const MAX_TRANSCRIPT_FETCH_LOG = 40;
 const PENDING_TRANSCRIPT_BUFFER_PERSIST_DELAY_MS = 750;
+
+// Storage quota protection - chrome.storage.local has ~10MB limit (5MB in some MV3 contexts)
+// chrome.storage.session has ~1MB limit. Leave headroom for other extension data.
+const STORAGE_LOCAL_QUOTA_BYTES = 4 * 1024 * 1024;   // 4MB max for local
+const STORAGE_SESSION_QUOTA_BYTES = 512 * 1024;      // 512KB max for session
+const STORAGE_TRANSCRIPT_MAX_BYTES = 2 * 1024 * 1024; // 2MB max for single transcript
 
 type VerificationQueueItem = {
   claim: ExtractedClaim;
@@ -417,6 +425,57 @@ const dispatch = (event: WorkerEvent) => {
 const wait = (ms: number) =>
   new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 
+/**
+ * Estimate the byte size of a value when serialized to JSON.
+ * This is approximate but sufficient for quota protection.
+ */
+const estimateByteSize = (value: unknown): number => {
+  try {
+    const json = JSON.stringify(value);
+    // Each character in a JavaScript string is 2 bytes (UTF-16)
+    // But for JSON over the wire/storage, it's typically UTF-8
+    // We'll estimate conservatively at 2 bytes per char
+    return json.length * 2;
+  } catch {
+    return Infinity;
+  }
+};
+
+/**
+ * Check if storing data would exceed the quota.
+ * Note: This is a best-effort check - actual quota may vary by browser.
+ */
+const wouldExceedQuota = (data: Record<string, unknown>, quotaBytes: number): boolean => {
+  const totalSize = Object.entries(data).reduce((sum, [, value]) => sum + estimateByteSize(value), 0);
+  return totalSize > quotaBytes;
+};
+
+/**
+ * Truncate a transcript to fit within a byte limit.
+ * Keeps the most recent chunks since they're most relevant.
+ */
+const truncateTranscriptToFit = (
+  transcript: TranscriptChunk[],
+  maxBytes: number
+): TranscriptChunk[] => {
+  let low = 0;
+  let high = transcript.length;
+  
+  // Binary search for the maximum number of chunks that fit
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    // Keep the most recent mid chunks
+    const candidate = transcript.slice(-mid);
+    if (estimateByteSize(candidate) <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  
+  return transcript.slice(-low);
+};
+
 const abortActiveRequests = () => {
   activeRequestControllers.forEach((controller) => controller.abort());
   activeRequestControllers.clear();
@@ -786,11 +845,36 @@ const persistTranscriptSnapshot = (videoId: string | null, transcript: Transcrip
     });
     return;
   }
+  
+  // Check quota and truncate if necessary
+  const payload = { videoId, transcript } satisfies StoredTranscriptSnapshot;
+  let dataToStore = payload;
+  
+  if (estimateByteSize(payload) > STORAGE_TRANSCRIPT_MAX_BYTES) {
+    console.warn(
+      `[SourceCheck/SW] Transcript size (${estimateByteSize(payload)} bytes) exceeds limit. ` +
+      `Truncating to fit within ${STORAGE_TRANSCRIPT_MAX_BYTES} bytes.`
+    );
+    const truncatedTranscript = truncateTranscriptToFit(transcript, STORAGE_TRANSCRIPT_MAX_BYTES - 1024); // Leave headroom for metadata
+    dataToStore = { videoId, transcript: truncatedTranscript };
+  }
+  
+  // Check if we'd exceed the overall local storage quota
+  if (wouldExceedQuota({ [TRANSCRIPT_SNAPSHOT_KEY]: dataToStore }, STORAGE_LOCAL_QUOTA_BYTES)) {
+    console.error('[SourceCheck/SW] Cannot persist transcript: would exceed storage quota');
+    return;
+  }
+  
   chrome.storage.local.set({
-    [TRANSCRIPT_SNAPSHOT_KEY]: { videoId, transcript } satisfies StoredTranscriptSnapshot,
+    [TRANSCRIPT_SNAPSHOT_KEY]: dataToStore,
   }, () => {
     if (chrome.runtime.lastError) {
-      console.error('[SourceCheck/SW] Failed to persist transcript snapshot:', chrome.runtime.lastError.message);
+      // Handle quota exceeded error specifically
+      if (chrome.runtime.lastError.message?.includes('QUOTA')) {
+        console.error('[SourceCheck/SW] Storage quota exceeded when persisting transcript');
+      } else {
+        console.error('[SourceCheck/SW] Failed to persist transcript snapshot:', chrome.runtime.lastError.message);
+      }
     }
   });
 };
@@ -814,11 +898,21 @@ const persistPendingTranscriptBufferNow = () => {
     return;
   }
 
+  // Check if we'd exceed the overall local storage quota
+  if (wouldExceedQuota({ [PENDING_TRANSCRIPT_BUFFER_KEY]: serializedBuffer }, STORAGE_LOCAL_QUOTA_BYTES)) {
+    console.error('[SourceCheck/SW] Cannot persist pending buffer: would exceed storage quota');
+    return;
+  }
+
   chrome.storage.local.set({
     [PENDING_TRANSCRIPT_BUFFER_KEY]: serializedBuffer,
   }, () => {
     if (chrome.runtime.lastError) {
-      console.error('[SourceCheck/SW] Failed to persist pending transcript buffer:', chrome.runtime.lastError.message);
+      if (chrome.runtime.lastError.message?.includes('QUOTA')) {
+        console.error('[SourceCheck/SW] Storage quota exceeded when persisting pending buffer');
+      } else {
+        console.error('[SourceCheck/SW] Failed to persist pending transcript buffer:', chrome.runtime.lastError.message);
+      }
     }
   });
 };
@@ -991,7 +1085,7 @@ const upsertPendingClaim = (claim: ExtractedClaim, state: PendingClaimPreview['s
   };
   const existingIndex = allPendingClaims.findIndex((pendingClaim) => pendingClaim.id === key);
   if (existingIndex === -1) {
-    allPendingClaims = [nextPreview, ...allPendingClaims];
+    allPendingClaims = [nextPreview, ...allPendingClaims].slice(0, MAX_PENDING_CLAIMS);
     syncVisibleTimelineState();
     return;
   }
@@ -1153,9 +1247,44 @@ const persistPanelState = (options: {
     payload.pendingVerifications = verificationQueue;
   }
 
+  // Check if payload would exceed session storage quota
+  if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
+    console.warn('[SourceCheck/SW] Panel state payload too large, truncating...');
+    
+    // Remove heavy fields that can be reconstructed
+    delete payload.allSourceCards;
+    delete payload.allPendingClaims;
+    delete payload.transcriptFetchLog;
+    
+    // If still too large, reduce card counts
+    if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
+      payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 50);
+      payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 30);
+    }
+    
+    // If STILL too large, only persist core runtime state
+    if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
+      console.error('[SourceCheck/SW] Cannot persist full panel state: even truncated payload exceeds quota');
+      // Only persist the minimal runtime state
+      const minimalPayload = {
+        [WORKER_RUNTIME_STATE_KEY]: runtimeState,
+      };
+      chrome.storage.session.set(minimalPayload, () => {
+        if (chrome.runtime.lastError) {
+          console.error('[SourceCheck/SW] Failed to persist minimal panel state:', chrome.runtime.lastError.message);
+        }
+      });
+      return;
+    }
+  }
+
   chrome.storage.session.set(payload, () => {
     if (chrome.runtime.lastError) {
-      console.error('[SourceCheck/SW] Failed to persist panel state:', chrome.runtime.lastError.message);
+      if (chrome.runtime.lastError.message?.includes('QUOTA')) {
+        console.error('[SourceCheck/SW] Storage quota exceeded when persisting panel state');
+      } else {
+        console.error('[SourceCheck/SW] Failed to persist panel state:', chrome.runtime.lastError.message);
+      }
     } else {
       console.log('[Pipeline] State persisted:', {
         sourceCardsCount: sourceCards.length,
@@ -1342,6 +1471,15 @@ const enqueueClaimsForVerification = (claims: AnalyzeChunkResponse['claims']) =>
       `[SourceCheck/SW] entered verification handoff video=${video.videoId} ` +
       `chunkTimestamp=${claim.timestampSeconds} has_claim=true action_state=VERIFYING`
     );
+    // Prevent unbounded queue growth - drop oldest if at capacity
+    if (verificationQueue.length >= MAX_VERIFICATION_QUEUE) {
+      const dropped = verificationQueue.shift();
+      if (dropped) {
+        activeVerificationKeys.delete(dropped.key);
+        removePendingClaimByKey(dropped.key);
+        console.warn('[SourceCheck/SW] Verification queue at capacity, dropped oldest item');
+      }
+    }
     verificationQueue.push({ claim, videoId: video.videoId, videoTitle: video.title, channelName: video.channel, key, retryCount: 0 });
     upsertPendingClaim(claim, 'queued');
     didQueueClaims = true;
@@ -1373,6 +1511,14 @@ const retryVerificationItem = async (
 
   if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) return false;
 
+  // Prevent unbounded queue growth on retries - drop oldest if at capacity
+  if (verificationQueue.length >= MAX_VERIFICATION_QUEUE) {
+    const dropped = verificationQueue.shift();
+    if (dropped) {
+      activeVerificationKeys.delete(dropped.key);
+      console.warn('[SourceCheck/SW] Verification queue at capacity (retry), dropped oldest item');
+    }
+  }
   verificationQueue.push({ ...item, retryCount: item.retryCount + 1 });
   persistPanelState({ includeCards: true, includeQueue: true });
   return true;
@@ -2103,6 +2249,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }));
 
       sendResponse(result);
+      return;
+    }
+
+    if (message.type === 'RELOAD_EXTENSION') {
+      console.log('[SourceCheck/SW] Reloading extension as requested from side panel');
+      sendResponse({ status: 'ok' });
+      // Reload after sending response
+      setTimeout(() => chrome.runtime.reload(), 100);
       return;
     }
 
