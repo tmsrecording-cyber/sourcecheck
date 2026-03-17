@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Allowed HTTP origins for local development
+// Added YouTube to the allowed origins
 const ALLOWED_HTTP_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000',
+  'https://www.youtube.com',
+  'https://youtube.com'
 ];
 
-/**
- * Get allowed extension IDs from environment variable.
- * Format: comma-separated list of extension IDs
- */
 function getAllowedExtensionIds(): Set<string> {
   return new Set(
     (process.env.ALLOWED_EXTENSION_IDS || '')
@@ -21,45 +19,33 @@ function getAllowedExtensionIds(): Set<string> {
   );
 }
 
-/**
- * Check if running on localhost (dev environment).
- */
 function isLocalhost(request: NextRequest): boolean {
   const hostname = request.headers.get('host')?.split(':')[0] || request.nextUrl.hostname;
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
-/**
- * Validate if an origin is allowed.
- * 
- * For chrome-extension:// origins, requires the extension ID to be in the
- * ALLOWED_EXTENSION_IDS allowlist (or allows any on localhost for dev).
- * 
- * For HTTP origins, only allows localhost development servers.
- */
 export function isAllowedOrigin(origin: string | null, request: NextRequest): boolean {
+  // 1. Allow Postman/curl requests without an origin during dev
+  if (!origin && isLocalhost(request)) return true;
   if (!origin) return false;
 
-  // Chrome extension origins
+  // 2. Chrome extension origins
   if (origin.startsWith('chrome-extension://')) {
+    // If we are developing locally, let ANY chrome extension talk to the API.
+    // Unpacked extension IDs change frequently, this stops the headache.
+    if (isLocalhost(request)) return true;
+
     const extensionId = origin.slice('chrome-extension://'.length);
-    if (!extensionId) return false;
-
     const allowedIds = getAllowedExtensionIds();
-    if (allowedIds.size > 0) {
-      return allowedIds.has(extensionId);
-    }
-
-    // No allowlist configured - only allow on localhost for dev
-    return isLocalhost(request);
+    return allowedIds.has(extensionId);
   }
 
-  // HTTP origins - only allow localhost for development
+  // 3. HTTP origins (now includes YouTube)
   return ALLOWED_HTTP_ORIGINS.some(allowed => origin === allowed);
 }
 
 export function getCorsHeaders(request: NextRequest): Record<string, string> {
-  const origin = request.headers.get('origin') || '';
+  const origin = request.headers.get('origin') || '*'; // Fallback to * for dev
   const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': [
@@ -73,7 +59,7 @@ export function getCorsHeaders(request: NextRequest): Record<string, string> {
     'Vary': 'Origin',
   };
 
-  if (origin && isAllowedOrigin(origin, request)) {
+  if (origin === '*' || isAllowedOrigin(origin, request)) {
     headers['Access-Control-Allow-Origin'] = origin;
   }
 
@@ -91,7 +77,7 @@ export function handleCors(request: NextRequest, response: NextResponse): NextRe
 export function corsOptionsResponse(request: NextRequest): NextResponse {
   const origin = request.headers.get('origin');
   
-  if (!origin || !isAllowedOrigin(origin, request)) {
+  if (!isAllowedOrigin(origin, request)) {
     return new NextResponse(null, { status: 403 });
   }
 
