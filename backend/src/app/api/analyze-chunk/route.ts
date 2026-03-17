@@ -3,15 +3,6 @@ import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
 import { buildClaimExtractionPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { InMemoryRateLimitStore } from '@/lib/rate-limit-store';
-
-// Force Node.js runtime - Edge runtime doesn't support ioredis
-export const runtime = 'nodejs';
-
-// Simple in-memory rate limiter for this route
-const rateLimitStore = new InMemoryRateLimitStore();
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_POINTS = 80;
-const RATE_LIMIT_COST = 2;
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -21,33 +12,28 @@ import type {
   TranscriptChunk,
 } from '@/types/shared';
 
-type RawCandidate = {
-  claim_text: string;
-  exact_quote: string;
-  claim_type: ClaimType;
-  verifiability: number;
-  value: number;
-  speaker_confidence: number;
-  reason: string;
-};
+// Force Node.js runtime - Edge runtime doesn't support ioredis
+export const runtime = 'nodejs';
 
-type RawExtraction = {
-  entities?: unknown;
-  has_claim?: unknown;
-  action_state?: unknown;
-  reason?: unknown;
-  candidates?: RawCandidate[] | null;
-};
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_POINTS = 80;
+const RATE_LIMIT_COST = 2;
 
 const VALID_MODEL_ACTION_STATES = new Set<Exclude<ExtractionActionState, 'PARSE_ERROR'>>([
   'VERIFYING',
   'REJECTED',
   'BUFFERING',
 ]);
+
 const MAX_CHUNKS_PER_REQUEST = 20;
 const MAX_CHUNK_TEXT_LENGTH = 1200;
 const MAX_COMBINED_TRANSCRIPT_LENGTH = 16_000;
 const MAX_METADATA_FIELD_LENGTH = 300;
+
 const CLAIM_EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
@@ -93,10 +79,91 @@ const CLAIM_EXTRACTION_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+// ============================================================================
+// TYPES
+// ============================================================================
+
+type RawCandidate = {
+  claim_text: string;
+  exact_quote: string;
+  claim_type: ClaimType;
+  verifiability: number;
+  value: number;
+  speaker_confidence: number;
+  reason: string;
+};
+
+type RawExtraction = {
+  entities?: unknown;
+  has_claim?: unknown;
+  action_state?: unknown;
+  reason?: unknown;
+  candidates?: RawCandidate[] | null;
+};
+
+type NormalizedClaimResult = {
+  claimText: string | null;
+  exactQuote: string | null;
+  claimType: ClaimType | null;
+  hasClaim: boolean;
+  malformedClaimPayload: boolean;
+  allCandidatesRejected: boolean;
+  actionState: ExtractionActionState;
+  reason: string;
+  claims: ExtractedClaim[];
+};
+
+// ============================================================================
+// RATE LIMITING
+// ============================================================================
+
+const rateLimitStore = new InMemoryRateLimitStore();
+
+// ============================================================================
+// PURE HELPERS
+// ============================================================================
+
+function setCorsHeaders(response: NextResponse, request: NextRequest): void {
+  Object.entries(getCorsHeaders(request)).forEach(([key, value]) => {
+    if (value) response.headers.set(key, value);
+  });
+}
+
+function jsonWithCors<T>(
+  request: NextRequest,
+  body: T,
+  init?: ResponseInit
+): NextResponse<T> {
+  const response = NextResponse.json(body, init);
+  setCorsHeaders(response, request);
+  return response;
+}
+
+function parseClientIp(request: NextRequest): string {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+}
+
+function getRateLimitKey(request: NextRequest): string {
+  const extensionId = request.headers.get('x-extension-id')?.trim() || 'unknown';
+  const clientIp = parseClientIp(request);
+  return `ext:${extensionId}:ip:${clientIp}:/api/analyze-chunk`;
+}
+
+function buildChunkRange(chunks: TranscriptChunk[]): { startIndex: number; endIndex: number } {
+  return {
+    startIndex: chunks[0].index,
+    endIndex: chunks[chunks.length - 1].index,
+  };
+}
+
 const normalizeText = (text: string) =>
   text.toLowerCase().replace(/\s+/g, ' ').trim();
 
-const resolveClaimTimestamp = (chunks: TranscriptChunk[], exactQuote: string, fallback: number) => {
+function resolveClaimTimestamp(
+  chunks: TranscriptChunk[],
+  exactQuote: string,
+  fallback: number
+): number {
   const normalizedQuote = normalizeText(exactQuote);
   if (!normalizedQuote) {
     return fallback;
@@ -121,15 +188,29 @@ const resolveClaimTimestamp = (chunks: TranscriptChunk[], exactQuote: string, fa
   }
 
   return chunks[0].startTime;
-};
+}
+
+// Anchor validation: returns true only if the exact_quote can be found within
+// the transcript window. Rejects hallucinated quotes that aren't in the text.
+function findAnchorInWindow(chunks: TranscriptChunk[], exactQuote: string): boolean {
+  const normalizedQuote = normalizeText(exactQuote);
+  if (!normalizedQuote) return false;
+  const combinedTranscript = normalizeText(chunks.map((c) => c.text).join(' '));
+  return combinedTranscript.includes(normalizedQuote);
+}
 
 const inferConfidence = (claimType: ClaimType): number => {
   switch (claimType) {
-    case 'canonical':  return 0.90;
-    case 'study':      return 0.88;
-    case 'statistic':  return 0.85;
-    case 'historical': return 0.80;
-    case 'surprising': return 0.72;
+    case 'canonical':
+      return 0.90;
+    case 'study':
+      return 0.88;
+    case 'statistic':
+      return 0.85;
+    case 'historical':
+      return 0.80;
+    case 'surprising':
+      return 0.72;
   }
 };
 
@@ -156,16 +237,117 @@ const inferClaimType = (claimText: string): ClaimType => {
   return 'surprising';
 };
 
-// Anchor validation: returns true only if the exact_quote can be found within
-// the transcript window. Rejects hallucinated quotes that aren't in the text.
-const findAnchorInWindow = (chunks: TranscriptChunk[], exactQuote: string): boolean => {
-  const normalizedQuote = normalizeText(exactQuote);
-  if (!normalizedQuote) return false;
-  const combinedTranscript = normalizeText(chunks.map((c) => c.text).join(' '));
-  return combinedTranscript.includes(normalizedQuote);
-};
+// ============================================================================
+// CLAIM NORMALIZATION
+// ============================================================================
 
-const validateAnalyzeChunkRequest = (body: AnalyzeChunkRequest) => {
+function normalizeClaimResult(
+  rawExtraction: RawExtraction,
+  chunks: TranscriptChunk[],
+  approximateTimestamp: number
+): NormalizedClaimResult {
+  // ---- Candidate extraction with anchor validation ----
+  // If the model returns a `candidates` array, validate each one's exact_quote
+  // against the transcript window. Reject any candidate whose quote can't be
+  // found in the text — this catches hallucinated quotes.
+  let claimText: string | null = null;
+  let exactQuote: string | null = null;
+  let claimType: ClaimType | null = null;
+  let allCandidatesRejected = false;
+
+  const rawCandidates = Array.isArray(rawExtraction?.candidates)
+    ? rawExtraction.candidates
+    : null;
+
+  if (rawCandidates && rawCandidates.length > 0) {
+    const validCandidates = rawCandidates.filter((candidate) => {
+      const quote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
+      return quote && findAnchorInWindow(chunks, quote);
+    });
+
+    if (validCandidates.length === 0) {
+      allCandidatesRejected = true;
+    } else {
+      const best = validCandidates[0];
+      claimText = typeof best.claim_text === 'string' && best.claim_text.trim()
+        ? best.claim_text.trim()
+        : null;
+      exactQuote = typeof best.exact_quote === 'string' && best.exact_quote.trim()
+        ? best.exact_quote.trim()
+        : null;
+      claimType = best.claim_type;
+    }
+  }
+
+  const requestedHasClaim =
+    rawExtraction?.has_claim === true ||
+    (rawCandidates !== null && !allCandidatesRejected && claimText !== null);
+
+  const hasClaim = !allCandidatesRejected && claimText !== null;
+  const malformedClaimPayload = !allCandidatesRejected && requestedHasClaim && claimText === null;
+
+  const rawActionState = VALID_MODEL_ACTION_STATES.has(
+    rawExtraction?.action_state as Exclude<ExtractionActionState, 'PARSE_ERROR'>
+  )
+    ? (rawExtraction.action_state as Exclude<ExtractionActionState, 'PARSE_ERROR'>)
+    : null;
+
+  const actionState = allCandidatesRejected
+    ? 'REJECTED'
+    : hasClaim
+      ? 'VERIFYING'
+      : rawActionState && rawActionState !== 'VERIFYING'
+        ? rawActionState
+        : 'BUFFERING';
+
+  const reason = allCandidatesRejected
+    ? 'All candidate quotes were not found in the transcript window.'
+    : malformedClaimPayload
+      ? 'Model marked a claim but returned no usable claim text.'
+      : typeof rawExtraction?.reason === 'string' && rawExtraction.reason.trim().length > 0
+        ? rawExtraction.reason.trim()
+        : hasClaim
+          ? 'Claim detected.'
+          : 'Awaiting end of statement...';
+
+  const finalClaimType = claimType ?? (claimText ? inferClaimType(claimText) : null);
+
+  const claims: ExtractedClaim[] =
+    hasClaim && claimText && finalClaimType
+      ? [
+          {
+            id: crypto.randomUUID(),
+            claimText,
+            claimType: finalClaimType,
+            exactQuote: exactQuote || claimText,
+            timestampSeconds: resolveClaimTimestamp(
+              chunks,
+              exactQuote || claimText,
+              approximateTimestamp
+            ),
+            confidence: inferConfidence(finalClaimType),
+          },
+        ]
+      : [];
+
+  return {
+    claimText,
+    exactQuote,
+    claimType,
+    hasClaim,
+    malformedClaimPayload,
+    allCandidatesRejected,
+    actionState,
+    reason,
+    claims,
+  };
+}
+
+// ============================================================================
+// VALIDATION
+// ============================================================================
+
+function validateAnalyzeChunkRequest(body: AnalyzeChunkRequest): string | null {
   if (!body.videoId?.trim()) {
     return 'videoId is required.';
   }
@@ -224,7 +406,11 @@ const validateAnalyzeChunkRequest = (body: AnalyzeChunkRequest) => {
   }
 
   return null;
-};
+}
+
+// ============================================================================
+// ROUTE HANDLERS
+// ============================================================================
 
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get('origin');
@@ -241,44 +427,41 @@ export async function POST(request: NextRequest) {
   let body: AnalyzeChunkRequest | null = null;
 
   try {
-    const parsedBody = await request.json() as AnalyzeChunkRequest;
+    // -------------------------------------------------------------------------
+    // PHASE 1: Parse and validate request body
+    // -------------------------------------------------------------------------
+    const parsedBody = (await request.json()) as AnalyzeChunkRequest;
     body = parsedBody;
 
     const validationError = validateAnalyzeChunkRequest(parsedBody);
     if (validationError) {
-      const response = NextResponse.json(
-        { error: validationError },
-        { status: 400 }
-      );
-      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-      return response;
+      return jsonWithCors(request, { error: validationError }, { status: 400 });
     }
 
-    // Rate limiting check (moved from middleware to route)
-    const extensionId = request.headers.get('x-extension-id')?.trim() || 'unknown';
-    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-    const rateLimitKey = `ext:${extensionId}:ip:${clientIp}:/api/analyze-chunk`;
-    
+    // -------------------------------------------------------------------------
+    // PHASE 2: Rate limiting check
+    // -------------------------------------------------------------------------
+    const rateLimitKey = getRateLimitKey(request);
     const allowed = await rateLimitStore.tryConsume(
       rateLimitKey,
       RATE_LIMIT_COST,
       RATE_LIMIT_MAX_POINTS,
       RATE_LIMIT_WINDOW_MS
     );
-    
+
     if (!allowed) {
-      const response = NextResponse.json(
+      return jsonWithCors(
+        request,
         { error: 'Rate limit exceeded. Please retry shortly.' },
         { status: 429 }
       );
-      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-      return response;
     }
 
-    // Extract BYOK header - user can provide their own API key
+    // -------------------------------------------------------------------------
+    // PHASE 3: Extract BYOK header and log request
+    // -------------------------------------------------------------------------
     const customApiKey = request.headers.get('x-custom-api-key')?.trim();
-    
-    // DEBUG: Log incoming request details
+
     console.log('[analyze-chunk] Request:', {
       videoId: parsedBody.videoId,
       model: parsedBody.model,
@@ -287,10 +470,10 @@ export async function POST(request: NextRequest) {
       chunkCount: parsedBody.chunks.length,
     });
 
-    const combinedText = parsedBody.chunks
-      .map((chunk) => chunk.text)
-      .join('\n\n');
-
+    // -------------------------------------------------------------------------
+    // PHASE 4: Build prompt
+    // -------------------------------------------------------------------------
+    const combinedText = parsedBody.chunks.map((chunk) => chunk.text).join('\n\n');
     const approximateTimestamp = parsedBody.chunks[0].startTime;
 
     const prompt = buildClaimExtractionPrompt(
@@ -300,82 +483,49 @@ export async function POST(request: NextRequest) {
       approximateTimestamp
     );
 
-    const { data: rawExtraction, inputTokens, outputTokens } = await askGeminiJSON<RawExtraction>(
+    // -------------------------------------------------------------------------
+    // PHASE 5: Call Gemini
+    // -------------------------------------------------------------------------
+    const {
+      data: rawExtraction,
+      inputTokens,
+      outputTokens,
+    } = await askGeminiJSON<RawExtraction>(
       prompt,
       800,
       CLAIM_EXTRACTION_SCHEMA,
-      parsedBody.model,  // Pass client-selected model
-      customApiKey  // BYOK: Pass user's API key if provided
+      parsedBody.model,
+      customApiKey
     );
 
+    // -------------------------------------------------------------------------
+    // PHASE 6: Normalize entities
+    // -------------------------------------------------------------------------
     const entities = Array.isArray(rawExtraction?.entities)
-      ? rawExtraction.entities.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      ? rawExtraction.entities.filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0
+        )
       : [];
-    // ---- Candidate extraction with anchor validation ----
-    // If the model returns a `candidates` array, validate each one's exact_quote
-    // against the transcript window. Reject any candidate whose quote can't be
-    // found in the text — this catches hallucinated quotes.
-    let claimText: string | null = null;
-    let exactQuote: string | null = null;
-    let claimType: ClaimType | null = null;
-    let allCandidatesRejected = false;
 
-    const rawCandidates = Array.isArray(rawExtraction?.candidates) ? rawExtraction.candidates : null;
-    if (rawCandidates && rawCandidates.length > 0) {
-      const validCandidates = rawCandidates.filter((candidate) => {
-        const quote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
-        return quote && findAnchorInWindow(parsedBody.chunks, quote);
-      });
-
-      if (validCandidates.length === 0) {
-        allCandidatesRejected = true;
-      } else {
-        const best = validCandidates[0];
-        claimText = typeof best.claim_text === 'string' && best.claim_text.trim() ? best.claim_text.trim() : null;
-        exactQuote = typeof best.exact_quote === 'string' && best.exact_quote.trim() ? best.exact_quote.trim() : null;
-        claimType = best.claim_type;
-      }
-    }
-
-    const requestedHasClaim = rawExtraction?.has_claim === true || (rawCandidates !== null && !allCandidatesRejected && claimText !== null);
-    const hasClaim = !allCandidatesRejected && claimText !== null;
-    const malformedClaimPayload = !allCandidatesRejected && requestedHasClaim && claimText === null;
-    const rawActionState = VALID_MODEL_ACTION_STATES.has(
-      rawExtraction?.action_state as Exclude<ExtractionActionState, 'PARSE_ERROR'>
-    )
-      ? rawExtraction.action_state as Exclude<ExtractionActionState, 'PARSE_ERROR'>
-      : null;
-    const actionState = allCandidatesRejected
-      ? 'REJECTED'
-      : hasClaim
-        ? 'VERIFYING'
-        : rawActionState && rawActionState !== 'VERIFYING'
-          ? rawActionState
-          : 'BUFFERING';
-    const reason = allCandidatesRejected
-      ? 'All candidate quotes were not found in the transcript window.'
-      : malformedClaimPayload
-        ? 'Model marked a claim but returned no usable claim text.'
-        : typeof rawExtraction?.reason === 'string' && rawExtraction.reason.trim().length > 0
-          ? rawExtraction.reason.trim()
-          : (hasClaim ? 'Claim detected.' : 'Awaiting end of statement...');
-    const finalClaimType = claimType ?? (claimText ? inferClaimType(claimText) : null);
-
-    const claims: ExtractedClaim[] = hasClaim && claimText
-      ? [{
-          id: crypto.randomUUID(),
-          claimText,
-          claimType: finalClaimType!,
-          exactQuote: exactQuote || claimText,
-          timestampSeconds: resolveClaimTimestamp(parsedBody.chunks, exactQuote || claimText, approximateTimestamp),
-          confidence: inferConfidence(finalClaimType!),
-        }]
-      : [];
+    // -------------------------------------------------------------------------
+    // PHASE 7: Normalize claims
+    // -------------------------------------------------------------------------
+    const {
+      hasClaim,
+      malformedClaimPayload,
+      actionState,
+      reason,
+      claims,
+    } = normalizeClaimResult(rawExtraction, parsedBody.chunks, approximateTimestamp);
 
     if (malformedClaimPayload) {
       console.warn('[analyze-chunk] Model returned has_claim=true without usable claim_text.');
     }
 
+    // -------------------------------------------------------------------------
+    // PHASE 8: Build and return response
+    // -------------------------------------------------------------------------
     console.info('[analyze-chunk]', {
       videoId: parsedBody.videoId,
       chunkCount: parsedBody.chunks.length,
@@ -386,23 +536,20 @@ export async function POST(request: NextRequest) {
       outputTokens,
     });
 
-    const response = NextResponse.json<AnalyzeChunkResponse>({
+    return jsonWithCors<AnalyzeChunkResponse>(request, {
       entities,
       has_claim: hasClaim,
-      claim_text: claimText,
+      claim_text: claims[0]?.claimText ?? null,
       action_state: actionState,
       reason,
       claims,
-      chunkRange: {
-        startIndex: parsedBody.chunks[0].index,
-        endIndex: parsedBody.chunks[parsedBody.chunks.length - 1].index,
-      },
+      chunkRange: buildChunkRange(parsedBody.chunks),
     });
-    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-    return response;
 
   } catch (error: unknown) {
-    // DEBUG: Log full error details to Vercel logs
+    // -------------------------------------------------------------------------
+    // ERROR HANDLING
+    // -------------------------------------------------------------------------
     console.error('[analyze-chunk] RAW ERROR:', error);
     console.error('[analyze-chunk] Error details:', {
       name: error instanceof Error ? error.name : typeof error,
@@ -412,53 +559,46 @@ export async function POST(request: NextRequest) {
       stack: error instanceof Error ? error.stack : 'N/A',
     });
 
+    // PARSE_ERROR: Surface distinct state for model output failures
     if (body && isGeminiError(error) && error.code === 'PARSE_ERROR') {
-      // Surface a distinct PARSE_ERROR state instead of silently masking as
-      // BUFFERING. The worker can now count and log model parse failures
-      // separately from genuine mid-sentence buffering holds.
       console.warn('[analyze-chunk] PARSE_ERROR — model output failed validation.', {
         code: error.code,
         status: error.status,
       });
-      const response = NextResponse.json<AnalyzeChunkResponse>({
+      return jsonWithCors<AnalyzeChunkResponse>(request, {
         entities: [],
         has_claim: false,
         claim_text: null,
         action_state: 'PARSE_ERROR',
         reason: `Model output could not be parsed: ${error.message.substring(0, 120)}`,
         claims: [],
-        chunkRange: {
-          startIndex: body.chunks[0].index,
-          endIndex: body.chunks[body.chunks.length - 1].index,
-        },
+        chunkRange: buildChunkRange(body.chunks),
       });
-      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-      return response;
     }
 
+    // RATE_LIMITED: Return 429
     if (isGeminiError(error) && error.code === 'RATE_LIMITED') {
-      const response = NextResponse.json(
+      return jsonWithCors(
+        request,
         { error: 'Rate limited. Please wait a moment and try again.' },
         { status: 429 }
       );
-      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-      return response;
     }
 
+    // AUTH_ERROR: Return 500 with generic message
     if (isGeminiError(error) && error.code === 'AUTH_ERROR') {
-      const response = NextResponse.json(
+      return jsonWithCors(
+        request,
         { error: 'Server configuration error. Contact support.' },
         { status: 500 }
       );
-      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-      return response;
     }
 
-    const response = NextResponse.json(
+    // Generic error
+    return jsonWithCors(
+      request,
       { error: 'Failed to analyze transcript chunk.' },
       { status: 500 }
     );
-    Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
-    return response;
   }
 }
