@@ -774,6 +774,8 @@ async function callGemini(
       clearTimeout(timeoutId);
     }
   } catch (error: unknown) {
+    console.error("🔥🔥🔥 ACTUAL UPSTREAM GEMINI ERROR:", error instanceof Error ? error.message : error, JSON.stringify(error));
+    
     if (isGeminiError(error)) {
       throw error;
     }
