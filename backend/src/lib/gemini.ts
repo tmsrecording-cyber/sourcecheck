@@ -1,5 +1,5 @@
 // Single canonical default - must be in ALLOWED_MODELS
-const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
+const DEFAULT_MODEL = 'gemini-2.0-flash';
 const DEFAULT_THINKING_BUDGET = 128;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 
@@ -543,19 +543,18 @@ export async function askGeminiWithSearch(
 
 // Allowed models for security - prevents abuse of expensive models
 const ALLOWED_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.1-flash-lite-preview',
-  'gemini-3-flash',
-  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
 ];
 
 // Freemium tier model restrictions
 // Free tier: only light/fast models; Pro tier: all models
 const FREE_TIER_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.1-flash-lite-preview',
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.5-flash',
 ];
 const PRO_TIER_MODELS = ALLOWED_MODELS; // Pro gets all allowed models
 
