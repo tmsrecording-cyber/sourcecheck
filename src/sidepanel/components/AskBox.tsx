@@ -34,9 +34,9 @@ export const AskBox = ({
   };
 
   return (
-    <div className="relative px-4 pb-5 pt-4 bg-sc-bg-0 border-t border-sc-border-soft" aria-busy={isThinking}>
-      {/* Decorative top glow line */}
-      <div className="absolute top-0 left-6 right-6 h-[1px] bg-gradient-to-r from-transparent via-sc-line to-transparent opacity-50" />
+    <div className="relative px-4 pb-4 pt-3 bg-sc-bg-0 border-t border-sc-border-soft/80" aria-busy={isThinking}>
+      {/* Decorative top glow line - softer */}
+      <div className="absolute top-0 left-8 right-8 h-[1px] bg-gradient-to-r from-transparent via-sc-line to-transparent opacity-40" />
 
       <label htmlFor={ASK_INPUT_ID} className="sr-only">
         Ask about what was said in this video
@@ -44,11 +44,13 @@ export const AskBox = ({
       
       <div className="relative group">
         <div className={`
-          flex items-center gap-3 px-3 py-2.5 rounded-lg
+          flex items-center gap-3 px-3 py-2 rounded-xl
           bg-gradient-to-b from-sc-surface-0 to-[#0b0807]
-          border border-sc-border-strong shadow-sc-soft backdrop-blur-md
-          transition-all duration-300
-          focus-within:border-sc-accent/40 focus-within:shadow-[0_0_20px_rgba(200,163,106,0.12),inset_0_1px_0_rgba(255,255,255,0.05)]
+          border transition-all duration-200
+          ${hasContext 
+            ? 'border-sc-border-strong shadow-sc-soft focus-within:border-sc-accent/60 focus-within:shadow-[0_0_24px_rgba(138,180,248,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]' 
+            : 'border-sc-border-soft/60 opacity-75'
+          }
         `}>
           <input
             id={ASK_INPUT_ID}
@@ -73,10 +75,10 @@ export const AskBox = ({
             disabled={!isQueryReady}
             className={`
               mechanical-btn shrink-0 font-mono text-[10px] font-bold tracking-[0.15em] uppercase px-4 py-2.5 rounded-md
-              flex items-center justify-center min-w-[60px] min-h-[32px]
+              flex items-center justify-center min-w-[60px] min-h-[32px] transition-all duration-200
               ${isQueryReady 
-                ? 'bg-gradient-to-b from-sc-accent/20 to-sc-accent/8 border border-sc-accent/50 text-sc-accent hover:text-sc-text shadow-[0_0_15px_rgba(96,165,250,0.25),inset_0_1px_0_rgba(255,255,255,0.1)]' 
-                : 'bg-white/[0.03] border border-sc-border-soft text-sc-text-faint/60 cursor-not-allowed'
+                ? 'bg-gradient-to-b from-sc-accent/25 to-sc-accent/10 border border-sc-accent/60 text-sc-accent hover:text-sc-text hover:border-sc-accent/80 hover:shadow-[0_0_18px_rgba(96,165,250,0.35),inset_0_1px_0_rgba(255,255,255,0.12)] shadow-[0_0_12px_rgba(96,165,250,0.2)]' 
+                : 'bg-sc-surface-1/50 border border-sc-border text-sc-text-faint/50 cursor-not-allowed'
               }
             `}
           >

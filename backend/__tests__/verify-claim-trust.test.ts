@@ -9,7 +9,8 @@
  *   5. Nuance scrubbed of both positive and negative certainty language
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { setupSessionAuthEnv, createAuthHeaders, createUnauthHeaders, TEST_EXTENSION_ID, mockCryptoSubtle } from './helpers/session';
 
 // ---------------------------------------------------------------------------
 // The route handler calls askGeminiJSONWithSearch — mock it so we control
@@ -21,11 +22,7 @@ vi.mock('../src/lib/gemini', () => ({
   isGeminiError: () => false,
 }));
 
-// Stub crypto.randomUUID for deterministic IDs
-vi.stubGlobal('crypto', {
-  ...globalThis.crypto,
-  randomUUID: () => '00000000-0000-0000-0000-000000000000',
-});
+// crypto will be stubbed in beforeEach with proper subtle mock
 
 // ---------------------------------------------------------------------------
 // Import the handler under test
@@ -33,7 +30,7 @@ vi.stubGlobal('crypto', {
 import { POST } from '../src/app/api/verify-claim/route';
 import type { NextRequest } from 'next/server';
 
-function makeVerifyRequest(overrides: Record<string, unknown> = {}) {
+async function makeVerifyRequest(overrides: Record<string, unknown> = {}, includeAuth = true) {
   const body = {
     claim: {
       claimText: 'The earth is flat.',
@@ -45,17 +42,26 @@ function makeVerifyRequest(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 
+  const headers = includeAuth
+    ? await createAuthHeaders(TEST_EXTENSION_ID)
+    : createUnauthHeaders(TEST_EXTENSION_ID);
+
   return {
     json: () => Promise.resolve(body),
-    headers: new Headers({
-      'origin': 'chrome-extension://test-extension-id',
-    }),
+    headers: new Headers(headers),
+    nextUrl: { pathname: '/api/verify-claim', hostname: 'localhost' },
   } as unknown as NextRequest;
 }
 
 describe('Verify-claim trust boundary: ungrounded responses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setupSessionAuthEnv();
+    mockCryptoSubtle();
+  });
+  
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('downgrades supported verdict to unverifiable when no grounding sources', async () => {
@@ -71,7 +77,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [], // <-- no grounding
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
@@ -94,7 +100,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
@@ -115,7 +121,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
@@ -134,7 +140,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
@@ -153,7 +159,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
@@ -173,7 +179,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
@@ -197,7 +203,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       ],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
@@ -219,12 +225,63 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
       sources: [{ title: 'Reuters Fact Check', url: 'https://example.com/reuters' }],
     });
 
-    const res = await POST(makeVerifyRequest());
+    const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('disputed');
     expect(json.sourceCard.sourceTitle).toBe('Reuters Fact Check');
     expect(json.sourceCard.sourceUrl).toBe('https://example.com/reuters');
     expect(json.sourceCard.nuance).toBe('Major sources disagree on the size of the effect.');
+  });
+
+  it('PASS: request without session token returns 401 Unauthorized', async () => {
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'supported',
+        sourceTitle: 'Test Source',
+        sourceType: 'news_article',
+        nuance: 'Test nuance.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [{ title: 'Test Source', url: 'https://example.com/test' }],
+    });
+
+    const res = await POST(await makeVerifyRequest({}, false));
+    expect(res.status).toBe(401);
+    
+    const json = await res.json();
+    expect(json.error).toContain('Unauthorized');
+  });
+
+  it('PASS: BYOK requests skip rate limiting', async () => {
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'supported',
+        sourceTitle: 'Test Source',
+        sourceType: 'news_article',
+        nuance: 'Test nuance.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [{ title: 'Test Source', url: 'https://example.com/test' }],
+    });
+
+    const headers = await createAuthHeaders(TEST_EXTENSION_ID);
+    const res = await POST({
+      json: () => Promise.resolve({
+        claim: { claimText: 'Test claim', claimType: 'study', timestampSeconds: 42 },
+        videoTitle: 'Test Video',
+        channelName: 'Test Channel',
+      }),
+      headers: new Headers({
+        ...headers,
+        'x-custom-api-key': 'user-provided-api-key',
+      }),
+      nextUrl: { pathname: '/api/verify-claim', hostname: 'localhost' },
+    } as unknown as NextRequest);
+    
+    // Should succeed despite low rate limit budget because BYOK skips rate limiting
+    expect(res.status).toBe(200);
   });
 });

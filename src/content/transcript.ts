@@ -227,21 +227,26 @@ const splitTranscriptLines = (value: unknown): string[] =>
     .filter(Boolean);
 
 const decodeHtmlEntities = (value: string): string => {
-  if (typeof value !== 'string' || !value) {
+  // Fail-soft: always return a string, never throw
+  if (typeof value !== 'string') {
+    return '';
+  }
+  if (!value) {
     return '';
   }
   try {
     const doc = new DOMParser().parseFromString(value, 'text/html');
-    return doc.body?.textContent ?? value;
+    // Check for parser errors - if DOMParser failed, return original input
+    const parserErrors = doc.getElementsByTagName('parsererror');
+    if (parserErrors.length > 0) {
+      return value; // Fail-soft: return original on parser error
+    }
+    // Safe access: if body or textContent missing, return original input
+    const text = doc.body?.textContent;
+    return typeof text === 'string' ? text : value;
   } catch (e) {
-    // Fallback: manual HTML entity decoding if DOMParser fails
-    return value
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&nbsp;/g, ' ');
+    // Any DOMParser failure → return original input (fail-soft for live pipeline)
+    return value;
   }
 };
 
@@ -644,19 +649,21 @@ const fetchFreshPlayerResponse = async (
 // Extract InnerTube API key from page HTML using regex (Manifest V3 safe)
 // Content scripts cannot access window.ytcfg directly due to isolated world
 const extractInnerTubeApiKeyFromHtml = (html: string): string | null => {
+  // Guard against pathological input sizes (cap at 2MB for safety)
+  const safeHtml = html.length > 2_000_000 ? html.slice(0, 2_000_000) : html;
   // Pattern 1: ytcfg.set({..."INNERTUBE_API_KEY":"AIza..."...})
   const setPattern = /ytcfg\.set\s*\(\s*\{[^}]*"INNERTUBE_API_KEY"\s*:\s*"(AIza[^"]+)"/;
-  const setMatch = html.match(setPattern);
+  const setMatch = safeHtml.match(setPattern);
   if (setMatch?.[1]) return setMatch[1];
 
   // Pattern 2: INNERTUBE_API_KEY":"AIza..." in any script
   const keyPattern = /"INNERTUBE_API_KEY"\s*:\s*"(AIza[^"]+)"/;
-  const keyMatch = html.match(keyPattern);
+  const keyMatch = safeHtml.match(keyPattern);
   if (keyMatch?.[1]) return keyMatch[1];
 
   // Pattern 3: ytcfg.data_.INNERTUBE_API_KEY in script assignment
   const dataPattern = /ytcfg\.data_\s*=\s*\{[^}]*"INNERTUBE_API_KEY"\s*:\s*"(AIza[^"]+)"/;
-  const dataMatch = html.match(dataPattern);
+  const dataMatch = safeHtml.match(dataPattern);
   if (dataMatch?.[1]) return dataMatch[1];
 
   return null;
@@ -687,14 +694,16 @@ const extractInnerTubeApiKey = (ytWindow: YouTubeWindow, html?: string): string 
 };
 
 const extractInnerTubeClientVersionFromHtml = (html: string): string => {
+  // Guard against pathological input sizes (cap at 2MB for safety)
+  const safeHtml = html.length > 2_000_000 ? html.slice(0, 2_000_000) : html;
   // Pattern 1: ytcfg.set({..."INNERTUBE_CLIENT_VERSION":"2.2024..."...})
   const setPattern = /ytcfg\.set\s*\(\s*\{[^}]*"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/;
-  const setMatch = html.match(setPattern);
+  const setMatch = safeHtml.match(setPattern);
   if (setMatch?.[1]) return setMatch[1];
 
   // Pattern 2: Direct INNERTUBE_CLIENT_VERSION in script
   const versionPattern = /"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/;
-  const versionMatch = html.match(versionPattern);
+  const versionMatch = safeHtml.match(versionPattern);
   if (versionMatch?.[1]) return versionMatch[1];
 
   return '2.20240101.00.00';

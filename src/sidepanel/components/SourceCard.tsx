@@ -49,6 +49,26 @@ const StatusIcon = ({ status }: { status: VerificationStatus }) => {
   );
 };
 
+// Refined unverifiable labels based on sourceTitle/nuance signal
+const getUnverifiableLabel = (sourceTitle?: string, nuance?: string): string => {
+  const text = `${sourceTitle || ''} ${nuance || ''}`.toLowerCase();
+  
+  // "Checking" — actively being processed or network/server issues
+  if (text.includes('check') || text.includes('retry') || text.includes('temporarily') || 
+      text.includes('rate limit') || text.includes('waiting')) {
+    return 'Checking';
+  }
+  
+  // "Needs context" — missing timeframe, population, or specifics
+  if (text.includes('context') || text.includes('specifics') || text.includes('details') ||
+      text.includes('timeframe') || text.includes('definition') || text.includes('unclear')) {
+    return 'Needs context';
+  }
+  
+  // Default: "Inconclusive" — couldn't verify but not due to missing context
+  return 'Inconclusive';
+};
+
 const STATUS_META: Record<
   VerificationStatus,
   {
@@ -88,6 +108,10 @@ export const SourceCard = ({
   isLatest,
 }: SourceCardProps) => {
   const statusMeta = STATUS_META[status];
+  // Use refined label for unverifiable cards based on sourceTitle/nuance
+  const refinedLabel = status === 'unverifiable' 
+    ? getUnverifiableLabel(sourceTitle, nuance)
+    : statusMeta.label;
   const sourceLine = sourceTitle?.trim()
     ? sourceTitle.trim()
     : 'No web source found.';
@@ -101,7 +125,7 @@ export const SourceCard = ({
 
   return (
     <article
-      className={`feed-card result-card card-enter relative ml-1 px-4 py-5 hover-lift ${isLatest ? 'result-card-active' : ''}`}
+      className={`feed-card result-card card-enter relative ml-1 px-4 py-4 hover-lift ${isLatest ? 'result-card-active' : ''}`}
       style={cardStyle}
       data-verdict={status}
     >
@@ -112,16 +136,16 @@ export const SourceCard = ({
       />
 
       {/* Verdict — with status icon */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2.5">
         <StatusIcon status={status} />
-        <VerdictBadge status={status} />
+        <VerdictBadge status={status} label={refinedLabel} />
       </div>
 
       {/* Insight — the useful bit. This is what you actually read. */}
       {nuanceLine ? (
         <>
           <p
-            className="source-card-insight mt-3 max-w-[38ch] text-lg-sc font-semibold text-textMain font-ui text-balance"
+            className="source-card-insight mt-2.5 max-w-[38ch] text-[15px] font-semibold text-textMain font-ui text-balance leading-snug"
             style={{
               display: '-webkit-box',
               WebkitLineClamp: 3,
@@ -134,7 +158,7 @@ export const SourceCard = ({
 
           {/* Claim — what was said. You already heard it, this is just context. */}
           <p
-            className="source-card-claim-quote mt-3 max-w-[40ch] text-base-sc text-textMain/70 font-ui"
+            className="source-card-claim-quote mt-2.5 max-w-[40ch] text-[13px] text-textMain/65 font-ui leading-relaxed"
             style={{
               display: '-webkit-box',
               WebkitLineClamp: 2,
@@ -153,8 +177,8 @@ export const SourceCard = ({
         </p>
       )}
 
-      <div className="result-card-footer mt-4 min-w-0 border-t border-surfaceBorder/50 pt-3">
-        <span className="result-card-source-label font-mono text-xs-sc">Source</span>
+      <div className="result-card-footer mt-3 min-w-0 border-t border-sc-border-soft/60 pt-2.5">
+        <span className="result-card-source-label font-mono text-[10px] font-semibold tracking-wider uppercase text-sc-muted/80">Source</span>
         {sourceUrl && sourceTitle?.trim() ? (
           <a
             href={sourceUrl}

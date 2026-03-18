@@ -25,7 +25,7 @@ The SourceCheck backend acts as an intermediary. It does not store your question
 | Storage | Contents | Cleared when |
 |---------|----------|--------------|
 | `chrome.storage.local` | Full transcript for the current video | You navigate to a different video or the extension reloads |
-| `chrome.storage.session` | Runtime state: current video metadata, verified source cards, pending claims, debug log | Browser tab is closed |
+| `chrome.storage.session` | Runtime state: current video metadata, verified source cards, pending claims, debug log | Browser is closed |
 | In-memory React state | Your Q&A history for the current session | Browser tab is closed or page is refreshed |
 
 Q&A history is **not** persisted between browser sessions.

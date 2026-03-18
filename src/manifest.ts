@@ -42,8 +42,9 @@ const getApiHostPermission = (apiBase: string) => {
 
 export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Export => ({
   manifest_version: 3,
+  minimum_chrome_version: '114',
   name: 'SourceCheck',
-  version: '0.1.0',
+  version: '0.1.1',
   description: 'Real-time fact-checking for YouTube videos using AI-powered claim verification.',
   icons: {
     '16': 'icons/16.png',

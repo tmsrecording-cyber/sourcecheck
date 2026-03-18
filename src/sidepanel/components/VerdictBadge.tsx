@@ -3,6 +3,7 @@ import type { VerificationStatus } from '../../../shared/types';
 
 interface VerdictBadgeProps {
   status: VerificationStatus;
+  label?: string; // Optional override for refined labels (e.g., unverifiable variants)
 }
 
 const VERDICT_META: Record<
@@ -35,7 +36,7 @@ const VERDICT_META: Record<
   },
 };
 
-export const VerdictBadge = ({ status }: VerdictBadgeProps) => {
+export const VerdictBadge = ({ status, label }: VerdictBadgeProps) => {
   const verdictMeta = VERDICT_META[status];
   const Icon = verdictMeta.icon;
 
@@ -44,7 +45,7 @@ export const VerdictBadge = ({ status }: VerdictBadgeProps) => {
       <span className="verdict-badge-mark" aria-hidden="true">
         <Icon size={10} strokeWidth={2.5} />
       </span>
-      <span>{verdictMeta.label}</span>
+      <span>{label ?? verdictMeta.label}</span>
     </span>
   );
 };

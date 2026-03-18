@@ -99,6 +99,29 @@ const VERDICT_META: Record<
   },
 };
 
+// Refined unverifiable labels based on sourceTitle/nuance signal
+// Maps sourceTitle patterns to user-facing clarifying labels
+type UnverifiableVariant = 'checking' | 'needs-context' | 'inconclusive';
+
+const getUnverifiableLabel = (sourceTitle?: string, nuance?: string): string => {
+  const text = `${sourceTitle || ''} ${nuance || ''}`.toLowerCase();
+  
+  // "Checking" — actively being processed or network/server issues
+  if (text.includes('check') || text.includes('retry') || text.includes('temporarily') || 
+      text.includes('rate limit') || text.includes('waiting')) {
+    return 'Checking';
+  }
+  
+  // "Needs context" — missing timeframe, population, or specifics
+  if (text.includes('context') || text.includes('specifics') || text.includes('details') ||
+      text.includes('timeframe') || text.includes('definition') || text.includes('unclear')) {
+    return 'Needs context';
+  }
+  
+  // Default: "Inconclusive" — couldn't verify but not due to missing context
+  return 'Inconclusive';
+};
+
 const ENTITY_TERMS = new Set([
   'ai',
   'apple',
@@ -598,28 +621,35 @@ const RailEntry = ({
   children: ReactNode;
 }) => (
   <div className="relative pl-[72px]">
+    {/* Continuous timeline rail - extends full height for visual continuity */}
+    <span 
+      className="absolute left-[53px] top-0 bottom-0 w-[1px] opacity-30"
+      style={{
+        background: `linear-gradient(180deg, transparent 0%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.4) 8%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 50%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.1) 92%, transparent 100%)`,
+      }}
+    />
     {timestampSeconds !== null && (
-      <div className="absolute left-0 top-[14px] w-[36px] pr-1 text-right">
-        <span className="rail-timestamp font-mono text-[10px] font-medium tracking-[0.05em] text-sc-muted opacity-60">
+      <div className="absolute left-0 top-[13px] w-[38px] pr-1.5 text-right">
+        <span className="rail-timestamp font-mono text-[10.5px] font-semibold tracking-[0.04em] text-sc-text-soft/90">
           {formatTime(timestampSeconds)}
         </span>
       </div>
     )}
     {/* Phase 3: Diamond Node - Centered alignment for 1:42 position */}
     <span
-      className={`rail-node absolute h-2 w-2 left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
+      className={`rail-node absolute h-[7px] w-[7px] left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
       style={{ 
-        top: '10px',
-        borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.45)`,
-        boxShadow: '0 0 10px rgba(var(--model-accent-rgb, 168, 199, 250), 0.4), inset 0 0 3px rgba(255, 255, 255, 0.6)'
+        top: '11px',
+        borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.5)`,
+        boxShadow: '0 0 8px rgba(var(--model-accent-rgb, 168, 199, 250), 0.35), inset 0 0 2px rgba(255, 255, 255, 0.5)'
       }}
     />
     {/* Phase 2: Razor-thin Fiber Optic Connector - fades before card */}
     <span
-      className="rail-connector absolute h-[1px] w-[16px] left-[57px] opacity-70 transition-all duration-300"
+      className="rail-connector absolute h-[1px] w-[15px] left-[57px] opacity-80 transition-all duration-300"
       style={{ 
         top: '14px',
-        background: `linear-gradient(to right, rgba(var(--model-accent-rgb, 168, 199, 250), 0.9), rgba(var(--model-accent-rgb, 168, 199, 250), 0.2) 70%, transparent)`
+        background: `linear-gradient(to right, rgba(var(--model-accent-rgb, 168, 199, 250), 0.85), rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 80%, transparent)`
       }}
     />
     {children}
@@ -1069,12 +1099,12 @@ const CheckedClaimRow = ({
             aria-expanded={isExpanded}
             aria-controls={detailId}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <StatusIcon status={card.status} />
               <span className={`verdict-chip ${verdictMeta.tone}`}>{verdictMeta.label}</span>
             </div>
             <p
-              className="history-claim-text min-w-0 flex-1 text-[13px] leading-[1.45] text-textMain/92 font-ui"
+              className="history-claim-text min-w-0 flex-1 mx-3 text-[13px] leading-[1.4] text-textMain/90 font-ui"
               style={{
                 display: '-webkit-box',
                 WebkitLineClamp: 1,
@@ -1085,7 +1115,7 @@ const CheckedClaimRow = ({
               {card.nuance?.trim() || card.claim.claimText}
             </p>
             <motion.div
-              className="ml-2 text-sc-muted/60"
+              className="shrink-0 text-sc-muted/50"
               variants={chevronVariants}
               initial="collapsed"
               animate={isExpanded ? 'expanded' : 'collapsed'}
@@ -1169,8 +1199,10 @@ export const CardFeed = ({
     pendingClaims.length === 0 &&
     chunksScanned === 0;
 
-  const latestCheckedCard = cards[0] ?? null;
-  const olderCards = cards.length > 1 ? cards.slice(1, MAX_HISTORY_ROWS + 1) : [];
+  const latestCheckedCard = activeTab === 'live' ? (cards[0] ?? null) : null;
+  const olderCards = activeTab === 'live' 
+    ? (cards.length > 1 ? cards.slice(1, MAX_HISTORY_ROWS + 1) : [])
+    : (cards.length > 0 ? cards.slice(0, MAX_HISTORY_ROWS + 1) : []);
   const latestPendingClaim = pendingClaims[0] ?? null;
   const checkingTimestamp = latestPendingClaim?.timestampSeconds ?? lastScannedTimestamp;
   const activePreview = latestPendingClaim?.claimText?.trim() || currentScanPreview?.trim() || '';
@@ -1210,7 +1242,7 @@ export const CardFeed = ({
   return (
     <div className="relative" style={{ '--model-accent-rgb': modelAccentRgb } as CSSProperties}>
       <div
-        className="relative flex flex-col gap-3 px-3 pb-4 pt-2"
+        className="relative flex flex-col gap-2.5 px-3 pb-3 pt-2"
         style={{ ...FEED_RAIL_LAYOUT, '--model-accent-rgb': modelAccentRgb } as CSSProperties}
       >
         <div className="signal-rail" />
@@ -1232,24 +1264,26 @@ export const CardFeed = ({
               />
             )}
 
-            {/* Hero: latest checked result */}
-            <AnimatePresence mode="popLayout">
-              {latestCheckedCard && (
-                <motion.div
-                  key={latestCheckedCard.id}
-                  layout
-                  className="transformer-card"
-                  initial={prefersReducedMotion ? false : transformerVariants.initial}
-                  animate={transformerVariants.animate}
-                  exit={prefersReducedMotion ? undefined : transformerVariants.exit}
-                  transition={TRANSFORMER_TRANSITION}
-                >
-                  <RailEntry timestampSeconds={latestCheckedCard.timestampSeconds} style={VERDICT_META[latestCheckedCard.status].railStyle}>
-                    <LiveResultCard {...latestCheckedCard} isLatest />
-                  </RailEntry>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {/* Hero: latest checked result (LIVE tab only) */}
+            {activeTab === 'live' && (
+              <AnimatePresence mode="popLayout">
+                {latestCheckedCard && (
+                  <motion.div
+                    key={latestCheckedCard.id}
+                    layout
+                    className="transformer-card"
+                    initial={prefersReducedMotion ? false : transformerVariants.initial}
+                    animate={transformerVariants.animate}
+                    exit={prefersReducedMotion ? undefined : transformerVariants.exit}
+                    transition={TRANSFORMER_TRANSITION}
+                  >
+                    <RailEntry timestampSeconds={latestCheckedCard.timestampSeconds} style={VERDICT_META[latestCheckedCard.status].railStyle}>
+                      <LiveResultCard {...latestCheckedCard} isLatest />
+                    </RailEntry>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            )}
 
             {/* Pending check */}
             <AnimatePresence mode="popLayout">
@@ -1320,12 +1354,14 @@ export const CardFeed = ({
               )
             )}
 
-            {/* Older checked claims */}
+            {/* Checked claims list */}
             {olderCards.length > 0 && (
               <motion.div layout className="flex flex-col">
                 <motion.div layout className="pl-[72px]">
                   <div className="ml-1">
-                    <p className="feed-section-label">Checked so far</p>
+                    <p className="feed-section-label">
+                      {activeTab === 'history' ? 'All verified claims' : 'Checked so far'}
+                    </p>
                   </div>
                 </motion.div>
                 {olderCards.map((card) => (
@@ -1348,7 +1384,8 @@ export const CardFeed = ({
               </div>
             )}
 
-            {askHistory.length > 0 && (
+            {/* Q&A History (HISTORY tab only) */}
+            {activeTab === 'history' && askHistory.length > 0 && (
               <motion.div layout className="flex flex-col gap-2">
                 <motion.div layout className="pl-[72px]">
                   <div className="ml-1">

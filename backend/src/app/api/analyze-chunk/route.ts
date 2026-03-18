@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
 import { buildClaimExtractionPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
-import { InMemoryRateLimitStore } from '@/lib/rate-limit-store';
+import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
+import { verifyBearerSessionToken } from '@/proxy';
+import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -114,10 +116,8 @@ type NormalizedClaimResult = {
 };
 
 // ============================================================================
-// RATE LIMITING
+// RATE LIMITING (uses shared checkRateLimit from @/lib/rate-limit)
 // ============================================================================
-
-const rateLimitStore = new InMemoryRateLimitStore();
 
 // ============================================================================
 // PURE HELPERS
@@ -139,15 +139,7 @@ function jsonWithCors<T>(
   return response;
 }
 
-function parseClientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-}
 
-function getRateLimitKey(request: NextRequest): string {
-  const extensionId = request.headers.get('x-extension-id')?.trim() || 'unknown';
-  const clientIp = parseClientIp(request);
-  return `ext:${extensionId}:ip:${clientIp}:/api/analyze-chunk`;
-}
 
 function buildChunkRange(chunks: TranscriptChunk[]): { startIndex: number; endIndex: number } {
   return {
@@ -449,6 +441,10 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   let body: AnalyzeChunkRequest | null = null;
+  // Declare outside try for error handling access
+  const extensionId = request.headers.get('x-extension-id')?.trim() || '';
+  const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+  const hasCustomKey = !!customApiKey && customApiKey.length > 0;
 
   try {
     // -------------------------------------------------------------------------
@@ -463,28 +459,49 @@ export async function POST(request: NextRequest) {
     }
 
     // -------------------------------------------------------------------------
-    // PHASE 2: Rate limiting check
+    // PHASE 2: Session authentication
     // -------------------------------------------------------------------------
-    const rateLimitKey = getRateLimitKey(request);
-    const allowed = await rateLimitStore.tryConsume(
-      rateLimitKey,
-      RATE_LIMIT_COST,
-      RATE_LIMIT_MAX_POINTS,
-      RATE_LIMIT_WINDOW_MS
-    );
-
-    if (!allowed) {
+    const identity = extensionId ? `ext:${extensionId}` : 'unknown';
+    const sessionAuth = await verifyBearerSessionToken(request, extensionId, identity);
+    
+    if (!sessionAuth.authorized) {
+      logRouteFailure({
+        route: '/api/analyze-chunk',
+        category: 'auth_error',
+        statusCode: 401,
+        retryable: false,
+        context: 'session token invalid or missing',
+      });
       return jsonWithCors(
         request,
-        { error: 'Rate limit exceeded. Please retry shortly.' },
-        { status: 429 }
+        { error: 'Unauthorized. Valid session token required.' },
+        { status: 401 }
       );
     }
 
     // -------------------------------------------------------------------------
-    // PHASE 3: Extract BYOK header and log request
+    // PHASE 3: Rate limiting check (BYOK status already captured above)
     // -------------------------------------------------------------------------
-    const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+
+    // -------------------------------------------------------------------------
+    // PHASE 4: Rate limiting check (skipped for BYOK via shared rate limiter)
+    // -------------------------------------------------------------------------
+    const rateLimitResult = await checkRateLimit(request, identity);
+    if (!rateLimitResult.allowed) {
+      logRouteFailure({
+        route: '/api/analyze-chunk',
+        category: 'rate_limited',
+        statusCode: 429,
+        retryable: true,
+        providerType: hasCustomKey ? 'byok' : 'unknown',
+        context: `retryAfter=${rateLimitResult.retryAfter}`,
+      });
+      return jsonWithCors(
+        request,
+        { error: 'Rate limit exceeded. Please retry shortly.' },
+        { status: 429, headers: { 'Retry-After': String(rateLimitResult.retryAfter) } }
+      );
+    }
 
     console.log('[analyze-chunk] Request:', {
       videoId: parsedBody.videoId,
@@ -495,7 +512,7 @@ export async function POST(request: NextRequest) {
     });
 
     // -------------------------------------------------------------------------
-    // PHASE 4: Build prompt
+    // PHASE 5: Build prompt
     // -------------------------------------------------------------------------
     const combinedText = parsedBody.chunks.map((chunk) => chunk.text).join('\n\n');
     const approximateTimestamp = parsedBody.chunks[0].startTime;
@@ -508,7 +525,7 @@ export async function POST(request: NextRequest) {
     );
 
     // -------------------------------------------------------------------------
-    // PHASE 5: Call Gemini
+    // PHASE 6: Call Gemini
     // -------------------------------------------------------------------------
     const {
       data: rawExtraction,
@@ -523,7 +540,7 @@ export async function POST(request: NextRequest) {
     );
 
     // -------------------------------------------------------------------------
-    // PHASE 6: Normalize entities
+    // PHASE 7: Normalize entities
     // -------------------------------------------------------------------------
     const entities = Array.isArray(rawExtraction?.entities)
       ? rawExtraction.entities.filter(
@@ -533,7 +550,7 @@ export async function POST(request: NextRequest) {
       : [];
 
     // -------------------------------------------------------------------------
-    // PHASE 7: Normalize claims
+    // PHASE 8: Normalize claims
     // -------------------------------------------------------------------------
     const {
       hasClaim,
@@ -548,7 +565,7 @@ export async function POST(request: NextRequest) {
     }
 
     // -------------------------------------------------------------------------
-    // PHASE 8: Build and return response
+    // PHASE 9: Build and return response
     // -------------------------------------------------------------------------
     console.info('[analyze-chunk]', {
       videoId: parsedBody.videoId,
@@ -583,6 +600,29 @@ export async function POST(request: NextRequest) {
       stack: error instanceof Error ? error.stack : 'N/A',
     });
 
+    // Log provider errors via observability layer
+    if (isGeminiError(error)) {
+      const category = classifyGeminiErrorCode(error.code);
+      logProviderError({
+        category,
+        route: '/api/analyze-chunk',
+        model: body?.model,
+        providerType: customApiKey ? 'byok' : 'gemini',
+        retryable: isRetryableCategory(category),
+        context: `code=${error.code}`,
+      });
+    } else {
+      logRouteFailure({
+        route: '/api/analyze-chunk',
+        category: 'internal_error',
+        statusCode: 500,
+        model: body?.model,
+        providerType: customApiKey ? 'byok' : 'gemini',
+        retryable: false,
+        context: error instanceof Error ? error.name : 'unknown error',
+      });
+    }
+
     // PARSE_ERROR: Surface distinct state for model output failures
     if (body && isGeminiError(error) && error.code === 'PARSE_ERROR') {
       console.warn('[analyze-chunk] PARSE_ERROR — model output failed validation.', {
@@ -605,6 +645,15 @@ export async function POST(request: NextRequest) {
       return jsonWithCors(
         request,
         { error: 'Rate limited. Please wait a moment and try again.' },
+        { status: 429 }
+      );
+    }
+
+    // QUOTA_EXHAUSTED: Return 429 with specific message
+    if (isGeminiError(error) && error.code === 'QUOTA_EXHAUSTED') {
+      return jsonWithCors(
+        request,
+        { error: 'API quota exhausted. Please try again later or add your own API key in settings.', errorCode: 'QUOTA_EXHAUSTED' },
         { status: 429 }
       );
     }

@@ -124,8 +124,9 @@ export function buildGroundedVerificationPrompt(
   claimType: string,
   contextTranscript?: string
 ): string {
+  const MAX_CONTEXT_TRANSCRIPT_LENGTH = 800;
   const contextSection = contextTranscript 
-    ? `\n<transcript_context>\n${contextTranscript.slice(-800)}\n</transcript_context>\nUse this transcript context to understand the claim's subject and context, but verify using live web search.` 
+    ? `\n<transcript_context>\n${contextTranscript.slice(-MAX_CONTEXT_TRANSCRIPT_LENGTH)}\n</transcript_context>\nUse this transcript context to understand the claim's subject and context, but verify using live web search.` 
     : '';
 
   return `You are the verification engine for SourceCheck, a YouTube fact-checking side panel.

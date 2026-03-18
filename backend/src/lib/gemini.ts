@@ -1,11 +1,9 @@
-// Single canonical default - must be in ALLOWED_MODELS
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+import { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel, type GeminiModelOption } from '../types-shared';
+
 const DEFAULT_THINKING_BUDGET = 128;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-
-const getModel = () => process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 
 const getRequestTimeoutMs = () => {
   const configured = process.env.GEMINI_REQUEST_TIMEOUT_MS?.trim();
@@ -542,23 +540,6 @@ export async function askGeminiWithSearch(
   return callGemini(prompt, maxTokens, true, options);
 }
 
-// Allowed models for security - prevents abuse of expensive models
-const ALLOWED_MODELS = [
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.5-pro',
-];
-
-// Freemium tier model restrictions
-// Free tier: only light/fast models; Pro tier: all models
-const FREE_TIER_MODELS = [
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-2.5-flash',
-];
-const PRO_TIER_MODELS = ALLOWED_MODELS; // Pro gets all allowed models
-
 // Default tiers - in production, this would come from auth/subscription system
 function getTierForRequest(_identity?: string): 'free' | 'pro' {
   // TODO: Integrate with actual subscription/auth system
@@ -567,10 +548,34 @@ function getTierForRequest(_identity?: string): 'free' | 'pro' {
 }
 
 /**
- * Get allowed models for a given tier.
+ * Validate and get the effective model for a request.
+ * 
+ * POLICY ENFORCEMENT:
+ * - Freemium/trial/managed tier: ONLY gemini-2.5-flash-lite is allowed
+ * - BYOK mode: User can select any model from ALLOWED_MODELS
+ * - Invalid/stale models are normalized to the freemium default
  */
-export function getModelsForTier(tier: 'free' | 'pro'): string[] {
-  return tier === 'pro' ? PRO_TIER_MODELS : FREE_TIER_MODELS;
+function getEffectiveModel(
+  requestedModel: string | undefined,
+  tier: 'free' | 'pro',
+  customApiKey: string | undefined
+): GeminiModelOption {
+  // Normalize the requested model (handles null/undefined and stale values)
+  const normalizedRequested = normalizeModel(requestedModel);
+  
+  // Freemium/trial/managed tier: HARD LOCK to freemium model only
+  // This cannot be overridden by client request
+  if (tier === 'free' && !customApiKey) {
+    if (requestedModel && normalizedRequested !== FREEMIUM_MODEL) {
+      console.warn(
+        `[model-policy] Freemium tier requested '${requestedModel}' but hard-locked to '${FREEMIUM_MODEL}'`
+      );
+    }
+    return FREEMIUM_MODEL;
+  }
+  
+  // BYOK mode: Allow any valid model from ALLOWED_MODELS
+  return normalizedRequested;
 }
 
 /**
@@ -585,37 +590,17 @@ async function callGemini(
   // Use custom API key if provided (BYOK), otherwise use environment key
   const apiKey = options.customApiKey || process.env.GEMINI_API_KEY;
   
-  // Security: Validate model against whitelist and tier restrictions
-  const requestedModel = options.model || getModel();
+  // Determine tier and validate model per policy
   const tier = options.tier || getTierForRequest();
-  const allowedForTier = getModelsForTier(tier);
+  const model = getEffectiveModel(options.model, tier, options.customApiKey);
   
-  // First check: model must be in global allowlist
-  let model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
-  
-  // Second check: model must be allowed for user's tier
-  if (!allowedForTier.includes(model)) {
-    // Fall back to first allowed model for this tier
-    const fallbackModel = allowedForTier[0] || DEFAULT_MODEL;
-    console.warn(
-      `[gemini.ts] Model '${model}' not allowed for ${tier} tier, falling back to '${fallbackModel}'`
-    );
-    model = fallbackModel;
-  }
-  
-  // DEBUG: Log model selection process
   console.log('[gemini.ts] Model selection:', {
-    requestedModel,
-    afterAllowlistCheck: ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL,
+    requestedModel: options.model,
     finalModel: model,
-    inAllowedModels: ALLOWED_MODELS.includes(requestedModel),
-    inTierModels: allowedForTier.includes(model),
     tier,
+    isBYOK: !!options.customApiKey,
   });
   
-  if (requestedModel !== model) {
-    console.warn(`[gemini.ts] Invalid/tier-restricted model '${requestedModel}' requested, using '${model}'`);
-  }
   const thinkingBudget = getThinkingBudget(model);
   const requestTimeoutMs = getRequestTimeoutMs();
 
@@ -789,7 +774,7 @@ async function callGemini(
       clearTimeout(timeoutId);
     }
   } catch (error: unknown) {
-    console.error("🔥🔥🔥 ACTUAL UPSTREAM GEMINI ERROR:", error instanceof Error ? error.message : error, JSON.stringify(error));
+    console.error('[gemini.ts] Upstream API error:', error instanceof Error ? error.message : String(error));
     
     if (isGeminiError(error)) {
       throw error;
@@ -863,3 +848,6 @@ export async function askGeminiJSONWithSearch<T = unknown>(
     sources: response.groundingMetadata?.sources || [],
   };
 }
+
+// Re-export policy constants for backend use
+export { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel };

@@ -341,7 +341,7 @@ async function authorizeExtensionServiceWorker(
   return verifyBearerSessionToken(request, extensionId, identity);
 }
 
-async function verifyBearerSessionToken(
+export async function verifyBearerSessionToken(
   request: NextRequest,
   extensionId: string,
   identity: string
@@ -380,10 +380,9 @@ export function isAllowedOrigin(origin: string, request: NextRequest) {
     return result;
   }
 
-  // Allow localhost and YouTube for content script requests
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
-    origin === 'https://www.youtube.com' ||
-    origin === 'https://youtube.com';
+  // Only allow localhost for development. YouTube origins are intentionally
+  // NOT allowed to prevent arbitrary JS on YouTube from minting session tokens.
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 
 export function isAllowedExtensionOrigin(extensionId: string, apiHostname: string) {
@@ -640,7 +639,10 @@ async function applyRateLimit(request: NextRequest, identity: string): Promise<b
   const cost = RATE_LIMIT_COST_BY_PATH[path] || 1;
   // Rate limit by IP to prevent one abusive user from throttling everyone
   // Only trust X-Forwarded-For when behind a known proxy (TRUSTED_PROXY_COUNT env var)
-  const trustedProxyCount = parseInt(process.env.TRUSTED_PROXY_COUNT || '0', 10);
+  const trustedProxyCount = Math.min(
+    10,
+    Math.max(0, parseInt(process.env.TRUSTED_PROXY_COUNT || '0', 10) || 0)
+  );
   let clientIp: string;
   
   if (trustedProxyCount > 0) {

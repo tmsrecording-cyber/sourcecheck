@@ -1,0 +1,15 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Segmented checkmark with hard edges - 4 solid colors -->
+  
+  <!-- Segment 1: Blue - upper left diagonal (start of check) -->
+  <path d="M12 55 L32 75 L42 65 L22 45 Z" fill="#4285F4"/>
+  
+  <!-- Segment 2: Red - middle diagonal (turn of check) -->
+  <path d="M32 75 L55 52 L65 62 L42 85 Z" fill="#EA4335"/>
+  
+  <!-- Segment 3: Yellow - lower middle diagonal -->
+  <path d="M55 52 L75 32 L85 42 L65 62 Z" fill="#FBBC05"/>
+  
+  <!-- Segment 4: Green - upper right diagonal (end of check) -->
+  <path d="M75 32 L88 19 L92 24 L85 42 Z" fill="#34A854"/>
+</svg>

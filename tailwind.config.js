@@ -34,6 +34,11 @@ export default {
           partial: '#FDE293',      // Google CLI Warning Yellow
           disputed: '#F28B82',     // Google CLI Error Red
           neutral: '#9AA0A6',      // Google CLI Neutral Gray
+          // Google Brand Colors (for logo/identity)
+          'google-blue': '#4285F4',
+          'google-red': '#EA4335',
+          'google-yellow': '#FBBC05',
+          'google-green': '#34A853',
         }
       },
       boxShadow: {

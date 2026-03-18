@@ -20,6 +20,8 @@ import {
   WorkerRuntimeState,
   DebugEvent,
   GeminiModelOption,
+  FREEMIUM_MODEL,
+  normalizeModel,
 } from '../../shared/types';
 import {
   API_BASE,
@@ -27,7 +29,17 @@ import {
   MIN_CONFIDENCE,
   REQUEST_TIMEOUT_MS,
 } from '../config';
-import { fetchWithBYOK } from './utils/api';
+import { 
+  fetchWithBYOK, 
+  getSessionToken, 
+  isTransientError, 
+  isNonRetryableErrorCode,
+  classifyError,
+  broadcastProviderError,
+  shouldShowSettings,
+  type ClassifiedError,
+} from './utils/api';
+import { logTranscriptFailure, logProviderError, logRetryExhausted } from './telemetry';
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
 
@@ -36,7 +48,7 @@ const STARTUP_BACKFILL_SECONDS = 120;   // on first run, scan the last 2 min of 
 const MAX_VERIFICATION_RETRIES = 2;
 const MAX_CONCURRENT_VERIFICATIONS = 2;
 const PLAYHEAD_LEASH_SECONDS = 15;
-const MAX_SOURCE_CARDS = 150;
+const MAX_SOURCE_CARDS = 20;  // Aligned with backend ask-video limit
 const MAX_PENDING_CLAIMS = 100;      // Prevent unbounded growth during long videos
 const MAX_VERIFICATION_QUEUE = 50;   // Limit queued verifications
 const TRANSCRIPT_LOAD_TIMEOUT_MS = 65_000;
@@ -191,7 +203,8 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
   eventLog: [],
-  selectedModel: 'gemini-3.1-flash-lite',
+  // MODEL POLICY: Freemium/trial/managed tier always uses FREEMIUM_MODEL
+  selectedModel: FREEMIUM_MODEL,
 };
 
 let runtimeState: WorkerRuntimeState = { ...INITIAL_RUNTIME_STATE };
@@ -481,70 +494,8 @@ const abortActiveRequests = () => {
   activeRequestControllers.clear();
 };
 
-// Session token — backend-issued, stored per browser session.
-// Lazily acquired on the first API call; cleared when the browser closes
-// (chrome.storage.session lifetime).
-let cachedSessionToken: string | null = null;
-// In-flight registration promise — deduplicates concurrent callers so only
-// one /api/session/init request is ever sent at a time.
-let pendingSessionTokenRequest: Promise<string | null> | null = null;
-
-const getSessionToken = async (): Promise<string | null> => {
-  if (cachedSessionToken !== null) {
-    return cachedSessionToken || null;
-  }
-
-  // Dedup: if a registration request is already in flight, wait for it.
-  if (pendingSessionTokenRequest !== null) {
-    return pendingSessionTokenRequest;
-  }
-
-  pendingSessionTokenRequest = (async () => {
-    // Try session storage first (survives SW termination within a browser session).
-    try {
-      const stored = await chrome.storage.session.get(['apiSessionToken']);
-      if (stored.apiSessionToken && typeof stored.apiSessionToken === 'string') {
-        cachedSessionToken = stored.apiSessionToken;
-        return cachedSessionToken;
-      }
-    } catch {
-      // Session storage unavailable — fall through to registration.
-    }
-
-    // Request a token from the backend. The backend validates the extension ID
-    // via ALLOWED_EXTENSION_IDS and signs the token with SESSION_SECRET.
-    try {
-      const res = await fetch(`${API_BASE}/api/session/init`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Extension-Id': chrome.runtime.id,
-        },
-        body: JSON.stringify({ extensionId: chrome.runtime.id }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const token: string = typeof data.token === 'string' ? data.token : '';
-        cachedSessionToken = token;
-        if (token) {
-          await chrome.storage.session.set({ apiSessionToken: token }).catch(() => {});
-        }
-        return token || null;
-      }
-    } catch {
-      // Backend unreachable or init failed — proceed without a token.
-      // On localhost (no SESSION_SECRET), the proxy allows tokenless requests.
-    }
-
-    cachedSessionToken = '';
-    return null;
-  })().finally(() => {
-    pendingSessionTokenRequest = null;
-  });
-
-  return pendingSessionTokenRequest;
-};
+// Session token handling is consolidated in utils/api.ts
+// IMPORTED: getSessionToken, isTransientError from './utils/api'
 
 const buildApiHeaders = async (url: string, init: RequestInit = {}) => {
   const mergedHeaders = new Headers(init.headers);
@@ -712,6 +663,49 @@ const hasConcreteTranscriptFailure = (value: TranscriptDebugState) =>
   value.reason !== 'caption-tracks-found' &&
   value.reason !== 'loaded';
 
+/**
+ * Sanitize debug log messages to remove sensitive URL data (signed URLs, query tokens).
+ * Keeps useful debugging info like hostnames and paths, removes query strings and signatures.
+ */
+const sanitizeDebugMessage = (message: string): string => {
+  if (!message) return message;
+  
+  // Remove full URLs with query strings (common transcript fetch URLs contain signatures)
+  // Pattern: https://.../?... or https://...?...
+  let sanitized = message;
+  
+  // Replace YouTube transcript URLs (googlevideo.com with signatures)
+  // Keep the hostname and path structure, redact query
+  const googleVideoPattern = /https?:\/\/[^\s"]+googlevideo\.com[^\s"]*/gi;
+  sanitized = sanitized.replace(googleVideoPattern, (match) => {
+    try {
+      const url = new URL(match);
+      // Keep protocol, hostname, and first path segment; redact rest
+      const pathParts = url.pathname.split('/').filter(Boolean);
+      const shortPath = pathParts.length > 0 ? `/${pathParts[0]}/...` : '';
+      return `[redacted: ${url.hostname}${shortPath}]`;
+    } catch {
+      return '[redacted-url]';
+    }
+  });
+  
+  // Replace any remaining URLs that might contain tokens
+  const genericUrlPattern = /https?:\/\/[^\s"]+[?&](?:token|sig|signature|key|auth)=[^\s"]*/gi;
+  sanitized = sanitized.replace(genericUrlPattern, '[redacted-url]');
+  
+  // Redact base64-like strings that could be tokens (40+ chars of base64)
+  const base64TokenPattern = /[A-Za-z0-9+/]{40,}={0,2}/g;
+  sanitized = sanitized.replace(base64TokenPattern, (match) => {
+    // Only redact if it looks like a token (contains chars typical of signatures)
+    if (/[A-Z]/.test(match) && /[a-z]/.test(match) && /\d/.test(match)) {
+      return `[token:${match.slice(0, 4)}...]`;
+    }
+    return match;
+  });
+  
+  return sanitized;
+};
+
 const sanitizeTranscriptFetchDebugEntry = (
   value: Partial<TranscriptFetchDebugEntry> | null | undefined,
 ): TranscriptFetchDebugEntry | null => {
@@ -723,7 +717,9 @@ const sanitizeTranscriptFetchDebugEntry = (
   const step = typeof value.step === 'string' && value.step.trim()
     ? value.step.trim() as TranscriptFetchDebugEntry['step']
     : null;
-  const message = typeof value.message === 'string' ? value.message.trim() : '';
+  // Sanitize message to remove sensitive URL data before persistence
+  const rawMessage = typeof value.message === 'string' ? value.message.trim() : '';
+  const message = sanitizeDebugMessage(rawMessage);
   const at = typeof value.at === 'number' && Number.isFinite(value.at) ? value.at : Date.now();
 
   if (!source || !step || !message) {
@@ -1040,43 +1036,49 @@ const hasQueuedVerificationForKey = (key: string) =>
 
 // Near-duplicate detection: check if a very similar claim was recently checked
 // Uses normalized text comparison within a time window
+// PERFORMANCE: normalized text is cached in PendingClaimPreview to avoid repeated regex work
+const getNormalizedClaimText = (text: string): string =>
+  text.toLowerCase().replace(/[^a-z0-9]/g, '');
+
 const isNearDuplicate = (claim: ExtractedClaim): boolean => {
   const DUPLICATE_WINDOW_SECONDS = 120; // 2 minutes
-  const normalizedClaimText = claim.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
-  
-  // Check existing source cards
+  const normalizedClaimText = getNormalizedClaimText(claim.claimText);
+
+  // Helper to check similarity - shared 80%+ of normalized text
+  const isSimilar = (normalizedOther: string): boolean => {
+    const longer = Math.max(normalizedClaimText.length, normalizedOther.length);
+    const shorter = Math.min(normalizedClaimText.length, normalizedOther.length);
+    return shorter > 0 && (shorter / longer) > 0.8;
+  };
+
+  // Check existing source cards (bounded to MAX_SOURCE_CARDS = 20)
   const recentCard = allSourceCards.find((card) => {
     const timeDiff = Math.abs(card.claim.timestampSeconds - claim.timestampSeconds);
     if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
-    const normalizedCardText = card.claim.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
-    // High similarity: shared 80%+ of normalized text
-    const longer = Math.max(normalizedClaimText.length, normalizedCardText.length);
-    const shorter = Math.min(normalizedClaimText.length, normalizedCardText.length);
-    return shorter > 0 && (shorter / longer) > 0.8;
+    const normalizedCardText = getNormalizedClaimText(card.claim.claimText);
+    return isSimilar(normalizedCardText);
   });
   if (recentCard) return true;
-  
-  // Check pending claims
+
+  // Check pending claims (bounded to MAX_PENDING_CLAIMS = 100)
+  // Uses cached normalized text if available for performance
   const recentPending = allPendingClaims.find((pending) => {
     const timeDiff = Math.abs(pending.timestampSeconds - claim.timestampSeconds);
     if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
-    const normalizedPendingText = pending.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const longer = Math.max(normalizedClaimText.length, normalizedPendingText.length);
-    const shorter = Math.min(normalizedClaimText.length, normalizedPendingText.length);
-    return shorter > 0 && (shorter / longer) > 0.8;
+    const normalizedPendingText = pending.normalizedClaimText ??
+      getNormalizedClaimText(pending.claimText);
+    return isSimilar(normalizedPendingText);
   });
   if (recentPending) return true;
-  
-  // Check verification queue
+
+  // Check verification queue (bounded to MAX_VERIFICATION_QUEUE = 50)
   const recentQueued = verificationQueue.find((item) => {
     const timeDiff = Math.abs(item.claim.timestampSeconds - claim.timestampSeconds);
     if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
-    const normalizedQueuedText = item.claim.claimText.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const longer = Math.max(normalizedClaimText.length, normalizedQueuedText.length);
-    const shorter = Math.min(normalizedClaimText.length, normalizedQueuedText.length);
-    return shorter > 0 && (shorter / longer) > 0.8;
+    const normalizedQueuedText = getNormalizedClaimText(item.claim.claimText);
+    return isSimilar(normalizedQueuedText);
   });
-  
+
   return !!recentQueued;
 };
 
@@ -1188,9 +1190,12 @@ const getVerificationSkipReason = (claim: ExtractedClaim) => {
 
 const upsertPendingClaim = (claim: ExtractedClaim, state: PendingClaimPreview['state']) => {
   const key = getClaimKey(claim);
+  // PERFORMANCE: Cache normalized text to avoid repeated regex in isNearDuplicate
+  const normalizedClaimText = getNormalizedClaimText(claim.claimText);
   const nextPreview: PendingClaimPreview = {
     id: key, claimText: claim.claimText, claimType: claim.claimType,
     timestampSeconds: claim.timestampSeconds, confidence: claim.confidence, state,
+    normalizedClaimText,
   };
   const existingIndex = allPendingClaims.findIndex((pendingClaim) => pendingClaim.id === key);
   if (existingIndex === -1) {
@@ -1222,9 +1227,27 @@ const markTranscriptUnavailable = () => {
   pendingTranscriptBuffer = null;
   persistPendingTranscriptBufferNow();
   currentTranscript = [];
+  
+  // Log transcript failure for observability
   if (!hasConcreteTranscriptFailure(transcriptDebug)) {
     transcriptDebug = { ...transcriptDebug, reason: 'timeout' };
+    logTranscriptFailure({
+      category: 'transcript_unavailable',
+      context: 'timeout',
+    });
+  } else if (transcriptDebug.reason) {
+    const failureCategory: 'transcript_fetch_failed' | 'transcript_unavailable' | 'transcript_parse_failed' =
+      transcriptDebug.reason === 'fetch-failed' ? 'transcript_fetch_failed' :
+      transcriptDebug.reason === 'parse-error' || transcriptDebug.reason === 'parse-threw' ? 'transcript_parse_failed' :
+      'transcript_unavailable';
+    
+    logTranscriptFailure({
+      category: failureCategory,
+      source: transcriptDebug.source ?? undefined,
+      context: transcriptDebug.reason,
+    });
   }
+  
   currentScanPreview = null;
   currentScanEntities = [];
   currentScanActionState = null;
@@ -1490,7 +1513,8 @@ const hydrateState = async () => {
           // Restore selectedModel from sync storage if not in session
           // Validate against allowed models to prevent corrupted values
           selectedModel: (() => {
-            const VALID_MODELS: GeminiModelOption[] = ['gemini-3.1-flash-lite', 'gemini-3-flash', 'gemini-2.5-flash-lite'];
+            // MODEL POLICY: All valid models must be from ALLOWED_MODELS in shared/types.ts
+const VALID_MODELS: GeminiModelOption[] = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-preview'];
             const model = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
             return (VALID_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
           })(),
@@ -1723,13 +1747,17 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       return;
     }
     
-    // Extract error code if available
+    // UNIFIED ERROR CLASSIFICATION: All errors flow through classifyError for consistency
     const errorCode = (error as Error & { errorCode?: string }).errorCode;
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStatus = (error as Error & { status?: number }).status;
+    const classifiedError = classifyError(error, { 
+      errorCode, 
+      status: errorStatus,
+      url: '/api/verify-claim'
+    });
     
-    // Check if this is a non-retryable error
-    const nonRetryableCodes = ['AUTH_ERROR', 'QUOTA_EXHAUSTED'];
-    const isNonRetryable = errorCode && nonRetryableCodes.includes(errorCode);
+    // Check if this is a non-retryable error using shared classification
+    const isNonRetryable = !classifiedError.retryable;
     
     // Only retry if it's a potentially transient error
     if (!isNonRetryable) {
@@ -1742,23 +1770,28 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) return;
     console.error('[SourceCheck/SW] Verification queue error after retries:', summarizeErrorForLog(error));
     
-    // Determine user-facing error message based on error type
-    let errorTitle = 'Check failed';
-    let errorNuance = 'Verification temporarily unavailable. The claim was saved and will retry automatically.';
+    // Log retry exhaustion for observability (uses canonical classification)
+    logRetryExhausted({
+      category: classifiedError.code === 'QUOTA_EXHAUSTED' ? 'provider_quota_exhausted' 
+        : classifiedError.code === 'AUTH_ERROR' || classifiedError.code === 'INVALID_API_KEY' ? 'provider_auth_error'
+        : classifiedError.code === 'RATE_LIMITED' ? 'rate_limited'
+        : 'verify_failed',
+      route: '/api/verify-claim',
+      attempts: MAX_VERIFICATION_RETRIES + 1,
+      context: classifiedError.code,
+    });
     
-    if (errorCode === 'QUOTA_EXHAUSTED' || errorMessage.includes('quota')) {
-      errorTitle = 'API quota exhausted';
-      errorNuance = 'Daily API quota reached. Try again tomorrow or add your own API key in settings.';
-    } else if (errorCode === 'AUTH_ERROR' || errorMessage.includes('API key') || errorMessage.includes('auth')) {
-      errorTitle = 'API key invalid';
-      errorNuance = 'The API key is invalid or expired. Check your settings and update your Google AI Studio key.';
-    } else if (errorCode === 'RATE_LIMITED' || errorMessage.includes('rate limit')) {
-      errorTitle = 'Rate limited';
-      errorNuance = 'Too many requests. Waiting a moment before retrying.';
-    } else if (isNonRetryable) {
-      errorTitle = 'Cannot verify';
-      errorNuance = 'This claim cannot be verified due to API restrictions. Try a different video or check settings.';
-    }
+    // Broadcast error to sidepanel for unified UI handling (fire-and-forget, has internal try-catch)
+    void broadcastProviderError(classifiedError).catch(() => {});
+    
+    // Use classified error for user-facing messages (consistent across all paths)
+    const errorTitle = classifiedError.code === 'QUOTA_EXHAUSTED' ? 'API quota exhausted'
+      : classifiedError.code === 'AUTH_ERROR' || classifiedError.code === 'INVALID_API_KEY' ? 'API key invalid'
+      : classifiedError.code === 'RATE_LIMITED' ? 'Rate limited'
+      : classifiedError.code === 'NETWORK_ERROR' ? 'Network error'
+      : 'Check failed';
+    
+    const errorNuance = classifiedError.message;
     
     // Check if we already have a failure card for this claim to avoid duplicates
     const existingFailureCard = allSourceCards.find(
@@ -2124,7 +2157,9 @@ const processPlayback = async (currentTime: number) => {
     dispatch({ type: 'ANALYZE_COMPLETED', claimCount: 0 });
     persistPanelState();
   } finally {
-    if (runGeneration === processingGeneration) isProcessing = false;
+    // Always reset isProcessing to prevent pipeline deadlock.
+    // The runGeneration check prevents duplicate work, not cleanup.
+    isProcessing = false;
   }
 };
 

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { ChevronDown, Zap, Brain, Cpu } from 'lucide-react';
-import type { GeminiModelOption, ModelConfig } from '../../../shared/types';
-import { AVAILABLE_MODELS } from '../../../shared/types';
+import type { GeminiModelOption } from '../../../shared/types';
+import { AVAILABLE_MODELS, FREEMIUM_MODEL, normalizeModel } from '../../../shared/types';
 
 interface ModelPickerProps {
   selectedModel: GeminiModelOption;
@@ -10,14 +10,21 @@ interface ModelPickerProps {
 
 const MODEL_ICONS: Record<GeminiModelOption, React.ReactNode> = {
   'gemini-3.1-flash-lite': <Zap size={12} />,
-  'gemini-3-flash': <Brain size={12} />,
+  'gemini-3-preview': <Brain size={12} />,
   'gemini-2.5-flash-lite': <Cpu size={12} />,
 };
 
-const SPEED_LABELS: Record<ModelConfig['speed'], string> = {
+const SPEED_LABELS: Record<'fast' | 'balanced' | 'deep', string> = {
   fast: 'Fastest',
   balanced: 'Balanced',
   deep: 'Deep',
+};
+
+/** Compact display labels for header - canonical model IDs unchanged */
+const COMPACT_LABELS: Record<GeminiModelOption, string> = {
+  'gemini-3.1-flash-lite': '3.1 Lite',
+  'gemini-3-preview': '3 Preview',
+  'gemini-2.5-flash-lite': '2.5 Lite',
 };
 
 export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) => {
@@ -61,7 +68,7 @@ export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) 
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="h-[26px] px-3 text-[11px] font-mono tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded text-sc-text-soft transition-colors flex items-center gap-2 focus:outline-none focus-visible:ring-0"
+        className="h-[28px] px-2.5 text-[11px] font-medium tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded-md text-sc-text-soft transition-all duration-150 flex items-center gap-1.5 focus:outline-none focus-visible:ring-0 whitespace-nowrap flex-shrink-0 min-w-0"
         style={{ '--model-accent-rgb': selectedModel === 'gemini-3.1-flash-lite' ? '168, 199, 250' : '215, 174, 251' } as React.CSSProperties}
         onMouseEnter={(e) => {
           e.currentTarget.style.boxShadow = '0 0 8px rgba(var(--model-accent-rgb), 0.3)';
@@ -76,8 +83,8 @@ export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) 
         <span className="text-sc-accent">
           {MODEL_ICONS[selectedModel]}
         </span>
-        <span>
-          {currentModel.label}
+        <span className="whitespace-nowrap overflow-hidden text-ellipsis max-w-[80px]">
+          {COMPACT_LABELS[selectedModel]}
         </span>
         <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
@@ -133,20 +140,24 @@ export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) 
 
 // Standalone version for backward compatibility (uses default props)
 export const ModelPickerStandalone = () => {
-  const [selectedModel, setSelectedModel] = useState<GeminiModelOption>('gemini-3.1-flash-lite');
+  // MODEL POLICY: Always normalize saved model to allowed values
+  const [selectedModel, setSelectedModel] = useState<GeminiModelOption>(FREEMIUM_MODEL);
   
   // Load saved model preference on mount
   useEffect(() => {
     chrome.storage.sync.get('selectedModel').then((result) => {
-      if (result.selectedModel && AVAILABLE_MODELS.some(m => m.id === result.selectedModel)) {
-        setSelectedModel(result.selectedModel as GeminiModelOption);
-      }
+      const normalizedModel = normalizeModel(result.selectedModel);
+      setSelectedModel(normalizedModel);
+    }).catch(() => {
+      // Ignore storage read errors (e.g., extension context invalidated)
     });
   }, []);
 
   const handleModelChange = useCallback((model: GeminiModelOption) => {
     setSelectedModel(model);
-    chrome.storage.sync.set({ selectedModel: model });
+    chrome.storage.sync.set({ selectedModel: model }).catch(() => {
+      // Ignore storage write errors (e.g., extension context invalidated)
+    });
     
     // Notify background worker of model change
     chrome.runtime.sendMessage({

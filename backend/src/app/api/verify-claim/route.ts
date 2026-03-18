@@ -1,7 +1,13 @@
+// Force Node.js runtime - Redis rate limiting requires Node.js APIs
+export const runtime = 'nodejs';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSONWithSearch, isGeminiError } from '@/lib/gemini';
 import { buildGroundedVerificationPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
+import { verifyBearerSessionToken } from '@/proxy';
+import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
+import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
 import type {
   VerifyClaimRequest,
   VerifyClaimResponse,
@@ -250,10 +256,16 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  let body: VerifyClaimRequest | null = null;
+  // Declare outside try for error handling access
+  const extensionId = request.headers.get('x-extension-id')?.trim() || '';
+  const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+  
   try {
-    const body: VerifyClaimRequest = await request.json();
+    const parsedBody: VerifyClaimRequest = await request.json();
+    body = parsedBody;
 
-    const validationError = validateVerifyClaimRequest(body);
+    const validationError = validateVerifyClaimRequest(parsedBody);
     if (validationError) {
       const response = NextResponse.json(
         { error: validationError },
@@ -263,10 +275,42 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const { claim, contextTranscript } = body;
+    // Session authentication
+    const identity = extensionId ? `ext:${extensionId}` : 'unknown';
+    const sessionAuth = await verifyBearerSessionToken(request, extensionId, identity);
+    
+    if (!sessionAuth.authorized) {
+      logRouteFailure({
+        route: '/api/verify-claim',
+        category: 'auth_error',
+        statusCode: 401,
+        retryable: false,
+        context: 'session token invalid or missing',
+      });
+      const response = NextResponse.json(
+        { error: 'Unauthorized. Valid session token required.' },
+        { status: 401 }
+      );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
 
-    // Extract BYOK header - user can provide their own API key
-    const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+    // Rate limiting check
+    const rateLimitResult = await checkRateLimit(request, identity);
+    if (!rateLimitResult.allowed) {
+      logRouteFailure({
+        route: '/api/verify-claim',
+        category: 'rate_limited',
+        statusCode: 429,
+        retryable: true,
+        context: `retryAfter=${rateLimitResult.retryAfter}`,
+      });
+      const response = createRateLimitResponse(request, rateLimitResult.retryAfter);
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
+
+    const { claim, contextTranscript } = parsedBody;
 
     // ---- Single Gemini call with Google Search grounding ----
     // Gemini searches the web automatically and returns both
@@ -387,6 +431,29 @@ export async function POST(request: NextRequest) {
       code: isGeminiError(error) ? error.code : undefined,
       status: isGeminiError(error) ? error.status : undefined,
     });
+
+    // Log provider errors via observability layer
+    if (isGeminiError(error)) {
+      const category = classifyGeminiErrorCode(error.code);
+      logProviderError({
+        category,
+        route: '/api/verify-claim',
+        model: body?.model,
+        providerType: customApiKey ? 'byok' : 'gemini',
+        retryable: isRetryableCategory(category),
+        context: `code=${error.code}`,
+      });
+    } else {
+      logRouteFailure({
+        route: '/api/verify-claim',
+        category: 'internal_error',
+        statusCode: 500,
+        model: body?.model,
+        providerType: customApiKey ? 'byok' : 'gemini',
+        retryable: false,
+        context: error instanceof Error ? error.name : 'unknown error',
+      });
+    }
 
     // Pass error classification to frontend for better UX
     if (isGeminiError(error)) {

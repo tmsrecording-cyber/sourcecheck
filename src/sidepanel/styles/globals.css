@@ -4,42 +4,48 @@
 @tailwind utilities;
 
 :root {
-  /* GEMINI CLI COLOR PALETTE - BASELINE */
-  --sc-bg-0: #131314;
-  --sc-bg-1: #1e1f20;
-  --sc-bg-2: #282a2d;
-  --sc-surface-0: rgba(30, 31, 32, 0.95);
-  --sc-surface-1: rgba(40, 42, 45, 0.9);
-  --sc-surface-2: #3a3d42;
-  --sc-surface-glass: rgba(30, 31, 32, 0.85);
-  --sc-line: rgba(255, 255, 255, 0.08);
-  --sc-line-strong: rgba(255, 255, 255, 0.12);
-  --sc-border-soft: rgba(255, 255, 255, 0.06);
-  --sc-border: rgba(255, 255, 255, 0.1);
-  --sc-border-strong: rgba(255, 255, 255, 0.15);
+  /* GEMINI CLI COLOR PALETTE - ENHANCED CONTRAST */
+  --sc-bg-0: #0d0d0e;
+  --sc-bg-1: #18191a;
+  --sc-bg-2: #222426;
+  --sc-surface-0: rgba(26, 27, 28, 0.98);
+  --sc-surface-1: rgba(36, 38, 41, 0.95);
+  --sc-surface-2: #404449;
+  --sc-surface-glass: rgba(24, 25, 26, 0.92);
+  --sc-line: rgba(255, 255, 255, 0.1);
+  --sc-line-strong: rgba(255, 255, 255, 0.18);
+  --sc-border-soft: rgba(255, 255, 255, 0.08);
+  --sc-border: rgba(255, 255, 255, 0.14);
+  --sc-border-strong: rgba(255, 255, 255, 0.22);
   
-  /* GEMINI TEXT COLORS */
-  --sc-text: #E3E3E3;
-  --sc-text-soft: #B4B8BB;
-  --sc-muted: #9AA0A6;
-  --sc-text-faint: #6B7280;
+  /* GEMINI TEXT COLORS - ENHANCED */
+  --sc-text: #f0f0f0;
+  --sc-text-soft: #d0d5d8;  /* Slightly brighter for better readability */
+  --sc-muted: #b0b8bc;      /* Increased from #a8aeb4 for metadata clarity */
+  --sc-text-faint: #7a8290; /* Increased from #6b7280 for timestamps/source info */
   
-  /* GEMINI ACCENT COLORS */
-  --sc-accent: #A8C7FA;
-  --sc-accent-soft: rgba(168, 199, 250, 0.2);
-  --sc-purple: #D7AEFB;
-  --sc-purple-soft: rgba(215, 174, 251, 0.15);
+  /* GEMINI ACCENT COLORS - ENHANCED POP */
+  --sc-accent: #8ab4f8;
+  --sc-accent-soft: rgba(138, 180, 248, 0.25);
+  --sc-purple: #c9a8f7;
+  --sc-purple-soft: rgba(201, 168, 247, 0.2);
   
-  /* STATUS COLORS - derived */
-  --sc-supported: #81C995;
-  --sc-partial: #FDD663;
-  --sc-disputed: #F28B82;
-  --sc-neutral: #9AA0A6;
+  /* STATUS COLORS - ENHANCED */
+  --sc-supported: #7ee3a0;
+  --sc-partial: #fde68a;
+  --sc-disputed: #fca5a5;
+  --sc-neutral: #a8aeb4;
   
-  --sc-shadow-soft: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --sc-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
-  --sc-glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.08), inset 1px 0 0 0 rgba(255, 255, 255, 0.04);
-  --sc-hero-glow: 0 0 30px rgba(96, 165, 250, 0.2);
+  /* GOOGLE GEMINI BRAND COLORS - for logo/identity */
+  --sc-google-blue: #4285F4;
+  --sc-google-red: #EA4335;
+  --sc-google-yellow: #FBBC05;
+  --sc-google-green: #34A853;
+  
+  --sc-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --sc-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --sc-glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.1), inset 1px 0 0 0 rgba(255, 255, 255, 0.05);
+  --sc-hero-glow: 0 0 24px rgba(138, 180, 248, 0.25);
   
   /* Typography Scale - MV3 CSP-safe system fonts only */
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -302,13 +308,12 @@ body::before {
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    border-radius: 10px;
-    background: linear-gradient(180deg, rgba(35, 37, 41, 0.95), rgba(22, 23, 26, 0.98));
-    border: 1px solid var(--sc-border);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(38, 40, 44, 0.96), rgba(24, 25, 28, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.09);
     box-shadow: 
-      inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
-      inset 1px 0 0 0 rgba(255, 255, 255, 0.04),
-      0 6px 16px rgba(0, 0, 0, 0.4);
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.07),
+      0 8px 24px rgba(0, 0, 0, 0.45);
     transform-style: preserve-3d;
     perspective: 1200px;
   }
@@ -552,29 +557,33 @@ body::before {
 
   /* ── HUD Header ── */
   .hud-header {
-    background: linear-gradient(180deg, var(--sc-bg-1), var(--sc-bg-0));
+    background: linear-gradient(180deg, rgba(30, 32, 34, 0.98), rgba(18, 19, 20, 0.95));
     border-bottom: 1px solid var(--sc-border-soft);
     box-shadow: 
-      inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
-      0 3px 12px rgba(0, 0, 0, 0.4);
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+      0 4px 20px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
   }
 
   .tab-btn {
     font-family: var(--font-mono);
     font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
+    font-weight: 600;
+    letter-spacing: 0.06em;
     color: var(--sc-muted);
     position: relative;
     height: 100%;
     display: flex;
     align-items: center;
-    padding: 0 4px;
-    transition: color 0.15s ease;
+    padding: 0 8px;
+    transition: all 0.15s ease;
+    border-radius: 6px 6px 0 0;
+    margin: 0 1px;
   }
 
   .tab-btn:hover {
-    color: var(--sc-text-soft);
+    color: var(--sc-text);
+    background: rgba(255, 255, 255, 0.03);
   }
 
   .tab-btn:focus-visible {
@@ -586,16 +595,18 @@ body::before {
 
   .tab-btn.active {
     color: var(--sc-accent);
+    text-shadow: 0 0 12px rgba(138, 180, 248, 0.4);
   }
 
   .tab-indicator {
     position: absolute;
     bottom: 0;
-    left: 0;
-    right: 0;
+    left: 4px;
+    right: 4px;
     height: 2px;
-    background: linear-gradient(90deg, var(--sc-accent), var(--sc-accent-soft));
-    box-shadow: 0 0 10px rgba(96, 165, 250, 0.5);
+    background: linear-gradient(90deg, transparent, var(--sc-accent), transparent);
+    box-shadow: 0 0 12px rgba(138, 180, 248, 0.6);
+    border-radius: 1px;
   }
 
   /* ── Truth Score ── */
@@ -885,7 +896,7 @@ body::before {
   /* ── Tactile Header ── */
   .tactile-header {
     border-bottom: 1px solid transparent;
-    background: linear-gradient(180deg, var(--sc-bg-1), var(--sc-bg-0));
+    background: linear-gradient(180deg, rgba(28, 30, 32, 0.98), rgba(16, 17, 18, 0.95));
     position: relative;
   }
 
@@ -893,17 +904,18 @@ body::before {
     content: "";
     position: absolute;
     bottom: 0;
-    left: 0;
-    right: 0;
+    left: 8px;
+    right: 8px;
     height: 1px;
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(96, 165, 250, 0.3) 20%,
-      rgba(96, 165, 250, 0.5) 50%,
-      rgba(96, 165, 250, 0.3) 80%,
+      rgba(138, 180, 248, 0.25) 15%,
+      rgba(138, 180, 248, 0.45) 50%,
+      rgba(138, 180, 248, 0.25) 85%,
       transparent 100%
     );
+    pointer-events: none;
   }
 
   /* ── Typography System ── */

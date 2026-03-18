@@ -1,7 +1,13 @@
+// Force Node.js runtime - Redis rate limiting requires Node.js APIs
+export const runtime = 'nodejs';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
 import { buildVideoQuestionPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
+import { verifyBearerSessionToken } from '@/proxy';
+import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
+import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
 import type {
   AskQuestionResponse,
   AskQuestionSource,
@@ -193,10 +199,16 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  let body: AskVideoQuestionRequest | null = null;
+  // Declare outside try for error handling access
+  const extensionId = request.headers.get('x-extension-id')?.trim() || '';
+  const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+  
   try {
-    const body: AskVideoQuestionRequest = await request.json();
+    const parsedBody: AskVideoQuestionRequest = await request.json();
+    body = parsedBody;
 
-    const validationError = validateAskVideoRequest(body);
+    const validationError = validateAskVideoRequest(parsedBody);
     if (validationError) {
       const response = NextResponse.json(
         { error: validationError },
@@ -206,30 +218,62 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    // Extract BYOK header - user can provide their own API key
-    const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+    // Session authentication
+    const identity = extensionId ? `ext:${extensionId}` : 'unknown';
+    const sessionAuth = await verifyBearerSessionToken(request, extensionId, identity);
+    
+    if (!sessionAuth.authorized) {
+      logRouteFailure({
+        route: '/api/ask-video',
+        category: 'auth_error',
+        statusCode: 401,
+        retryable: false,
+        context: 'session token invalid or missing',
+      });
+      const response = NextResponse.json(
+        { error: 'Unauthorized. Valid session token required.' },
+        { status: 401 }
+      );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
+
+    // Rate limiting check
+    const rateLimitResult = await checkRateLimit(request, identity);
+    if (!rateLimitResult.allowed) {
+      logRouteFailure({
+        route: '/api/ask-video',
+        category: 'rate_limited',
+        statusCode: 429,
+        retryable: true,
+        context: `retryAfter=${rateLimitResult.retryAfter}`,
+      });
+      const response = createRateLimitResponse(request, rateLimitResult.retryAfter);
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
 
     const prompt = buildVideoQuestionPrompt({
-      question: body.question,
-      videoTitle: body.videoTitle || 'Unknown Video',
-      channelName: body.channelName || 'Unknown Channel',
-      currentTime: body.currentTime ?? null,
-      transcriptContext: body.transcriptContext || [],
-      sourceCards: body.sourceCards || [],
+      question: parsedBody.question,
+      videoTitle: parsedBody.videoTitle || 'Unknown Video',
+      channelName: parsedBody.channelName || 'Unknown Channel',
+      currentTime: parsedBody.currentTime ?? null,
+      transcriptContext: parsedBody.transcriptContext || [],
+      sourceCards: parsedBody.sourceCards || [],
     });
 
     const { data: rawAnswer } = await askGeminiJSON<RawAskVideoResponse>(
       prompt,
       900,
       ASK_VIDEO_SCHEMA,
-      body.model,  // Pass client-selected model
+      parsedBody.model,  // Pass client-selected model
       customApiKey  // BYOK: Pass user's API key if provided
     );
 
     const answer = typeof rawAnswer?.answer === 'string' && rawAnswer.answer.trim()
       ? rawAnswer.answer.trim().slice(0, MAX_ANSWER_LENGTH)
       : FALLBACK_ANSWER;
-    const sources = sanitizeSources(rawAnswer?.sources, body.sourceCards || []);
+    const sources = sanitizeSources(rawAnswer?.sources, parsedBody.sourceCards || []);
 
     const response = NextResponse.json<AskQuestionResponse>({
       answer,
@@ -244,9 +288,41 @@ export async function POST(request: NextRequest) {
       status: isGeminiError(error) ? error.status : undefined,
     });
 
+    // Log provider errors via observability layer
+    if (isGeminiError(error)) {
+      const category = classifyGeminiErrorCode(error.code);
+      logProviderError({
+        category,
+        route: '/api/ask-video',
+        model: body?.model,
+        providerType: customApiKey ? 'byok' : 'gemini',
+        retryable: isRetryableCategory(category),
+        context: `code=${error.code}`,
+      });
+    } else {
+      logRouteFailure({
+        route: '/api/ask-video',
+        category: 'internal_error',
+        statusCode: 500,
+        model: body?.model,
+        providerType: customApiKey ? 'byok' : 'gemini',
+        retryable: false,
+        context: error instanceof Error ? error.name : 'unknown error',
+      });
+    }
+
     if (isGeminiError(error) && error.code === 'RATE_LIMITED') {
       const response = NextResponse.json(
         { error: 'Rate limited. Please wait a moment and try again.' },
+        { status: 429 }
+      );
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
+
+    if (isGeminiError(error) && error.code === 'QUOTA_EXHAUSTED') {
+      const response = NextResponse.json(
+        { error: 'API quota exhausted. Please try again later or add your own API key in settings.', errorCode: 'QUOTA_EXHAUSTED' },
         { status: 429 }
       );
       Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));

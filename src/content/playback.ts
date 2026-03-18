@@ -100,6 +100,7 @@ export const stopPlaybackTracking = () => {
   if (trackedVideo && seekedListener) {
     trackedVideo.removeEventListener('seeked', seekedListener);
   }
+  stopVideoElementObserver();
   trackedVideo = null;
   timeUpdateListener = null;
   seekedListener = null;

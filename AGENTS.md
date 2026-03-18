@@ -72,6 +72,9 @@ SourceCheck is a Chrome browser extension that provides real-time fact-checking 
 │   ├── sidepanel/
 │   │   ├── App.tsx               # Side panel React app
 │   │   ├── components/           # UI components
+│   │   │   ├── SettingsPanel.tsx # API key configuration UI
+│   │   │   ├── ModelPicker.tsx   # Model selection dropdown
+│   │   │   └── ...
 │   │   ├── hooks/                # React hooks
 │   │   └── styles/               # Tailwind + custom CSS
 │   ├── manifest.ts               # MV3 manifest generator
@@ -282,6 +285,29 @@ Key prompts:
 - Custom design tokens in `tailwind.config.js` (sc-* colors)
 - Component-specific styles in `src/sidepanel/styles/`
 
+### Settings Panel (API Key Management)
+
+The settings panel (`SettingsPanel.tsx`) provides UI for users to configure their own Google AI Studio API key:
+
+**Key Features:**
+- **Status-aware UI**: Shows different states (missing/present/invalid/quota_exhausted) with color-coded indicators
+- **Show/hide toggle**: Eye icon to reveal/mask the API key input
+- **Inline validation**: Validates key format (must start with "AIza", minimum length)
+- **Key management**: Displays saved key (last 4 digits) with option to remove/update
+- **Auto-open on errors**: Settings panel automatically opens when AUTH_ERROR or QUOTA_EXHAUSTED errors occur
+- **Contextual help**: Shows troubleshooting tips specific to the current error state
+
+**User States:**
+1. **Missing key**: Yellow indicator, prompts to add key, shows setup instructions
+2. **Key present**: Green indicator, shows "API key configured", allows updating
+3. **Invalid key**: Red indicator, explains key may be expired, suggests waiting 2-3 min for activation
+4. **Quota exhausted**: Red indicator, explains free tier limits, suggests waiting or creating new project
+
+**Integration Points:**
+- Accessed via "Key" button in header (next to ModelPicker)
+- Service worker broadcasts `PROVIDER_ERROR` messages to auto-open on auth/quota issues
+- Settings stored in `chrome.storage.local` under `PROVIDER_SETTINGS_KEY`
+
 ## Common Tasks
 
 ### Adding a New API Endpoint
@@ -291,11 +317,31 @@ Key prompts:
 3. Add request/response types to `shared/types.ts`
 4. Call from extension via `fetchWithTimeout()`
 
-### Adding a New Gemini Model
+### Model Policy (Hard-Locked)
 
-1. Add to `ALLOWED_MODELS` in `backend/src/lib/gemini.ts`
-2. Add to `AVAILABLE_MODELS` in `shared/types.ts`
-3. Update tier restrictions if needed (`FREE_TIER_MODELS`, `PRO_TIER_MODELS`)
+The Gemini model configuration is **hard-locked** to prevent drift and ensure consistent behavior:
+
+**Allowed Models (canonical):**
+- `gemini-2.5-flash-lite` — Freemium/trial/managed default
+- `gemini-3.1-flash-lite` — BYOK alternative  
+- `gemini-3-preview` — BYOK alternative
+
+**Policy Rules:**
+1. Freemium/trial/managed tier → ONLY `gemini-2.5-flash-lite` (enforced server-side)
+2. BYOK (Bring Your Own Key) mode → User can select any of the 3 allowed models
+3. Stale/invalid saved model names are normalized to the freemium default via `normalizeModel()`
+
+**Source of Truth:**
+- Shared types: `shared/types.ts` exports `ALLOWED_MODELS`, `FREEMIUM_MODEL`, `BYOK_DEFAULT_MODEL`
+- Backend: Imports from `backend/src/types-shared.ts` (re-exports from shared)
+- Extension: Imports from `shared/types.ts`
+
+**Adding a New Model (requires explicit approval):**
+1. Add to `ALLOWED_MODELS` in `shared/types.ts` (and `backend/src/types-shared.ts`)
+2. Add to `AVAILABLE_MODELS` in shared types for UI display
+3. Update `GEMINI_MODELS` in `src/background/providers/types.ts`
+4. Update tier enforcement logic in `backend/src/lib/gemini.ts:getEffectiveModel()`
+5. Update model labels in `SettingsPanel.tsx` and icons in `ModelPicker.tsx`
 
 ### Modifying the State Machine
 

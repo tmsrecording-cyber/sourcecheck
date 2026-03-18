@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Added YouTube to the allowed origins
+// Only local dev origins and Chrome extensions allowed.
+// YouTube origins are NOT allowed for session minting - prevents arbitrary
+// JavaScript on YouTube pages from obtaining backend session tokens.
 const ALLOWED_HTTP_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000',
-  'https://www.youtube.com',
-  'https://youtube.com'
 ];
 
 function getAllowedExtensionIds(): Set<string> {
@@ -30,7 +30,8 @@ export function isAllowedOrigin(origin: string | null, request: NextRequest): bo
   if (!origin && isLocalhost(request)) return true;
   if (!origin) return false;
 
-  // 2. Chrome extension origins
+  // 2. Chrome extension origins - ONLY allowed origin for session minting
+  // This prevents arbitrary web pages (including YouTube) from obtaining tokens.
   if (origin.startsWith('chrome-extension://')) {
     // If we are developing locally, let ANY chrome extension talk to the API.
     // Unpacked extension IDs change frequently, this stops the headache.
@@ -41,12 +42,12 @@ export function isAllowedOrigin(origin: string | null, request: NextRequest): bo
     return allowedIds.has(extensionId);
   }
 
-  // 3. HTTP origins (now includes YouTube)
+  // 3. HTTP origins (localhost dev only - YouTube is intentionally excluded)
   return ALLOWED_HTTP_ORIGINS.some(allowed => origin === allowed);
 }
 
 export function getCorsHeaders(request: NextRequest): Record<string, string> {
-  const origin = request.headers.get('origin') || '*'; // Fallback to * for dev
+  const origin = request.headers.get('origin');
   const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': [
@@ -60,7 +61,9 @@ export function getCorsHeaders(request: NextRequest): Record<string, string> {
     'Vary': 'Origin',
   };
 
-  if (origin === '*' || isAllowedOrigin(origin, request)) {
+  // Only set CORS origin if origin header is present and allowed
+  // No wildcard fallback - prevents unauthorized cross-origin requests
+  if (origin && isAllowedOrigin(origin, request)) {
     headers['Access-Control-Allow-Origin'] = origin;
   }
 

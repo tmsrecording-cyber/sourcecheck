@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { issueSessionToken } from '@/proxy';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
+import { logSessionInitFailure } from '@/lib/observability';
 
 // POST /api/session/init
 //
@@ -27,6 +28,11 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
 
   if (!body || typeof body.extensionId !== 'string' || !body.extensionId.trim()) {
+    logSessionInitFailure({
+      category: 'validation_error',
+      statusCode: 400,
+      context: 'missing or invalid extensionId',
+    });
     const response = NextResponse.json({ error: 'extensionId is required.' }, { status: 400 });
     Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
     return response;
@@ -39,12 +45,25 @@ export async function POST(request: NextRequest) {
   // before this handler runs; we check consistency here as defence-in-depth.
   const headerExtensionId = request.headers.get('x-extension-id')?.trim() || '';
   if (headerExtensionId && headerExtensionId !== extensionId) {
+    logSessionInitFailure({
+      category: 'auth_error',
+      statusCode: 403,
+      context: 'extensionId header/body mismatch',
+    });
     const response = NextResponse.json({ error: 'extensionId mismatch.' }, { status: 403 });
     Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
     return response;
   }
 
   const token = await issueSessionToken(extensionId);
+
+  // Log if token issuance failed (e.g., missing SESSION_SECRET on non-localhost)
+  if (!token && process.env.SESSION_SECRET) {
+    logSessionInitFailure({
+      category: 'internal_error',
+      context: 'token issuance failed despite SESSION_SECRET present',
+    });
+  }
 
   const response = NextResponse.json({ token });
   Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));

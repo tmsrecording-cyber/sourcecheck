@@ -2,11 +2,54 @@
 // SHARED TYPES — used by both extension & backend
 // ============================================
 
-/** Gemini model options for claim analysis/verification */
-export type GeminiModelOption = 
-  | 'gemini-3.1-flash-lite'
-  | 'gemini-3-flash'
-  | 'gemini-2.5-flash-lite';
+// ============================================
+// MODEL POLICY - HARD LOCK
+// ============================================
+// Freemium/trial/managed path: gemini-2.5-flash-lite ONLY
+// BYOK path: may use gemini-2.5-flash-lite, gemini-3.1-flash-lite, or gemini-3-preview
+// ANY other model names are INVALID and will be normalized to the freemium default
+// ============================================
+
+/** 
+ * Canonical allowed Gemini model options.
+ * This is the SINGLE SOURCE OF TRUTH for valid models across the entire app.
+ * DO NOT add models here without explicit policy approval.
+ */
+export const ALLOWED_MODELS = [
+  'gemini-2.5-flash-lite',  // Freemium/trial/managed default
+  'gemini-3.1-flash-lite',  // BYOK alternative
+  'gemini-3-preview',       // BYOK alternative
+] as const;
+
+/** Type for model options - derived from ALLOWED_MODELS */
+export type GeminiModelOption = typeof ALLOWED_MODELS[number];
+
+/** 
+ * Freemium/trial/managed tier model - ONLY this model is used for free tier.
+ * This is enforced server-side and cannot be overridden by client.
+ */
+export const FREEMIUM_MODEL: GeminiModelOption = 'gemini-2.5-flash-lite';
+
+/** 
+ * Default model for BYOK (Bring Your Own Key) mode.
+ * User can override to other allowed models in settings.
+ */
+export const BYOK_DEFAULT_MODEL: GeminiModelOption = 'gemini-2.5-flash-lite';
+
+/** 
+ * Validate and normalize a model name to an allowed value.
+ * Returns the freemium default if the input is not in ALLOWED_MODELS.
+ * This prevents stale/invalid saved settings from breaking the app.
+ */
+export function normalizeModel(model: string | null | undefined): GeminiModelOption {
+  if (!model) return FREEMIUM_MODEL;
+  if (ALLOWED_MODELS.includes(model as GeminiModelOption)) {
+    return model as GeminiModelOption;
+  }
+  // Stale/invalid model - normalize to freemium default
+  console.warn(`[model-policy] Invalid model '${model}' rejected, using '${FREEMIUM_MODEL}'`);
+  return FREEMIUM_MODEL;
+}
 
 export interface ModelConfig {
   id: GeminiModelOption;
@@ -15,6 +58,10 @@ export interface ModelConfig {
   speed: 'fast' | 'balanced' | 'deep';
 }
 
+/** 
+ * Models available in the UI model picker.
+ * All entries MUST be in ALLOWED_MODELS.
+ */
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
     id: 'gemini-3.1-flash-lite',
@@ -23,15 +70,15 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     speed: 'fast',
   },
   {
-    id: 'gemini-3-flash',
-    label: 'Flash 3',
+    id: 'gemini-3-preview',
+    label: 'Flash 3 Preview',
     description: 'Balanced quality',
     speed: 'balanced',
   },
   {
     id: 'gemini-2.5-flash-lite',
     label: 'Flash 2.5 Lite',
-    description: 'Previous generation',
+    description: 'Reliable standard',
     speed: 'deep',
   },
 ];
@@ -156,7 +203,7 @@ export interface AnalyzeChunkRequest {
   channelName: string;
   chunks: TranscriptChunk[];        // batched: 2-4 chunks (~30-60s of content)
   currentTimestamp: number;          // current playback position in seconds
-  model?: GeminiModelOption;         // optional model selection
+  model?: GeminiModelOption;         // optional model selection (validated server-side)
 }
 
 // PARSE_ERROR: model output failed JSON parsing or schema validation.
@@ -201,7 +248,7 @@ export interface VerifyClaimRequest {
   claim: ExtractedClaim;
   videoTitle: string;
   channelName: string;
-  model?: GeminiModelOption;         // optional model selection
+  model?: GeminiModelOption;         // optional model selection (validated server-side)
   /** Surrounding transcript context to help verify ambiguous claims */
   contextTranscript?: string;
 }
@@ -254,6 +301,8 @@ export interface PendingClaimPreview {
   timestampSeconds: number;
   confidence: number;
   state: PendingClaimState;
+  /** Normalized claim text for fast duplicate comparison (cached at creation) */
+  normalizedClaimText?: string;
 }
 
 export interface PanelSessionState {
@@ -277,7 +326,7 @@ export interface PanelSessionState {
   debugStage?: DebugStage;
   pendingTranscriptBufferSummary?: PendingTranscriptBufferSummary;
   transcriptMessageStats?: TranscriptMessageStats;
-  /** User's preferred Gemini model */
+  /** User's preferred Gemini model (normalized to allowed values) */
   selectedModel?: GeminiModelOption;
 }
 
@@ -289,7 +338,7 @@ export interface AskVideoQuestionRequest {
   currentTime?: number | null;
   transcriptContext: TranscriptChunk[];
   sourceCards: SourceCard[];
-  model?: GeminiModelOption;  // optional model selection
+  model?: GeminiModelOption;  // optional model selection (validated server-side)
 }
 
 export interface AskQuestionSource {
@@ -350,6 +399,6 @@ export interface WorkerRuntimeState {
   transcriptLoadDeadlineAt: number | null;
   debugStage: DebugStage;
   eventLog: DebugEvent[];
-  /** User's preferred Gemini model */
+  /** User's preferred Gemini model (normalized to allowed values) */
   selectedModel: GeminiModelOption;
 }

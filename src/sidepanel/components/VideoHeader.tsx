@@ -111,6 +111,28 @@ export const VideoHeader = ({
     return Math.round(average * 100);
   }, [cards]);
 
+  // Score summary: show resolved counts by status for semantic clarity
+  const scoreSummary = useMemo(() => {
+    if (!cards.length) return null;
+    
+    const supported = cards.filter(c => c.status === 'supported').length;
+    const partial = cards.filter(c => c.status === 'partial').length;
+    const disputed = cards.filter(c => c.status === 'disputed').length;
+    const unresolved = cards.filter(c => c.status === 'unverifiable').length;
+    const resolved = supported + partial + disputed;
+    
+    if (resolved === 0 && unresolved === 0) return null;
+    
+    // Build compact summary string
+    const parts: string[] = [];
+    if (supported > 0) parts.push(`${supported} supported`);
+    if (partial > 0) parts.push(`${partial} mixed`);
+    if (disputed > 0) parts.push(`${disputed} unsupported`);
+    if (unresolved > 0) parts.push(`${unresolved} unresolved`);
+    
+    return { text: parts.join(' • '), resolved, total: cards.length };
+  }, [cards]);
+
   // Truth Score color coding per design spec:
   // 75% - 100%: sc-supported (Google Green)
   // 45% - 74%: sc-accent (Gold/Orange)
@@ -156,31 +178,31 @@ export const VideoHeader = ({
     null;
 
   return (
-    <header className="glass-deep mx-3 mt-3 px-4 pb-4 pt-4 rounded-md">
+    <header className="glass-deep mx-3 mt-3 px-4 pb-3.5 pt-3.5 rounded-lg">
       {/* Title + badge - HUD Compressed Typography */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1
-            className="text-[13px] font-semibold tracking-tight leading-[1.3] text-sc-text line-clamp-2"
+            className="text-[13.5px] font-semibold tracking-[-0.011em] leading-[1.4] text-sc-text line-clamp-2 text-balance"
           >
             {title}
           </h1>
         </div>
 
         <div className={[
-          'px-2 py-0.5 rounded-sm font-mono text-[9.5px] font-bold tracking-wider uppercase bg-sc-surface-2 border border-sc-border-soft shrink-0',
+          'px-2 py-0.5 rounded font-mono text-[9px] font-bold tracking-[0.08em] uppercase bg-sc-surface-2 border border-sc-border-soft/80 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]',
           statusMeta.tone,
-          isActive ? 'animate-pulse-glow shadow-sc-hero' : '',
+          isActive ? 'animate-pulse-glow shadow-[0_0_12px_rgba(138,180,248,0.25)]' : '',
         ].join(' ')}>
           {statusMeta.label}
         </div>
       </div>
 
       {/* Meta row: channel · anchor - HUD Monospace */}
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <p className="truncate text-[11px] font-mono text-sc-muted uppercase tracking-widest opacity-80">
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <p className="truncate text-[11px] font-mono text-sc-muted uppercase tracking-[0.12em] opacity-75">
           {channel}
-          <span className="mx-1.5 opacity-30">·</span>
+          <span className="mx-1.5 opacity-25">·</span>
           {anchorCopy}
         </p>
         {truthScore === null && syncLabel && (
@@ -203,6 +225,12 @@ export const VideoHeader = ({
               style={{ width: `${truthScore}%` }}
             />
           </div>
+          {/* Score summary: resolved breakdown for semantic clarity */}
+          {scoreSummary && (
+            <p className="mt-1.5 text-[10px] font-mono text-sc-muted/75 tracking-wide">
+              {scoreSummary.text}
+            </p>
+          )}
         </div>
       )}
 

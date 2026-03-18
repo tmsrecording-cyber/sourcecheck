@@ -1,3 +1,10 @@
+import {
+  ALLOWED_MODELS,
+  FREEMIUM_MODEL,
+  BYOK_DEFAULT_MODEL,
+  normalizeModel,
+  type GeminiModelOption,
+} from '../../../shared/types';
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -7,15 +14,26 @@ import type {
   AskQuestionResponse,
 } from '../../../shared/types';
 
-export const GEMINI_MODELS = [
-  'gemini-2.5-flash-lite',
-  'gemini-3.1-flash-lite-preview',
-  'gemini-3-flash-preview',
+// Re-export from shared types for backwards compatibility
+export { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel };
+export type { GeminiModelOption };
+
+/** 
+ * BYOK model list - the three models available for Bring Your Own Key mode.
+ * These are displayed in the SettingsPanel model selector.
+ * All values MUST be in ALLOWED_MODELS from shared/types.ts.
+ */
+export const GEMINI_MODELS: readonly GeminiModelOption[] = [
+  'gemini-2.5-flash-lite',  // Reliable standard
+  'gemini-3.1-flash-lite',  // Fastest, lightest
+  'gemini-3-preview',       // Balanced quality
 ] as const;
 
-export type GeminiModel = typeof GEMINI_MODELS[number];
-
-export const DEFAULT_GEMINI_MODEL: GeminiModel = 'gemini-3.1-flash-lite-preview';
+/** 
+ * Default model for BYOK mode.
+ * This is the initial selection when user opens settings.
+ */
+export const DEFAULT_GEMINI_MODEL: GeminiModelOption = BYOK_DEFAULT_MODEL;
 
 export interface ProviderSettings {
   provider: 'gemini';

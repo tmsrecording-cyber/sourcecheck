@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
-import { AlertTriangle, Shield } from 'lucide-react';
+import { AlertTriangle, Settings } from 'lucide-react';
 import { VideoHeader } from './components/VideoHeader';
 import { CardFeed } from './components/CardFeed';
 import { AskBox } from './components/AskBox';
 import { ModelPicker } from './components/ModelPicker';
+import { SettingsPanel } from './components/SettingsPanel';
+import { SourceCheckLogo } from './components/SourceCheckLogo';
 import { useExtensionStorage } from './hooks/useExtensionStorage';
 import { lifecycleToAnalysisStatus } from './utils/state';
 import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel } from './components/DebugPanels';
@@ -68,8 +70,8 @@ const PanelShell = ({
             <div className={`font-mono text-[9px] font-bold tracking-[0.2em] uppercase ${error ? 'text-sc-disputed' : 'text-sc-accent-soft'}`}>
               {error ? 'Instrument fault' : 'Instrument standby'}
             </div>
-            <div className="mt-3 flex items-center gap-2">
-              {error ? <AlertTriangle size={14} className="text-sc-disputed" /> : <Shield size={14} className="text-sc-accent-soft" />}
+            <div className="mt-3 flex items-center gap-3">
+              {error ? <AlertTriangle size={16} className="text-sc-disputed" /> : <SourceCheckLogo size={20} />}
               <h1 className="text-[16px] font-bold tracking-tight text-sc-text">{label}</h1>
             </div>
             <p className="mt-2 text-[13px] leading-relaxed text-sc-text-soft">{subcopy}</p>
@@ -90,6 +92,8 @@ export const App = () => {
   const [isThinking, setIsThinking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
+  const [showSettings, setShowSettings] = useState(false);
+  const [lastProviderError, setLastProviderError] = useState<{ code?: string; message?: string } | null>(null);
   const isMountedRef = useRef(true);
 
   useEffect(() => () => {
@@ -210,6 +214,44 @@ export const App = () => {
     }
   };
 
+  // Listen for provider errors - UNIFIED ERROR HANDLING
+  // All errors now flow through classifyError() in background/utils/api.ts
+  useEffect(() => {
+    const listener = (message: unknown) => {
+      if (typeof message === 'object' && message !== null) {
+        const msg = message as Record<string, unknown>;
+        if (msg.type === 'PROVIDER_ERROR' && typeof msg.payload === 'object' && msg.payload !== null) {
+          const payload = msg.payload as Record<string, unknown>;
+          const code = typeof payload.code === 'string' ? payload.code : undefined;
+          const message = typeof payload.message === 'string' ? payload.message : undefined;
+          const showSettings = typeof payload.showSettings === 'boolean' ? payload.showSettings : false;
+          
+          setLastProviderError({ code, message });
+          
+          // Auto-open settings when error signals it's needed (AUTH, QUOTA, INVALID_KEY)
+          // This is the unified behavior across all error paths
+          if (showSettings || code === 'AUTH_ERROR' || code === 'QUOTA_EXHAUSTED' || code === 'INVALID_API_KEY') {
+            setShowSettings(true);
+          }
+        }
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, []);
+
+  if (showSettings) {
+    return (
+      <SettingsPanel 
+        onSaved={() => {
+          setShowSettings(false);
+          setLastProviderError(null);
+        }} 
+        lastError={lastProviderError}
+      />
+    );
+  }
+
   if (!isStorageReady) {
     return (
       <PanelShell
@@ -244,36 +286,53 @@ export const App = () => {
       <div className="hud-grid" aria-hidden="true" />
       <div className="hud-circuit" aria-hidden="true" />
       <div className="flex h-screen w-full flex-col bg-sc-bg-0 relative">
-        <div className="tactile-header flex-shrink-0 flex justify-between items-center h-[44px] px-4 hud-header z-20">
-          <div className="flex gap-6 items-center h-full">
+        <div className="tactile-header flex-shrink-0 flex justify-between items-center h-[44px] px-3.5 hud-header z-20">
+          <div className="flex gap-3.5 items-center h-full min-w-0">
+            <SourceCheckLogo size={18} className="flex-shrink-0" />
+            <div className="w-px h-4 bg-sc-border-soft/60" aria-hidden="true" />
+            <nav className="flex gap-0.5 h-full items-center" role="tablist">
+              <button
+                onClick={() => setActiveTab('live')}
+                className={`tab-btn ${activeTab === 'live' ? 'active' : ''}`}
+                role="tab"
+                aria-selected={activeTab === 'live'}
+              >
+                LIVE
+                {activeTab === 'live' && <span className="tab-indicator" aria-hidden="true" />}
+              </button>
+              <button
+                onClick={() => setActiveTab('history')}
+                className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+                role="tab"
+                aria-selected={activeTab === 'history'}
+              >
+                HISTORY
+                {activeTab === 'history' && <span className="tab-indicator" aria-hidden="true" />}
+              </button>
+            </nav>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <ModelPicker 
+              selectedModel={runtimeState.selectedModel} 
+              onModelChange={async (model) => {
+                try {
+                  await chrome.storage.sync.set({ selectedModel: model });
+                  await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
+                } catch (error) {
+                  console.error('[SourceCheck/UI] Model change failed:', error);
+                }
+              }} 
+            />
             <button
-              onClick={() => setActiveTab('live')}
-              className={`tab-btn ${activeTab === 'live' ? 'active' : ''}`}
+              onClick={() => setShowSettings(true)}
+              className="h-[28px] px-2.5 text-[11px] font-medium tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded-md text-sc-text-soft transition-all duration-150 flex items-center gap-1.5 focus:outline-none whitespace-nowrap"
+              aria-label="Open settings"
+              title="API key settings"
             >
-              LIVE
-              {activeTab === 'live' && <span className="tab-indicator" aria-hidden="true" />}
-            </button>
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
-            >
-              HISTORY
-              {activeTab === 'history' && <span className="tab-indicator" aria-hidden="true" />}
+              <Settings size={12} />
+              <span>Key</span>
             </button>
           </div>
-          <ModelPicker 
-            selectedModel={runtimeState.selectedModel} 
-            onModelChange={async (model) => {
-              try {
-                // Persist to storage
-                await chrome.storage.sync.set({ selectedModel: model });
-                // Notify background worker
-                await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
-              } catch (error) {
-                console.error('[SourceCheck/UI] Model change failed:', error);
-              }
-            }} 
-          />
         </div>
 
         <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col" onScroll={handleFeedScroll}>

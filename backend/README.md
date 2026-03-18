@@ -25,6 +25,7 @@ If you deploy the backend anywhere other than `localhost`, set:
 - `ALLOWED_EXTENSION_IDS` (comma-separated list of permitted extension IDs)
 - `SESSION_SECRET` (enables backend-issued bearer session tokens)
 - `REDIS_URL` (recommended for durable rate limits across restarts/instances)
+- `TRUSTED_PROXY_COUNT` (number of trusted proxy hops; required for accurate per-IP rate limiting behind CDNs/proxies)
 
 The extension must be built with `VITE_API_BASE` pointing at the deployed API origin so the
 manifest `host_permissions` line up with runtime requests.
@@ -72,10 +73,61 @@ src/
 │   └── verify-claim/route.ts    ← Source card generation endpoint
 ├── lib/
 │   ├── gemini.ts                ← Gemini API wrapper
-│   └── prompts.ts               ← ALL prompts (core IP, don't scatter)
+│   ├── prompts.ts               ← ALL prompts (core IP, don't scatter)
+│   └── observability.ts         ← Structured telemetry logging
 ├── proxy.ts                      ← CORS + request gating for the extension
 scripts/
 └── test-pipeline.ts             ← Test without the extension
 shared/
 └── types.ts                     ← Types shared with extension
 ```
+
+## Observability
+
+The backend includes a minimal, privacy-conscious observability layer in `src/lib/observability.ts`.
+
+### What is logged
+
+Structured events are logged to console for critical failure paths:
+- `session_init_failure` — Session token issuance failures
+- `route_failure` — API route failures (auth, rate limit, validation)
+- `provider_error` — Gemini/BYOK provider errors (auth, quota, rate limit, parse errors)
+
+### What is NOT logged
+
+- No transcript text
+- No user questions
+- No API keys or tokens
+- No raw signed URLs
+- No PII or user behavior analytics
+
+### Log format
+
+Events are logged as structured JSON prefixed with `[sourcecheck.telemetry]`:
+
+```json
+{
+  "name": "route_failure",
+  "timestamp": 1712345678901,
+  "route": "/api/verify-claim",
+  "category": "rate_limited",
+  "statusCode": 429,
+  "retryable": true,
+  "context": "retryAfter=60"
+}
+```
+
+### Failure categories
+
+- `auth_error` — Authentication/authorization failures
+- `quota_exhausted` — Provider API quota exhausted
+- `rate_limited` — Rate limit hit (server or provider)
+- `upstream_timeout` — Provider timeout/overloaded
+- `upstream_error` — Provider API error
+- `upstream_parse_error` — Failed to parse provider response
+- `internal_error` — Internal server error
+- `validation_error` — Request validation failed
+
+### Viewing logs
+
+In development, logs appear in the terminal. On Vercel, view function logs in the dashboard.
