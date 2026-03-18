@@ -227,6 +227,8 @@ export interface ExtractedClaim {
   exactQuote: string;               // verbatim text from transcript
   timestampSeconds: number;          // approx video position
   confidence: number;                // 0-1, how confident the LLM is this is a real claim
+  /** Embedding vector for semantic similarity / cross-video memory */
+  embedding?: number[];
 }
 
 /** What /api/analyze-chunk returns */

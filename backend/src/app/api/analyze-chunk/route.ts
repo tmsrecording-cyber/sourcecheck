@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { askGeminiJSON, isGeminiError } from '@/lib/gemini';
+import { askGeminiJSON, generateEmbedding, isGeminiError } from '@/lib/gemini';
 import { buildClaimExtractionPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
@@ -234,11 +234,12 @@ const inferClaimType = (claimText: string): ClaimType => {
 // CLAIM NORMALIZATION
 // ============================================================================
 
-function normalizeClaimResult(
+async function normalizeClaimResult(
   rawExtraction: RawExtraction,
   chunks: TranscriptChunk[],
-  approximateTimestamp: number
-): NormalizedClaimResult {
+  approximateTimestamp: number,
+  customApiKey?: string
+): Promise<NormalizedClaimResult> {
   // ---- Candidate extraction with anchor validation ----
   // If the model returns a `candidates` array, validate each one's exact_quote
   // against the transcript window. Reject any candidate whose quote can't be
@@ -275,8 +276,8 @@ function normalizeClaimResult(
         const compositeScore = (verifiability * 0.4) + (value * 0.35) + (speakerConfidence * 0.25);
         return { candidate, compositeScore, verifiability };
       })
-      // Filter out low-verifiability candidates (< 0.6) - not concrete enough to check
-      .filter((scored) => scored.verifiability >= 0.6)
+      // Filter out low-verifiability candidates (< 0.65) - not concrete enough to check
+      .filter((scored) => scored.verifiability >= 0.65)
       // Sort by composite score descending
       .sort((a, b) => b.compositeScore - a.compositeScore);
 
@@ -328,6 +329,12 @@ function normalizeClaimResult(
 
   const finalClaimType = claimType ?? (claimText ? inferClaimType(claimText) : null);
 
+  // Generate embedding for semantic deduplication
+  let claimEmbedding: number[] | undefined;
+  if (hasClaim && claimText) {
+    claimEmbedding = await generateEmbedding(claimText, customApiKey);
+  }
+
   const claims: ExtractedClaim[] =
     hasClaim && claimText && finalClaimType
       ? [
@@ -342,6 +349,7 @@ function normalizeClaimResult(
               approximateTimestamp
             ),
             confidence: inferConfidence(finalClaimType),
+            ...(claimEmbedding && claimEmbedding.length > 0 ? { embedding: claimEmbedding } : {}),
           },
         ]
       : [];
@@ -558,7 +566,7 @@ export async function POST(request: NextRequest) {
       actionState,
       reason,
       claims,
-    } = normalizeClaimResult(rawExtraction, parsedBody.chunks, approximateTimestamp);
+    } = await normalizeClaimResult(rawExtraction, parsedBody.chunks, approximateTimestamp, customApiKey);
 
     if (malformedClaimPayload) {
       console.warn('[analyze-chunk] Model returned has_claim=true without usable claim_text.');

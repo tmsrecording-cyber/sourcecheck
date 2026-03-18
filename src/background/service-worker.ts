@@ -1035,13 +1035,80 @@ const hasQueuedVerificationForKey = (key: string) =>
   verificationQueue.some((item) => item.key === key);
 
 // Near-duplicate detection: check if a very similar claim was recently checked
-// Uses normalized text comparison within a time window
+// Uses semantic embeddings when available, falls back to normalized text comparison
 // PERFORMANCE: normalized text is cached in PendingClaimPreview to avoid repeated regex work
 const getNormalizedClaimText = (text: string): string =>
   text.toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// Calculate cosine similarity between two embedding vectors
+// Returns value between -1 and 1 (1 = identical, 0 = orthogonal, -1 = opposite)
+const cosineSimilarity = (vecA: number[], vecB: number[]): number => {
+  if (vecA.length === 0 || vecB.length === 0 || vecA.length !== vecB.length) {
+    return 0;
+  }
+  
+  let dotProduct = 0;
+  let magnitudeA = 0;
+  let magnitudeB = 0;
+  
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    magnitudeA += vecA[i] * vecA[i];
+    magnitudeB += vecB[i] * vecB[i];
+  }
+  
+  magnitudeA = Math.sqrt(magnitudeA);
+  magnitudeB = Math.sqrt(magnitudeB);
+  
+  if (magnitudeA === 0 || magnitudeB === 0) {
+    return 0;
+  }
+  
+  return dotProduct / (magnitudeA * magnitudeB);
+};
+
+// Semantic similarity threshold for near-duplicate detection
+const SEMANTIC_SIMILARITY_THRESHOLD = 0.88;
+
 const isNearDuplicate = (claim: ExtractedClaim): boolean => {
   const DUPLICATE_WINDOW_SECONDS = 120; // 2 minutes
+  
+  // Check for semantic similarity using embeddings first
+  if (claim.embedding && claim.embedding.length > 0) {
+    // Check existing source cards with embeddings
+    const semanticCardMatch = allSourceCards.find((card) => {
+      const timeDiff = Math.abs(card.claim.timestampSeconds - claim.timestampSeconds);
+      if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
+      // Only compare if both have embeddings
+      if (!card.claim.embedding || card.claim.embedding.length === 0) return false;
+      const similarity = cosineSimilarity(claim.embedding!, card.claim.embedding);
+      return similarity > SEMANTIC_SIMILARITY_THRESHOLD;
+    });
+    if (semanticCardMatch) return true;
+
+    // Check pending claims with embeddings
+    const semanticPendingMatch = allPendingClaims.find((pending) => {
+      const timeDiff = Math.abs(pending.timestampSeconds - claim.timestampSeconds);
+      if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
+      // Pending claims don't have embeddings yet, skip semantic check
+      return false;
+    });
+    if (semanticPendingMatch) return true;
+
+    // Check verification queue with embeddings
+    const semanticQueuedMatch = verificationQueue.find((item) => {
+      const timeDiff = Math.abs(item.claim.timestampSeconds - claim.timestampSeconds);
+      if (timeDiff > DUPLICATE_WINDOW_SECONDS) return false;
+      // Only compare if both have embeddings
+      if (!item.claim.embedding || item.claim.embedding.length === 0) return false;
+      const similarity = cosineSimilarity(claim.embedding!, item.claim.embedding);
+      return similarity > SEMANTIC_SIMILARITY_THRESHOLD;
+    });
+    if (semanticQueuedMatch) return true;
+  }
+  
+  // Fallback to character-based heuristic for claims without embeddings
+  // or when semantic check didn't find a match
   const normalizedClaimText = getNormalizedClaimText(claim.claimText);
 
   // Helper to check similarity - shared 80%+ of normalized text
