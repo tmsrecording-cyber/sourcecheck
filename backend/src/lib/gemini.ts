@@ -553,28 +553,41 @@ function getTierForRequest(_identity?: string): 'free' | 'pro' {
  * POLICY ENFORCEMENT:
  * - Freemium/trial/managed tier: ONLY gemini-2.5-flash-lite is allowed
  * - BYOK mode: User can select any model from ALLOWED_MODELS
- * - Invalid/stale models are normalized to the freemium default
+ * - Invalid/stale models are normalized to the BYOK default
  */
 function getEffectiveModel(
   requestedModel: string | undefined,
   tier: 'free' | 'pro',
-  customApiKey: string | undefined
+  customApiKey: string | undefined,
+  headerModel?: string | undefined
 ): GeminiModelOption {
+  // BYOK mode: Check header model first (from x-custom-model header)
+  // This ensures BYOK model selection is properly honored
+  const effectiveRequested = customApiKey && headerModel 
+    ? headerModel 
+    : requestedModel;
+  
   // Normalize the requested model (handles null/undefined and stale values)
-  const normalizedRequested = normalizeModel(requestedModel);
+  const normalizedRequested = normalizeModel(effectiveRequested);
   
   // Freemium/trial/managed tier: HARD LOCK to freemium model only
   // This cannot be overridden by client request
   if (tier === 'free' && !customApiKey) {
-    if (requestedModel && normalizedRequested !== FREEMIUM_MODEL) {
+    if (effectiveRequested && normalizedRequested !== FREEMIUM_MODEL) {
       console.warn(
-        `[model-policy] Freemium tier requested '${requestedModel}' but hard-locked to '${FREEMIUM_MODEL}'`
+        `[model-policy] Freemium tier requested '${effectiveRequested}' but hard-locked to '${FREEMIUM_MODEL}'`
       );
     }
     return FREEMIUM_MODEL;
   }
   
   // BYOK mode: Allow any valid model from ALLOWED_MODELS
+  // If no model specified, fall back to BYOK default
+  if (customApiKey && !effectiveRequested) {
+    console.log(`[model-policy] BYOK mode with no model specified, using default: ${BYOK_DEFAULT_MODEL}`);
+    return BYOK_DEFAULT_MODEL;
+  }
+  
   return normalizedRequested;
 }
 

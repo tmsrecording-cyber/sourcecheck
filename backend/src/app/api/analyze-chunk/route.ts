@@ -5,6 +5,7 @@ import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { verifyBearerSessionToken } from '@/proxy';
 import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
+import { validateClientSecretAuth } from '@/lib/client-secret-auth';
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -448,11 +449,21 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // -------------------------------------------------------------------------
+  // PHASE 0: Pre-shared client secret authentication (additional layer)
+  // -------------------------------------------------------------------------
+  const clientSecretAuth = validateClientSecretAuth(request);
+  if (!clientSecretAuth.authorized) {
+    return clientSecretAuth.response;
+  }
+
   let body: AnalyzeChunkRequest | null = null;
   // Declare outside try for error handling access
   const extensionId = request.headers.get('x-extension-id')?.trim() || '';
   const customApiKey = request.headers.get('x-custom-api-key')?.trim();
   const hasCustomKey = !!customApiKey && customApiKey.length > 0;
+  // BYOK: Check for model in header (x-custom-model) as override
+  const headerModel = request.headers.get('x-custom-model')?.trim();
 
   try {
     // -------------------------------------------------------------------------
@@ -535,6 +546,9 @@ export async function POST(request: NextRequest) {
     // -------------------------------------------------------------------------
     // PHASE 6: Call Gemini
     // -------------------------------------------------------------------------
+    // BYOK: Use header model if provided (from x-custom-model), else fall back to body
+    const effectiveModel = hasCustomKey && headerModel ? headerModel : parsedBody.model;
+    
     const {
       data: rawExtraction,
       inputTokens,
@@ -543,7 +557,7 @@ export async function POST(request: NextRequest) {
       prompt,
       800,
       CLAIM_EXTRACTION_SCHEMA,
-      parsedBody.model,
+      effectiveModel,
       customApiKey
     );
 

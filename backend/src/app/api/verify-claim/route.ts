@@ -8,6 +8,7 @@ import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { verifyBearerSessionToken } from '@/proxy';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
+import { validateClientSecretAuth } from '@/lib/client-secret-auth';
 import type {
   VerifyClaimRequest,
   VerifyClaimResponse,
@@ -256,10 +257,18 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Pre-shared client secret authentication (additional layer)
+  const clientSecretAuth = validateClientSecretAuth(request);
+  if (!clientSecretAuth.authorized) {
+    return clientSecretAuth.response;
+  }
+
   let body: VerifyClaimRequest | null = null;
   // Declare outside try for error handling access
   const extensionId = request.headers.get('x-extension-id')?.trim() || '';
   const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+  // BYOK: Check for model in header (x-custom-model) as override
+  const headerModel = request.headers.get('x-custom-model')?.trim();
   
   try {
     const parsedBody: VerifyClaimRequest = await request.json();
@@ -317,8 +326,11 @@ export async function POST(request: NextRequest) {
     // the verification JSON and the grounding source URLs.
     const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType, contextTranscript);
 
+    // BYOK: Use header model if provided (from x-custom-model), else fall back to body
+    const effectiveModel = customApiKey && headerModel ? headerModel : body.model;
+    
     const { data: rawVerification, inputTokens, outputTokens, sources } =
-      await askGeminiJSONWithSearch<RawVerification>(prompt, 500, VERIFICATION_SCHEMA, body.model, customApiKey);
+      await askGeminiJSONWithSearch<RawVerification>(prompt, 500, VERIFICATION_SCHEMA, effectiveModel, customApiKey);
 
     // ---- Validate status ----
     const validStatuses: VerificationStatus[] = ['supported', 'partial', 'disputed', 'unverifiable'];

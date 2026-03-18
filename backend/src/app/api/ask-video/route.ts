@@ -8,6 +8,7 @@ import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { verifyBearerSessionToken } from '@/proxy';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
+import { validateClientSecretAuth } from '@/lib/client-secret-auth';
 import type {
   AskQuestionResponse,
   AskQuestionSource,
@@ -199,10 +200,18 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Pre-shared client secret authentication (additional layer)
+  const clientSecretAuth = validateClientSecretAuth(request);
+  if (!clientSecretAuth.authorized) {
+    return clientSecretAuth.response;
+  }
+
   let body: AskVideoQuestionRequest | null = null;
   // Declare outside try for error handling access
   const extensionId = request.headers.get('x-extension-id')?.trim() || '';
   const customApiKey = request.headers.get('x-custom-api-key')?.trim();
+  // BYOK: Check for model in header (x-custom-model) as override
+  const headerModel = request.headers.get('x-custom-model')?.trim();
   
   try {
     const parsedBody: AskVideoQuestionRequest = await request.json();
@@ -262,11 +271,14 @@ export async function POST(request: NextRequest) {
       sourceCards: parsedBody.sourceCards || [],
     });
 
+    // BYOK: Use header model if provided (from x-custom-model), else fall back to body
+    const effectiveModel = customApiKey && headerModel ? headerModel : parsedBody.model;
+    
     const { data: rawAnswer } = await askGeminiJSON<RawAskVideoResponse>(
       prompt,
       900,
       ASK_VIDEO_SCHEMA,
-      parsedBody.model,  // Pass client-selected model
+      effectiveModel,  // Pass effective model (header override for BYOK)
       customApiKey  // BYOK: Pass user's API key if provided
     );
 

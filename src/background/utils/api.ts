@@ -72,12 +72,17 @@ export async function getSessionToken(): Promise<string | null> {
 
       try {
         console.log(`[SourceCheck/API] Fetching session token (attempt ${attempt + 1}/${MAX_SESSION_TOKEN_ATTEMPTS}):`, `${API_BASE}/api/session/init`);
+        const headers: HeadersInit = {
+          'Content-Type': 'application/json',
+          'X-Extension-Id': chrome.runtime.id,
+        };
+        const clientSecret = import.meta.env.VITE_CLIENT_SECRET;
+        if (clientSecret) {
+          headers['x-sourcecheck-client-secret'] = clientSecret;
+        }
         const res = await fetch(`${API_BASE}/api/session/init`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Extension-Id': chrome.runtime.id,
-          },
+          headers,
           body: JSON.stringify({ extensionId: chrome.runtime.id }),
         });
 
@@ -483,6 +488,15 @@ export async function fetchWithBYOK(
 
       if (hasCustomKey) {
         headers.set('X-Custom-Api-Key', customApiKey.trim());
+        // Also send the selected model so backend can use it with BYOK
+        if (selectedModel) {
+          headers.set('X-Custom-Model', selectedModel);
+        }
+      }
+
+      const clientSecret = import.meta.env.VITE_CLIENT_SECRET;
+      if (clientSecret) {
+        headers.set('x-sourcecheck-client-secret', clientSecret);
       }
 
       const controller = new AbortController();
