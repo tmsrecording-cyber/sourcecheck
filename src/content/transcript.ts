@@ -11,6 +11,137 @@ export interface TranscriptChunk {
   durationMs: number;
 }
 
+// ============================================================================
+// SMART TRANSCRIPT BUFFER (for fast-talker/dense content handling)
+// ============================================================================
+// Accumulates transcript chunks and flushes based on:
+// - Natural sentence boundaries (. ? !)
+// - Maximum character threshold (~200 chars)
+// - Time limit (~2000ms) for responsiveness
+
+const BUFFER_MAX_CHARS = 200;
+const BUFFER_TIME_LIMIT_MS = 2000;
+const SENTENCE_BOUNDARY_REGEX = /[.!?](?:\s|$)/;
+
+class SmartTranscriptBuffer {
+  private chunks: TranscriptChunk[] = [];
+  private bufferedText: string = '';
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastFlushTime: number = 0;
+
+  /**
+   * Add a chunk to the buffer. Returns flushed chunks if buffer was flushed.
+   */
+  add(chunk: TranscriptChunk): TranscriptChunk[] | null {
+    // Start timer on first chunk
+    if (this.chunks.length === 0) {
+      this.startFlushTimer();
+    }
+
+    this.chunks.push(chunk);
+    this.bufferedText += (this.bufferedText ? ' ' : '') + chunk.text;
+
+    // Check if we should flush
+    if (this.shouldFlush()) {
+      return this.flush();
+    }
+
+    return null;
+  }
+
+  /**
+   * Force flush the buffer immediately.
+   */
+  flush(): TranscriptChunk[] | null {
+    if (this.chunks.length === 0) {
+      return null;
+    }
+
+    // Clear timer
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    // Create combined chunk
+    const combined: TranscriptChunk = {
+      text: this.bufferedText.trim(),
+      startMs: this.chunks[0].startMs,
+      durationMs: this.calculateDuration(),
+    };
+
+    // Reset buffer
+    const flushed = [...this.chunks];
+    this.chunks = [];
+    this.bufferedText = '';
+    this.lastFlushTime = Date.now();
+
+    // Return single combined chunk for downstream processing
+    return [combined];
+  }
+
+  /**
+   * Clear the buffer without flushing.
+   */
+  clear(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.chunks = [];
+    this.bufferedText = '';
+  }
+
+  private shouldFlush(): boolean {
+    // Check character limit
+    if (this.bufferedText.length >= BUFFER_MAX_CHARS) {
+      return true;
+    }
+
+    // Check sentence boundary
+    if (SENTENCE_BOUNDARY_REGEX.test(this.bufferedText)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private startFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+    }
+
+    this.flushTimer = setTimeout(() => {
+      this.flush();
+    }, BUFFER_TIME_LIMIT_MS);
+  }
+
+  private calculateDuration(): number {
+    if (this.chunks.length === 0) return 0;
+    
+    const first = this.chunks[0];
+    const last = this.chunks[this.chunks.length - 1];
+    return (last.startMs + last.durationMs) - first.startMs;
+  }
+}
+
+// Global buffer instance (reset per video)
+let activeTranscriptBuffer: SmartTranscriptBuffer | null = null;
+
+export const resetTranscriptBuffer = (): void => {
+  if (activeTranscriptBuffer) {
+    activeTranscriptBuffer.clear();
+    activeTranscriptBuffer = null;
+  }
+};
+
+export const getOrCreateTranscriptBuffer = (): SmartTranscriptBuffer => {
+  if (!activeTranscriptBuffer) {
+    activeTranscriptBuffer = new SmartTranscriptBuffer();
+  }
+  return activeTranscriptBuffer;
+};
+
 let panelTranscriptLatch:
   | {
       videoId: string;
@@ -368,6 +499,8 @@ export const resetTranscriptExtractionState = (videoId?: string) => {
   if (!videoId || panelTranscriptLatch?.videoId === videoId) {
     panelTranscriptLatch = null;
   }
+  // Reset smart transcript buffer for new video
+  resetTranscriptBuffer();
 };
 
 const getLatchedPanelTranscript = (videoId: string) => (
@@ -2005,26 +2138,51 @@ export const extractTranscriptData = async (
     panelFallbackSucceeded,
   });
   try {
+    // Helper to apply smart buffering to transcript chunks
+    const bufferTranscriptChunks = (rawChunks: TranscriptChunk[]): TranscriptChunk[] => {
+      if (rawChunks.length === 0) return rawChunks;
+      
+      const buffer = getOrCreateTranscriptBuffer();
+      const bufferedChunks: TranscriptChunk[] = [];
+      
+      for (const chunk of rawChunks) {
+        const flushed = buffer.add(chunk);
+        if (flushed) {
+          bufferedChunks.push(...flushed);
+        }
+      }
+      
+      // Final flush
+      const finalFlush = buffer.flush();
+      if (finalFlush) {
+        bufferedChunks.push(...finalFlush);
+      }
+      
+      return bufferedChunks.length > 0 ? bufferedChunks : rawChunks;
+    };
+
     const latchedTranscript = getLatchedPanelTranscript(videoId);
     if (latchedTranscript?.length) {
-      emitTranscriptFetchDebug(onFetchDebug, 'panel', 'parse_success', `latched-panel chunks=${latchedTranscript.length}`);
+      const bufferedChunks = bufferTranscriptChunks(latchedTranscript);
+      emitTranscriptFetchDebug(onFetchDebug, 'panel', 'parse_success', `latched-panel chunks=${bufferedChunks.length} (from ${latchedTranscript.length})`);
       return withPanelState({
-        transcript: latchedTranscript,
+        transcript: bufferedChunks,
         debug: createTranscriptDebug('panel', 'loaded'),
       });
     }
 
     const alreadyVisiblePanelTranscript = scrapeTranscriptPanel();
     if (alreadyVisiblePanelTranscript.length > 0) {
-      setLatchedPanelTranscript(videoId, alreadyVisiblePanelTranscript);
+      const bufferedChunks = bufferTranscriptChunks(alreadyVisiblePanelTranscript);
+      setLatchedPanelTranscript(videoId, bufferedChunks);
       emitTranscriptFetchDebug(
         onFetchDebug,
         'panel',
         'parse_success',
-        `visible-panel chunks=${alreadyVisiblePanelTranscript.length}`
+        `visible-panel chunks=${bufferedChunks.length} (from ${alreadyVisiblePanelTranscript.length})`
       );
       return withPanelState({
-        transcript: alreadyVisiblePanelTranscript,
+        transcript: bufferedChunks,
         debug: createTranscriptDebug('panel', 'loaded'),
       });
     }
@@ -2039,9 +2197,26 @@ export const extractTranscriptData = async (
       });
       if (panelResult.transcript?.length) {
         panelFallbackSucceeded = true;
-        setLatchedPanelTranscript(videoId, panelResult.transcript);
+        // Apply smart buffering to panel fallback transcript
+        const rawChunks = panelResult.transcript;
+        const buffer = getOrCreateTranscriptBuffer();
+        const bufferedChunks: TranscriptChunk[] = [];
+        
+        for (const chunk of rawChunks) {
+          const flushed = buffer.add(chunk);
+          if (flushed) {
+            bufferedChunks.push(...flushed);
+          }
+        }
+        const finalFlush = buffer.flush();
+        if (finalFlush) {
+          bufferedChunks.push(...finalFlush);
+        }
+        
+        const chunks = bufferedChunks.length > 0 ? bufferedChunks : rawChunks;
+        setLatchedPanelTranscript(videoId, chunks);
         return withPanelState({
-          transcript: panelResult.transcript,
+          transcript: chunks,
           debug: createTranscriptDebug('panel', 'loaded'),
         });
       }
@@ -2112,11 +2287,32 @@ export const extractTranscriptData = async (
       });
       
       if (transcriptResult.chunks?.length) {
-        const chunks = transcriptResult.chunks;
-        emitTranscriptFetchDebug(onFetchDebug, 'html', 'transcript_candidate_count', `count=${chunks.length}`);
+        const rawChunks = transcriptResult.chunks;
+        
+        // Apply smart buffering for fast-talker/dense content handling
+        const buffer = getOrCreateTranscriptBuffer();
+        const bufferedChunks: TranscriptChunk[] = [];
+        
+        for (const chunk of rawChunks) {
+          const flushed = buffer.add(chunk);
+          if (flushed) {
+            bufferedChunks.push(...flushed);
+          }
+        }
+        
+        // Final flush to get remaining chunks
+        const finalFlush = buffer.flush();
+        if (finalFlush) {
+          bufferedChunks.push(...finalFlush);
+        }
+        
+        // Use buffered chunks if we have them, otherwise fall back to raw
+        const chunks = bufferedChunks.length > 0 ? bufferedChunks : rawChunks;
+        
+        emitTranscriptFetchDebug(onFetchDebug, 'html', 'transcript_candidate_count', `count=${chunks.length} (buffered from ${rawChunks.length})`);
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'first_chunk_preview', getChunkPreview(chunks[0]));
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'last_chunk_preview', getChunkPreview(chunks[chunks.length - 1]));
-        console.log(`[SourceCheck] Extracted ${chunks.length} transcript chunks.`);
+        console.log(`[SourceCheck] Extracted ${rawChunks.length} transcript chunks, buffered to ${chunks.length}.`);
         return withPanelState({
           transcript: chunks,
           debug,

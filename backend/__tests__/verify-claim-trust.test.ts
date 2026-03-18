@@ -20,6 +20,7 @@ const mockAskGemini = vi.fn();
 vi.mock('../src/lib/gemini', () => ({
   askGeminiJSONWithSearch: (...args: unknown[]) => mockAskGemini(...args),
   isGeminiError: () => false,
+  generateEmbedding: () => Promise.resolve([]), // Embeddings disabled in tests
 }));
 
 // crypto will be stubbed in beforeEach with proper subtle mock

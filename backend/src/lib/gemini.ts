@@ -849,5 +849,97 @@ export async function askGeminiJSONWithSearch<T = unknown>(
   };
 }
 
+// ============================================================================
+// EMBEDDING GENERATION (for cross-video memory / semantic deduplication)
+// ============================================================================
+
+const EMBEDDING_MODEL = 'text-embedding-004';
+const EMBEDDING_TIMEOUT_MS = 15_000;
+
+/**
+ * Generate a text embedding vector for semantic similarity search.
+ * Used for cross-video memory and advanced deduplication.
+ * 
+ * Returns an empty array if embedding generation fails (graceful degradation).
+ * This ensures claim verification still works even if embeddings are unavailable.
+ */
+export async function generateEmbedding(
+  text: string,
+  customApiKey?: string
+): Promise<number[]> {
+  // Validate input
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    console.warn('[gemini.ts] Cannot generate embedding for empty/invalid text');
+    return [];
+  }
+
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn('[gemini.ts] GEMINI_API_KEY not set, skipping embedding generation');
+    return [];
+  }
+
+  // Truncate very long text to stay within model limits
+  const truncatedText = text.slice(0, 8000);
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
+
+    const apiUrl = `${API_BASE}/models/${EMBEDDING_MODEL}:embedContent`;
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        content: {
+          parts: [{ text: truncatedText }],
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.warn('[gemini.ts] Embedding API error:', {
+        status: response.status,
+        error: errorText,
+      });
+      return [];
+    }
+
+    const data = await response.json() as {
+      embedding?: { values?: number[] };
+    };
+
+    const embedding = data.embedding?.values;
+    
+    if (!Array.isArray(embedding) || embedding.length === 0) {
+      console.warn('[gemini.ts] Embedding API returned empty/invalid embedding');
+      return [];
+    }
+
+    console.info('[gemini.ts] Embedding generated:', {
+      dimensions: embedding.length,
+      textLength: truncatedText.length,
+    });
+
+    return embedding;
+  } catch (error) {
+    // Handle timeout specifically
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.warn('[gemini.ts] Embedding generation timed out');
+    } else {
+      console.warn('[gemini.ts] Embedding generation failed:', error instanceof Error ? error.message : 'Unknown error');
+    }
+    return [];
+  }
+}
+
 // Re-export policy constants for backend use
 export { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel };

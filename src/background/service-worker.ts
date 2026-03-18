@@ -936,21 +936,27 @@ const MIN_CHUNK_BATCH_SIZE = 12; // Increased from 8 to ensure sufficient contex
 const getChunkBatchSize = () =>
   Math.min(MAX_CHUNK_BATCH_SIZE, Math.max(MIN_CHUNK_BATCH_SIZE, Math.ceil(getEffectivePlaybackRate() * 10)));
 
+// Minimum cooldown between analyze-chunk requests to prevent backend hammering
+const MIN_ANALYSIS_COOLDOWN_MS = 3000;
+// Maximum concurrent analysis requests (always 1 due to isProcessing, but kept for clarity)
+const MAX_CONCURRENT_ANALYSIS = 1;
+
 const getAnalysisIntervalMs = (backlogChunks = 0) => {
   const baseIntervalMs = Math.max(8_000, Math.round(CHUNK_INTERVAL_MS / getEffectivePlaybackRate()));
   const batchSize = getChunkBatchSize();
 
   // When the transcript is arriving in short chunks, one pass can fall behind
   // the live playhead. Shorten the wait so the card pipeline can catch up.
+  // But never go below MIN_ANALYSIS_COOLDOWN_MS to protect the backend.
   if (backlogChunks >= batchSize * 2) {
-    return Math.min(baseIntervalMs, 2_000);
+    return Math.max(MIN_ANALYSIS_COOLDOWN_MS, Math.min(baseIntervalMs, 2_000));
   }
 
   if (backlogChunks >= batchSize) {
-    return Math.min(baseIntervalMs, 6_000);
+    return Math.max(MIN_ANALYSIS_COOLDOWN_MS, Math.min(baseIntervalMs, 6_000));
   }
 
-  return baseIntervalMs;
+  return Math.max(MIN_ANALYSIS_COOLDOWN_MS, baseIntervalMs);
 };
 
 const getClaimKey = (claim: Pick<ExtractedClaim, 'claimText' | 'timestampSeconds'>) =>
@@ -2048,6 +2054,10 @@ const askVideoQuestion = async (question: string) => {
   return result;
 };
 
+// Pending analysis queue for burst smoothing
+let pendingAnalysisTimeout: ReturnType<typeof setTimeout> | null = null;
+let analysisRequestQueue: Array<{ currentTime: number; scheduledAt: number }> = [];
+
 const processPlayback = async (currentTime: number) => {
   const activeVideo = currentVideoInfo;
   
@@ -2057,15 +2067,26 @@ const processPlayback = async (currentTime: number) => {
     transcriptLength: currentTranscript.length,
     hasActiveVideo: !!activeVideo,
     isProcessing,
+    queueLength: analysisRequestQueue.length,
     lastProcessedIndex,
     videoId: activeVideo?.videoId,
   });
   
-  if (!currentTranscript.length || !activeVideo || isProcessing) {
+  // If already processing, queue the request and return
+  if (isProcessing) {
+    // Limit queue size to prevent memory growth during long videos
+    if (analysisRequestQueue.length >= 5) {
+      analysisRequestQueue.shift(); // Remove oldest
+    }
+    analysisRequestQueue.push({ currentTime, scheduledAt: Date.now() });
+    console.log('[Pipeline] Queued analysis request:', { queueLength: analysisRequestQueue.length });
+    return;
+  }
+  
+  if (!currentTranscript.length || !activeVideo) {
     console.log('[Pipeline] Early return:', {
       noTranscript: !currentTranscript.length,
       noVideo: !activeVideo,
-      isProcessing,
     });
     return;
   }
@@ -2227,6 +2248,25 @@ const processPlayback = async (currentTime: number) => {
     // Always reset isProcessing to prevent pipeline deadlock.
     // The runGeneration check prevents duplicate work, not cleanup.
     isProcessing = false;
+    
+    // Process queued analysis requests with debounce
+    if (analysisRequestQueue.length > 0) {
+      const nextRequest = analysisRequestQueue.shift();
+      if (nextRequest) {
+        const delayMs = Math.max(500, MIN_ANALYSIS_COOLDOWN_MS - (Date.now() - lastAnalyzedAt));
+        console.log('[Pipeline] Scheduling queued analysis:', { delayMs, remainingQueue: analysisRequestQueue.length });
+        
+        if (pendingAnalysisTimeout) {
+          clearTimeout(pendingAnalysisTimeout);
+        }
+        
+        pendingAnalysisTimeout = setTimeout(() => {
+          pendingAnalysisTimeout = null;
+          const currentPlaybackTime = currentPlaybackState?.currentTime ?? nextRequest.currentTime;
+          void processPlayback(currentPlaybackTime);
+        }, delayMs);
+      }
+    }
   }
 };
 

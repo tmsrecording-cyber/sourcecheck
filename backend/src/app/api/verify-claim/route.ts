@@ -2,7 +2,7 @@
 export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { askGeminiJSONWithSearch, isGeminiError } from '@/lib/gemini';
+import { askGeminiJSONWithSearch, generateEmbedding, isGeminiError } from '@/lib/gemini';
 import { buildGroundedVerificationPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { verifyBearerSessionToken } from '@/proxy';
@@ -399,6 +399,11 @@ export async function POST(request: NextRequest) {
       status
     );
 
+    // Generate embedding for cross-video memory / semantic deduplication
+    // Use claim text + nuance for richer semantic representation
+    const embeddingText = `${claim.claimText} ${resolvedNuance}`.trim();
+    const embedding = await generateEmbedding(embeddingText, customApiKey);
+
     const sourceCard: SourceCard = {
       id,
       claim,
@@ -410,6 +415,7 @@ export async function POST(request: NextRequest) {
       ...(evidenceSnippet ? { evidenceSnippet } : {}),
       timestampSeconds: claim.timestampSeconds,
       verifiedAt: new Date().toISOString(),
+      ...(embedding.length > 0 ? { embedding } : {}),
     };
 
     console.info('[verify-claim]', {
