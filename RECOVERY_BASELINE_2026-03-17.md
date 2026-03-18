@@ -1,7 +1,7 @@
 # SourceCheck Recovery Baseline — 2026-03-17
 
 **Status:** Working, Stable, Baseline Locked  
-**Commit:** [To be filled after commit]  
+**Commit:** 5185190  
 **Tag:** baseline-2026-03-17-recovery
 
 ---
