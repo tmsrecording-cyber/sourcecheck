@@ -128,7 +128,7 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
       },
     });
 
-    expect(chrome.storage.local.remove).toHaveBeenCalledWith('transcriptSnapshot');
+    expect(chrome.storage.local.remove).toHaveBeenCalledWith('transcriptSnapshot', expect.any(Function));
   });
 
   it('PASS: exact storage key "transcriptSnapshot" is used — App.tsx and worker agree', async () => {
@@ -165,13 +165,16 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
       payload: { videoId: 'video-a', title: 'T', channel: 'C', pageSessionId: 'ps-3' },
     });
 
+    // Clear mock history to ensure we only count calls from this test
+    chrome.storage.local.remove.mockClear();
+
     // Failure arrives for video B — must be silently ignored.
     await sendMessage(listener, {
       type: 'TRANSCRIPT_FAILED',
       payload: { videoId: 'video-b', debug: { source: null, reason: 'timeout', attemptCount: 1 } },
     });
 
-    expect(chrome.storage.local.remove).not.toHaveBeenCalledWith('transcriptSnapshot');
+    expect(chrome.storage.local.remove).not.toHaveBeenCalled();
   });
 
   it('PASS: after VIDEO_CHANGED then TRANSCRIPT_FAILED, persisted state has no transcript chunks', async () => {

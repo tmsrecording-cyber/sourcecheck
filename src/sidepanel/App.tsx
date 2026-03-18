@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
-import { AlertTriangle, Settings } from 'lucide-react';
+import { AlertTriangle, Settings, KeyRound } from 'lucide-react';
+import { PROVIDER_SETTINGS_KEY } from '../background/providers/types';
 import { VideoHeader } from './components/VideoHeader';
 import { CardFeed } from './components/CardFeed';
 import { AskBox } from './components/AskBox';
@@ -94,6 +95,7 @@ export const App = () => {
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [showSettings, setShowSettings] = useState(false);
   const [lastProviderError, setLastProviderError] = useState<{ code?: string; message?: string } | null>(null);
+  const [hasCustomKey, setHasCustomKey] = useState(false);
   const isMountedRef = useRef(true);
 
   useEffect(() => () => {
@@ -101,6 +103,32 @@ export const App = () => {
   }, []);
 
   // Use runtimeState.selectedModel directly - single source of truth
+
+  // Check BYOK status from storage
+  useEffect(() => {
+    const checkByokStatus = () => {
+      chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
+        if (chrome.runtime.lastError) {
+          return;
+        }
+        const stored = result[PROVIDER_SETTINGS_KEY];
+        const hasKey = !!(stored && typeof stored === 'object' && typeof stored.apiKey === 'string' && stored.apiKey.trim());
+        setHasCustomKey(hasKey);
+      });
+    };
+
+    checkByokStatus();
+
+    // Listen for storage changes to update BYOK status in real-time
+    const storageListener = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (changes[PROVIDER_SETTINGS_KEY]) {
+        checkByokStatus();
+      }
+    };
+
+    chrome.storage.local.onChanged.addListener(storageListener);
+    return () => chrome.storage.local.onChanged.removeListener(storageListener);
+  }, []);
 
   useEffect(() => {
     setAskDraft('');
@@ -211,7 +239,7 @@ export const App = () => {
       });
     } catch (error) {
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
-      setAskError('Failed to retry transcript. Please reload the page and try again.');
+      setAskError('Transcript recovery failed. Please refresh the page.');
     }
   };
 
@@ -287,34 +315,35 @@ export const App = () => {
       <div className="hud-grid" aria-hidden="true" />
       <div className="hud-circuit" aria-hidden="true" />
       <div className="flex h-full min-h-0 w-full flex-col bg-sc-bg-0 relative">
-        <div className="tactile-header flex-shrink-0 flex justify-between items-center h-[44px] px-3.5 hud-header z-20">
-          <div className="flex gap-3.5 items-center h-full min-w-0">
+        <div className="tactile-header flex-shrink-0 flex justify-between items-center h-[52px] px-5 hud-header z-20">
+          <div className="flex gap-4 items-center h-full min-w-0">
             <SourceCheckLogo size={18} className="flex-shrink-0" />
             <div className="w-px h-4 bg-sc-border-soft/60" aria-hidden="true" />
-            <nav className="flex gap-0.5 h-full items-center" role="tablist">
+            <nav className="flex gap-1 h-full items-center" role="tablist">
               <button
                 onClick={() => setActiveTab('live')}
-                className={`tab-btn ${activeTab === 'live' ? 'active' : ''}`}
+                className={`tab-btn transition-all duration-300 ease-out ${activeTab === 'live' ? 'active' : ''}`}
                 role="tab"
                 aria-selected={activeTab === 'live'}
               >
                 LIVE
-                {activeTab === 'live' && <span className="tab-indicator" aria-hidden="true" />}
+                <span className={`tab-indicator transition-all duration-300 ease-out ${activeTab === 'live' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
               </button>
               <button
                 onClick={() => setActiveTab('history')}
-                className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+                className={`tab-btn transition-all duration-300 ease-out ${activeTab === 'history' ? 'active' : ''}`}
                 role="tab"
                 aria-selected={activeTab === 'history'}
               >
                 HISTORY
-                {activeTab === 'history' && <span className="tab-indicator" aria-hidden="true" />}
+                <span className={`tab-indicator transition-all duration-300 ease-out ${activeTab === 'history' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
               </button>
             </nav>
           </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <ModelPicker 
               selectedModel={runtimeState.selectedModel} 
+              hasCustomKey={hasCustomKey}
               onModelChange={async (model) => {
                 try {
                   await chrome.storage.sync.set({ selectedModel: model });
@@ -326,12 +355,11 @@ export const App = () => {
             />
             <button
               onClick={() => setShowSettings(true)}
-              className="h-[28px] px-2.5 text-[11px] font-medium tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded-md text-sc-text-soft transition-all duration-150 flex items-center gap-1.5 focus:outline-none whitespace-nowrap"
-              aria-label="Open settings"
+              className="h-[32px] w-[32px] flex items-center justify-center text-sc-muted hover:text-sc-text hover:bg-sc-surface-1 rounded-md transition-all duration-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-sc-accent/30"
+              aria-label="API key settings"
               title="API key settings"
             >
-              <Settings size={12} />
-              <span>Key</span>
+              <KeyRound size={15} strokeWidth={1.75} />
             </button>
           </div>
         </div>

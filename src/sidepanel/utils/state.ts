@@ -26,7 +26,7 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
   eventLog: [],
-  selectedModel: 'gemini-3.1-flash-lite',
+  selectedModel: 'gemini-3.1-flash-lite-preview',
 };
 
 export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState => {

@@ -14,9 +14,9 @@ type KeyStatus = 'missing' | 'present' | 'invalid' | 'quota_exhausted';
  * These are the three allowed models for Bring Your Own Key mode.
  */
 const MODEL_LABELS: Record<GeminiModelOption, string> = {
-  'gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
-  'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
-  'gemini-3-preview': 'Gemini 3 Preview',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite Preview',
+  'gemini-3-flash-preview': 'Gemini 3 Flash Preview',
 };
 
 const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; icon: React.ReactNode }> = {
@@ -147,7 +147,7 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
   const statusConfig = STATUS_CONFIG[currentStatus];
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
+    <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
       <div className="w-full max-w-[320px]">
         <div className="instrument-shell px-5 py-5">
           <div className="signal-rail" style={{ left: '24px', top: '18px', bottom: '18px' }} />
@@ -266,7 +266,7 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
                       type="text"
                       value={customModel}
                       onChange={(e) => setCustomModel(e.target.value)}
-                      placeholder="e.g. gemini-2.5-flash-lite"
+                      placeholder="e.g. gemini-2.5-flash"
                       className="w-full rounded border border-sc-border bg-sc-bg-1 px-3 py-2 text-[13px] text-sc-text placeholder:text-sc-muted focus:border-sc-accent-soft focus:outline-none"
                       autoComplete="off"
                       spellCheck={false}

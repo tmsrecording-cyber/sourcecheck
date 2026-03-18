@@ -24,9 +24,9 @@ export type { GeminiModelOption };
  * All values MUST be in ALLOWED_MODELS from shared/types.ts.
  */
 export const GEMINI_MODELS: readonly GeminiModelOption[] = [
-  'gemini-2.5-flash-lite',  // Reliable standard
-  'gemini-3.1-flash-lite',  // Fastest, lightest
-  'gemini-3-preview',       // Balanced quality
+  'gemini-2.5-flash',  // Reliable standard
+  'gemini-3.1-flash-lite-preview',  // Fastest, lightest
+  'gemini-3-flash-preview',       // Balanced quality
 ] as const;
 
 /** 

@@ -1189,7 +1189,7 @@ export const CardFeed = ({
   onEntitySelect,
   onRetryTranscript,
   activeTab = 'live',
-  selectedModel = 'gemini-3.1-flash-lite',
+  selectedModel = 'gemini-3.1-flash-lite-preview',
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
@@ -1235,7 +1235,7 @@ export const CardFeed = ({
   }, [expandedClaimId, olderCards]);
 
   // Dynamic model accent color for HUD lighting
-  const modelAccentRgb = selectedModel === 'gemini-3.1-flash-lite' 
+  const modelAccentRgb = selectedModel === 'gemini-3.1-flash-lite-preview' 
     ? '168, 199, 250' // Gemini Blue
     : '215, 174, 251'; // Gemini Purple
 

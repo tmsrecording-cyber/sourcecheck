@@ -1644,7 +1644,7 @@ const hydrateState = async () => {
           // Validate against allowed models to prevent corrupted values
           selectedModel: (() => {
             // MODEL POLICY: All valid models must be from ALLOWED_MODELS in shared/types.ts
-const VALID_MODELS: GeminiModelOption[] = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-preview'];
+const VALID_MODELS: GeminiModelOption[] = ['gemini-2.5-flash', 'gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview'];
             const model = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
             return (VALID_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
           })(),

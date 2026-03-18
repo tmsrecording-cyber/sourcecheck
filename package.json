@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build:dev": "vite build --mode development",
-    "build": "tsc && vite build && node scripts/check-release-dist.mjs",
+    "build": "rm -rf dist && tsc && vite build && node scripts/check-release-dist.mjs",
     "check:dist-release": "node scripts/check-release-dist.mjs",
     "check:release-secrets": "node scripts/check-release-secrets.mjs",
     "test:e2e:smoke": "playwright test tests/e2e/extension-smoke.spec.ts",

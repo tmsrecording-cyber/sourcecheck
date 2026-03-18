@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 const DIST_DIR = fileURLToPath(new URL('../dist', import.meta.url));
 const DISALLOWED_PATTERNS = [
+  // Localhost / dev URLs (H2)
   'http://localhost',
   'https://localhost',
   'http://127.0.0.1',
@@ -14,6 +15,10 @@ const DISALLOWED_PATTERNS = [
   '://127.0.0.1',
   '://0.0.0.0',
   '.local/',
+  // External font sources (H3) - MV3 CSP prohibits remote fonts
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+  'googleapis.com/css',
 ];
 
 const files = [];

@@ -6,12 +6,13 @@ import { AVAILABLE_MODELS, FREEMIUM_MODEL, normalizeModel } from '../../../share
 interface ModelPickerProps {
   selectedModel: GeminiModelOption;
   onModelChange: (model: GeminiModelOption) => void;
+  hasCustomKey?: boolean;
 }
 
 const MODEL_ICONS: Record<GeminiModelOption, React.ReactNode> = {
-  'gemini-3.1-flash-lite': <Zap size={12} />,
-  'gemini-3-preview': <Brain size={12} />,
-  'gemini-2.5-flash-lite': <Cpu size={12} />,
+  'gemini-3.1-flash-lite-preview': <Zap size={12} />,
+  'gemini-3-flash-preview': <Brain size={12} />,
+  'gemini-2.5-flash': <Cpu size={12} />,
 };
 
 const SPEED_LABELS: Record<'fast' | 'balanced' | 'deep', string> = {
@@ -22,12 +23,12 @@ const SPEED_LABELS: Record<'fast' | 'balanced' | 'deep', string> = {
 
 /** Compact display labels for header - canonical model IDs unchanged */
 const COMPACT_LABELS: Record<GeminiModelOption, string> = {
-  'gemini-3.1-flash-lite': '3.1 Lite',
-  'gemini-3-preview': '3 Preview',
-  'gemini-2.5-flash-lite': '2.5 Lite',
+  'gemini-3.1-flash-lite-preview': '3.1 Lite',
+  'gemini-3-flash-preview': '3 Preview',
+  'gemini-2.5-flash': '2.5 Lite',
 };
 
-export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) => {
+export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false }: ModelPickerProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const currentModel = AVAILABLE_MODELS.find(m => m.id === selectedModel) ?? AVAILABLE_MODELS[0];
@@ -68,8 +69,8 @@ export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) 
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="h-[28px] px-2.5 text-[11px] font-medium tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded-md text-sc-text-soft transition-all duration-150 flex items-center gap-1.5 focus:outline-none focus-visible:ring-0 whitespace-nowrap flex-shrink-0 min-w-0"
-        style={{ '--model-accent-rgb': selectedModel === 'gemini-3.1-flash-lite' ? '168, 199, 250' : '215, 174, 251' } as React.CSSProperties}
+        className="h-[32px] px-3 text-[11px] font-medium tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded-md text-sc-text-soft transition-all duration-150 flex items-center gap-1.5 focus:outline-none focus-visible:ring-0 whitespace-nowrap flex-shrink-0 min-w-0"
+        style={{ '--model-accent-rgb': selectedModel === 'gemini-3.1-flash-lite-preview' ? '168, 199, 250' : '215, 174, 251' } as React.CSSProperties}
         onMouseEnter={(e) => {
           e.currentTarget.style.boxShadow = '0 0 8px rgba(var(--model-accent-rgb), 0.3)';
         }}
@@ -86,6 +87,13 @@ export const ModelPicker = ({ selectedModel, onModelChange }: ModelPickerProps) 
         <span className="whitespace-nowrap overflow-hidden text-ellipsis max-w-[80px]">
           {COMPACT_LABELS[selectedModel]}
         </span>
+        {/* BYOK indicator - subtle green dot when using custom key */}
+        {hasCustomKey && (
+          <span
+            className="w-1.5 h-1.5 rounded-full bg-sc-supported flex-shrink-0"
+            title="Using your API key (BYOK mode)"
+          />
+        )}
         <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
