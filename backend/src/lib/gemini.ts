@@ -956,3 +956,4 @@ export async function generateEmbedding(
 
 // Re-export policy constants for backend use
 export { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel };
+// Deployment bump: Wed Mar 18 00:52:46 PDT 2026
