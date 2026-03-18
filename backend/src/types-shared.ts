@@ -5,8 +5,8 @@
 // ============================================
 // MODEL POLICY - HARD LOCK
 // ============================================
-// Freemium/trial/managed path: gemini-2.5-flash-lite ONLY
-// BYOK path: may use gemini-2.5-flash-lite, gemini-3.1-flash-lite, or gemini-3-preview
+// Freemium/trial/managed path: gemini-2.5-flash ONLY
+// BYOK path: may use gemini-2.5-flash, gemini-3.1-flash-lite-preview, or gemini-3-flash-preview
 // ANY other model names are INVALID and will be normalized to the freemium default
 // ============================================
 
@@ -16,9 +16,9 @@
  * DO NOT add models here without explicit policy approval.
  */
 export const ALLOWED_MODELS = [
-  'gemini-2.5-flash-lite',  // Freemium/trial/managed default
-  'gemini-3.1-flash-lite',  // BYOK alternative
-  'gemini-3-preview',       // BYOK alternative
+  'gemini-2.5-flash',           // Freemium/trial/managed default (stable)
+  'gemini-3.1-flash-lite-preview',  // BYOK alternative
+  'gemini-3-flash-preview',     // BYOK alternative
 ] as const;
 
 /** Type for model options - derived from ALLOWED_MODELS */
@@ -28,13 +28,13 @@ export type GeminiModelOption = typeof ALLOWED_MODELS[number];
  * Freemium/trial/managed tier model - ONLY this model is used for free tier.
  * This is enforced server-side and cannot be overridden by client.
  */
-export const FREEMIUM_MODEL: GeminiModelOption = 'gemini-2.5-flash-lite';
+export const FREEMIUM_MODEL: GeminiModelOption = 'gemini-2.5-flash';
 
 /** 
  * Default model for BYOK (Bring Your Own Key) mode.
  * User can override to other allowed models in settings.
  */
-export const BYOK_DEFAULT_MODEL: GeminiModelOption = 'gemini-2.5-flash-lite';
+export const BYOK_DEFAULT_MODEL: GeminiModelOption = 'gemini-2.5-flash';
 
 /** 
  * Validate and normalize a model name to an allowed value.
@@ -64,19 +64,19 @@ export interface ModelConfig {
  */
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
-    id: 'gemini-3.1-flash-lite',
+    id: 'gemini-3.1-flash-lite-preview',
     label: 'Flash 3.1 Lite',
     description: 'Fastest, lightest',
     speed: 'fast',
   },
   {
-    id: 'gemini-3-preview',
+    id: 'gemini-3-flash-preview',
     label: 'Flash 3 Preview',
     description: 'Balanced quality',
     speed: 'balanced',
   },
   {
-    id: 'gemini-2.5-flash-lite',
+    id: 'gemini-2.5-flash',
     label: 'Flash 2.5 Lite',
     description: 'Reliable standard',
     speed: 'deep',

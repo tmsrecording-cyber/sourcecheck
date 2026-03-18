@@ -3,6 +3,8 @@ import {
   WorkerLifecycle,
   AnalysisStatus,
   TranscriptChunk,
+  ALLOWED_MODELS,
+  FREEMIUM_MODEL,
 } from '../../../shared/types';
 
 export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
@@ -29,6 +31,35 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   selectedModel: 'gemini-3.1-flash-lite-preview',
 };
 
+/**
+ * Map of deprecated model IDs to their new equivalents
+ */
+const MODEL_MIGRATION_MAP: Record<string, string> = {
+  'gemini-3-preview': 'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
+  'gemini-2.5-flash-lite': 'gemini-2.5-flash',
+};
+
+/**
+ * Migrate old model IDs to new ones and validate against allowed models
+ */
+const migrateModel = (model: unknown): string => {
+  if (typeof model !== 'string') {
+    return FREEMIUM_MODEL;
+  }
+  
+  // First check if it's a deprecated model and migrate
+  const migrated = MODEL_MIGRATION_MAP[model] || model;
+  
+  // Then validate against allowed models
+  if (ALLOWED_MODELS.includes(migrated as typeof ALLOWED_MODELS[number])) {
+    return migrated;
+  }
+  
+  // Fall back to freemium model if invalid
+  return FREEMIUM_MODEL;
+};
+
 export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState => {
   if (!value || typeof value !== 'object') {
     return INITIAL_RUNTIME_STATE;
@@ -39,6 +70,7 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
   return {
     ...INITIAL_RUNTIME_STATE,
     ...candidate,
+    selectedModel: migrateModel(candidate.selectedModel) as typeof ALLOWED_MODELS[number],
     currentVideo: candidate.currentVideo && typeof candidate.currentVideo === 'object'
       && typeof candidate.currentVideo.videoId === 'string'
       && typeof candidate.currentVideo.title === 'string'
