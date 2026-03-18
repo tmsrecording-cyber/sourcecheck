@@ -866,7 +866,7 @@ export async function askGeminiJSONWithSearch<T = unknown>(
 // EMBEDDING GENERATION (for cross-video memory / semantic deduplication)
 // ============================================================================
 
-const EMBEDDING_MODEL = 'text-embedding-004';
+const EMBEDDING_MODEL = 'gemini-embedding-2-preview';
 const EMBEDDING_TIMEOUT_MS = 15_000;
 
 /**
