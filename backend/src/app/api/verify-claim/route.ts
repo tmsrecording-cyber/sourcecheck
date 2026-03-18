@@ -439,9 +439,15 @@ export async function POST(request: NextRequest) {
       sources = result.sources;
     } catch (firstError) {
       if (isRecoverableGroundingError(firstError)) {
-        console.warn('[verify-claim] Grounding call failed, attempting retry with safer params:', {
+        // Log first attempt failure
+        const firstErr = isGeminiError(firstError) ? firstError : null;
+        console.warn('[verify-claim] First attempt failed, will retry', {
+          category: firstErr?.code === 'API_ERROR' ? 'upstream_non_ok' : (firstErr?.code?.toLowerCase() ?? 'unknown'),
+          model: effectiveModel,
           claimId: claim.id,
-          firstErrorCode: isGeminiError(firstError) ? firstError.code : 'unknown',
+          retryAttempt: 1,
+          status: firstErr?.status ?? null,
+          finishReason: firstErr?.message.match(/finishReason=(\w+)/)?.[1] || null,
         });
         
         // Retry once with higher token budget and no schema enforcement (more permissive)
@@ -464,26 +470,25 @@ export async function POST(request: NextRequest) {
           const classifyFailure = (err: unknown): string => {
             if (!isGeminiError(err)) return 'unknown';
             const msg = err.message;
-            if (msg.includes('SAFETY')) return 'safety_policy';
-            if (msg.includes('RECITATION')) return 'recitation';
-            if (msg.includes('MAX_TOKENS')) return 'max_tokens';
-            if (msg.includes('PARSE_ERROR') || msg.includes('parse')) return 'parse_error';
-            if (msg.includes('schema') || msg.includes('validation')) return 'schema_error';
-            if (msg.includes('finishReason')) return 'empty_response';
-            if (msg.includes('timeout') || msg.includes('timed out')) return 'timeout';
             if (err.status === 502 || err.status === 504) return 'upstream_non_ok';
-            return 'other';
+            if (msg.includes('PARSE_ERROR')) return 'parse_error';
+            if (msg.includes('schema') || msg.includes('validation')) return 'schema_error';
+            if (msg.includes('finishReason') || msg.includes('Empty response')) return 'empty_response';
+            if (msg.includes('MAX_TOKENS')) return 'max_tokens';
+            if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('AbortError')) return 'timeout';
+            return 'unknown';
           };
           
           const category = classifyFailure(retryError);
           const geminiErr = isGeminiError(retryError) ? retryError : null;
           
-          console.warn('[verify-claim] Fallback: grounding failed after retry', {
+          // Single concise log line for fallback classification
+          console.warn('[verify-claim] Fallback triggered', {
             category,
             model: effectiveModel,
             claimId: claim.id,
             retryAttempt: 2,
-            status: geminiErr?.status,
+            status: geminiErr?.status ?? null,
             finishReason: geminiErr?.message.match(/finishReason=(\w+)/)?.[1] || null,
           });
           
