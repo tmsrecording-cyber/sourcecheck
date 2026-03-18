@@ -591,15 +591,60 @@ const formatPlaybackTime = (seconds: number) => {
   return `${minutes}:${remainder.toString().padStart(2, '0')}`;
 };
 
+/**
+ * Sanitize any value to remove sensitive headers before logging.
+ * Specifically removes x-sourcecheck-client-secret from headers objects.
+ */
+const sanitizeForLog = (value: unknown): unknown => {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  // Handle Headers object - convert to plain object with redaction
+  if (value instanceof Headers) {
+    const headersObj: Record<string, string> = {};
+    value.forEach((v, k) => {
+      headersObj[k] = k.toLowerCase() === 'x-sourcecheck-client-secret' ? '[REDACTED]' : v;
+    });
+    return headersObj;
+  }
+
+  // Handle plain object with headers property
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>;
+    if ('headers' in obj) {
+      const sanitized = { ...obj };
+      if (obj.headers instanceof Headers) {
+        const headersObj: Record<string, string> = {};
+        obj.headers.forEach((v, k) => {
+          headersObj[k] = k.toLowerCase() === 'x-sourcecheck-client-secret' ? '[REDACTED]' : v;
+        });
+        sanitized.headers = headersObj;
+      } else if (typeof obj.headers === 'object' && obj.headers !== null) {
+        sanitized.headers = { ...(obj.headers as Record<string, string>) };
+        Object.keys(sanitized.headers as Record<string, string>).forEach((k) => {
+          if (k.toLowerCase() === 'x-sourcecheck-client-secret') {
+            (sanitized.headers as Record<string, string>)[k] = '[REDACTED]';
+          }
+        });
+      }
+      return sanitized;
+    }
+  }
+
+  return value;
+};
+
 const summarizeErrorForLog = (error: unknown): Record<string, unknown> => {
   if (error === null || error === undefined) {
     return { type: 'nullish', value: String(error) };
   }
-  
+
   if (!(error instanceof Error)) {
-    return { 
-      type: typeof error, 
-      value: typeof error === 'object' ? JSON.stringify(error) : String(error) 
+    const sanitized = sanitizeForLog(error);
+    return {
+      type: typeof error,
+      value: typeof sanitized === 'object' ? JSON.stringify(sanitized) : String(sanitized),
     };
   }
 
@@ -615,8 +660,16 @@ const summarizeErrorForLog = (error: unknown): Record<string, unknown> => {
   if ('status' in error && typeof error.status === 'number') {
     summary.status = error.status;
   }
-  
-  if (error.stack) {
+
+  // Sanitize error properties that might contain headers
+  if ('headers' in error) {
+    const sanitizedHeaders = sanitizeForLog(error.headers);
+    if (sanitizedHeaders !== undefined) {
+      summary.headers = sanitizedHeaders;
+    }
+  }
+
+  if (error.stack && typeof error.stack === 'string') {
     summary.stack = error.stack.split('\n').slice(0, 3).join(' | ');
   }
 
@@ -1328,7 +1381,11 @@ const markTranscriptUnavailable = () => {
   // Explicitly clear the persisted transcript snapshot so the sidepanel
   // cannot keep using stale transcript context (e.g. keeping Ask enabled)
   // after a transcript failure for the same video.
-  chrome.storage.local.remove('transcriptSnapshot');
+  chrome.storage.local.remove('transcriptSnapshot', () => {
+    if (chrome.runtime.lastError) {
+      console.error('[SourceCheck/SW] Failed to clear transcript snapshot:', chrome.runtime.lastError.message);
+    }
+  });
   dispatch({ type: 'TRANSCRIPT_FAILED', debug: transcriptDebug });
 };
 
@@ -2058,8 +2115,19 @@ const askVideoQuestion = async (question: string) => {
 let pendingAnalysisTimeout: ReturnType<typeof setTimeout> | null = null;
 let analysisRequestQueue: Array<{ currentTime: number; scheduledAt: number }> = [];
 
-const processPlayback = async (currentTime: number) => {
+const processPlayback = async (currentTime: number, expectedVideoId?: string) => {
   const activeVideo = currentVideoInfo;
+  
+  // Staleness check: bail if video changed or time drifted significantly
+  if (expectedVideoId && expectedVideoId !== activeVideo?.videoId) {
+    console.log('[Pipeline] Skipping stale request: video changed');
+    return;
+  }
+  const currentActualTime = currentPlaybackState?.currentTime;
+  if (currentActualTime !== undefined && Math.abs(currentActualTime - currentTime) > 30) {
+    console.log('[Pipeline] Skipping stale request: time drifted >30s');
+    return;
+  }
   
   // AGGRESSIVE PIPELINE LOGGING
   console.log('[Pipeline] processPlayback called:', {
@@ -2413,11 +2481,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'ignored' });
         return;
       }
+      
+      // Capture timestamp at message receipt time to prevent stale state
+      const messageTime = message.payload.currentTime;
+      const messageVideoId = currentVideoInfo?.videoId;
+      
       currentPlaybackState = message.payload as PlaybackState;
-      syncVisibleTimelineState(message.payload.currentTime);
-      dispatch({ type: 'PLAYBACK_UPDATED', currentTime: message.payload.currentTime });
+      syncVisibleTimelineState(messageTime);
+      dispatch({ type: 'PLAYBACK_UPDATED', currentTime: messageTime });
       persistPanelState();
-      void processPlayback(message.payload.currentTime).catch((err) => console.error('[SW] processPlayback error:', err));
+      
+      // Process with captured values to prevent race conditions
+      void processPlayback(messageTime, messageVideoId).catch((err) => console.error('[SW] processPlayback error:', err));
       sendResponse({ status: 'ok' });
       return;
     }
@@ -2519,7 +2594,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.type === 'MODEL_CHANGED') {
       runtimeState.selectedModel = message.model;
-      await chrome.storage.sync.set({ selectedModel: message.model });
+      try {
+        await chrome.storage.sync.set({ selectedModel: message.model });
+      } catch (storageError) {
+        console.error('[SourceCheck/SW] Failed to persist model selection:', storageError);
+      }
       persistPanelState();
       console.log('[SourceCheck/SW] Model changed to:', message.model);
       sendResponse({ status: 'ok' });
