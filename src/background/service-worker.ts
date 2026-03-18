@@ -21,6 +21,7 @@ import {
   DebugEvent,
   GeminiModelOption,
   FREEMIUM_MODEL,
+  ALLOWED_MODELS,
   normalizeModel,
 } from '../../shared/types';
 import {
@@ -1462,42 +1463,72 @@ const resetSessionState = (nextVideo: ActiveVideoContext | null) => {
 // PERSISTENCE
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Build minimal runtime state for persistence.
+ * Drops debug/transient fields that are not needed for session restore.
+ * Live runtime memory remains full-fidelity; persistence is minimal.
+ */
+const buildPersistableRuntimeState = (): WorkerRuntimeState => ({
+  ...runtimeState,
+  currentVideo: currentVideoInfo,
+  playbackState: currentPlaybackState,
+  transcriptChunkCount: currentTranscript.length,
+  // Keep minimal debug reference (null is fine for restore)
+  transcriptDebug,
+  // DEBUG FIELDS: drop completely - not needed for restore
+  transcriptFetchLog: [],
+  // ESSENTIAL DATA: cap to safe limits for persistence
+  sourceCards: sourceCards.slice(0, MAX_SOURCE_CARDS),
+  pendingClaims: pendingClaims.slice(0, MAX_PENDING_CLAIMS),
+  // PROGRESS TRACKING: essential for restore
+  chunksScanned,
+  lastScannedTimestamp,
+  // TRANSIENT UI STATE: clear for persistence (live only)
+  currentScanPreview: null,
+  currentScanEntities: [],
+  currentScanActionState: null,
+  currentScanReason: null,
+  lastProcessedIndex,
+  // TRANSIENT TIMEOUT: clear for persistence
+  transcriptLoadDeadlineAt: null,
+  pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
+  // DEBUG UI STATE: reset to idle for persistence
+  debugStage: 'idle',
+  transcriptMessageStats,
+  // DEBUG HISTORY: drop completely - not needed for restore
+  eventLog: [],
+});
+
 const persistPanelState = (options: {
   includeTranscript?: boolean;
   includeCards?: boolean;
   includeQueue?: boolean;
 } = {}) => {
-  // Sync all current module state into runtimeState before persisting
+  // Build minimal persistable runtime state
+  const persistableRuntimeState = buildPersistableRuntimeState();
+
+  // Update live runtimeState reference (but keep full data in memory)
   runtimeState = {
     ...runtimeState,
-    currentVideo: currentVideoInfo,
-    playbackState: currentPlaybackState,
-    transcriptChunkCount: currentTranscript.length,
-    transcriptDebug,
+    ...persistableRuntimeState,
+    // Restore live arrays for in-memory state (not persisted)
     transcriptFetchLog,
     sourceCards,
     pendingClaims,
-    chunksScanned,
-    lastScannedTimestamp,
     currentScanPreview,
     currentScanEntities,
     currentScanActionState,
     currentScanReason,
-    lastProcessedIndex,
     transcriptLoadDeadlineAt,
-    pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
     debugStage,
-    transcriptMessageStats,
+    eventLog: runtimeState.eventLog,
   };
 
   const payload: Record<string, unknown> = {
-    [WORKER_RUNTIME_STATE_KEY]: runtimeState,
-    // Keep compat fields for hydration of processing state
-    sourceCards,
-    pendingClaims,
-    allSourceCards,
-    allPendingClaims,
-    transcriptFetchLog,
+    [WORKER_RUNTIME_STATE_KEY]: persistableRuntimeState,
+    // Keep compat fields for hydration of processing state (already capped above)
+    sourceCards: persistableRuntimeState.sourceCards,
+    pendingClaims: persistableRuntimeState.pendingClaims,
   };
 
   if (options.includeTranscript) {
@@ -1506,30 +1537,33 @@ const persistPanelState = (options: {
   }
 
   if (options.includeQueue) {
-    payload.pendingVerifications = verificationQueue;
+    // Cap verification queue for persistence
+    payload.pendingVerifications = verificationQueue.slice(0, MAX_VERIFICATION_QUEUE);
   }
 
   // Check if payload would exceed session storage quota
   if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
     console.warn('[SourceCheck/SW] Panel state payload too large, truncating...');
-    
-    // Remove heavy fields that can be reconstructed
-    delete payload.allSourceCards;
-    delete payload.allPendingClaims;
-    delete payload.transcriptFetchLog;
-    
-    // If still too large, reduce card counts
+
+    // If still too large, reduce card counts further
     if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
-      payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 50);
-      payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 30);
+      payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 10);
+      payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 20);
+      // Update the runtimeState in payload to match
+      (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = payload.sourceCards as SourceCard[];
+      (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = payload.pendingClaims as PendingClaimPreview[];
     }
-    
+
     // If STILL too large, only persist core runtime state
     if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
-      console.error('[SourceCheck/SW] Cannot persist full panel state: even truncated payload exceeds quota');
-      // Only persist the minimal runtime state
+      console.warn('[SourceCheck/SW] Panel state too large, using minimal payload');
+      // Only persist the minimal runtime state (no cards/claims)
       const minimalPayload = {
-        [WORKER_RUNTIME_STATE_KEY]: runtimeState,
+        [WORKER_RUNTIME_STATE_KEY]: {
+          ...persistableRuntimeState,
+          sourceCards: [],
+          pendingClaims: [],
+        } as WorkerRuntimeState,
       };
       chrome.storage.session.set(minimalPayload, () => {
         if (chrome.runtime.lastError) {
@@ -1549,10 +1583,10 @@ const persistPanelState = (options: {
       }
     } else {
       console.log('[Pipeline] State persisted:', {
-        sourceCardsCount: sourceCards.length,
-        pendingClaimsCount: pendingClaims.length,
-        lifecycle: runtimeState.lifecycle,
-        chunksScanned: runtimeState.chunksScanned,
+        sourceCardsCount: (payload.sourceCards as SourceCard[]).length,
+        pendingClaimsCount: (payload.pendingClaims as PendingClaimPreview[]).length,
+        lifecycle: (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).lifecycle,
+        chunksScanned: (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).chunksScanned,
       });
     }
   });
@@ -1644,9 +1678,9 @@ const hydrateState = async () => {
           // Validate against allowed models to prevent corrupted values
           selectedModel: (() => {
             // MODEL POLICY: All valid models must be from ALLOWED_MODELS in shared/types.ts
-const VALID_MODELS: GeminiModelOption[] = ['gemini-2.5-flash', 'gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview'];
+// CANONICAL: Use shared ALLOWED_MODELS from shared/types.ts (single source of truth)
             const model = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
-            return (VALID_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
+            return (ALLOWED_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
           })(),
         };
 
@@ -1836,6 +1870,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
 
     const { sourceCard } = await fetchWithBYOK('/api/verify-claim', {
       claim: item.claim, 
+      videoId: item.videoId,
       videoTitle: item.videoTitle, 
       channelName: item.channelName,
       model: runtimeState.selectedModel,

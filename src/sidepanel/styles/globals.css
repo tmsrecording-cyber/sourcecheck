@@ -943,6 +943,19 @@ body::before {
     color: var(--sc-accent);
   }
   
+  /* Status text colors - used by SourceCard */
+  .text-supported {
+    color: var(--sc-supported);
+  }
+  
+  .text-partial {
+    color: var(--sc-partial);
+  }
+  
+  .text-disputed {
+    color: var(--sc-disputed);
+  }
+  
   .text-balance {
     text-wrap: balance;
   }

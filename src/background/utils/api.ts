@@ -173,7 +173,7 @@ export interface ClassifiedError {
  * Non-retryable error codes that should fail fast without retries.
  * EXPORTED: Single source of truth for error code classification.
  */
-export const NON_RETRYABLE_ERROR_CODES = ['AUTH_ERROR', 'QUOTA_EXHAUSTED'] as const;
+export const NON_RETRYABLE_ERROR_CODES = ['AUTH_ERROR', 'QUOTA_EXHAUSTED', 'INVALID_API_KEY'] as const;
 
 /**
  * Error codes that should trigger settings panel opening.
@@ -400,18 +400,19 @@ export const isTransientError = (status: number | null, errorResponse: ErrorResp
   
   // Status code based heuristics
   if (status === 401) return false; // Auth errors - retrying won't help
-  if (status === 429 || status === 503 || status === 502 || status === 504) return true;
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
   if (status !== null) return false;
   
   // Network errors (status is null) are generally retryable
-  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorMessage = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return (
     errorMessage.includes('network') ||
     errorMessage.includes('fetch') ||
     errorMessage.includes('abort') ||
     errorMessage.includes('timeout') ||
-    errorMessage.includes('ECONNREFUSED') ||
-    errorMessage.includes('ETIMEDOUT')
+    errorMessage.includes('econnrefused') ||
+    errorMessage.includes('etimedout') ||
+    errorMessage.includes('failed to fetch')
   );
 };
 
@@ -445,21 +446,23 @@ export async function fetchWithBYOK(
   console.log('[SourceCheck/API] fetchWithBYOK called:', endpoint);
   
   // Pull the saved key and model from storage (once, outside retry loop)
-  // FIX: Read from chrome.storage.local with the correct key structure
-  const providerResult = await chrome.storage.local.get([PROVIDER_SETTINGS_KEY]);
+  // ARCHITECTURE: apiKey from local providerSettings, selectedModel from sync (single source of truth)
+  const [providerResult, syncResult] = await Promise.all([
+    chrome.storage.local.get([PROVIDER_SETTINGS_KEY]),
+    chrome.storage.sync.get(['selectedModel']),
+  ]);
   const providerSettings: ProviderSettings | undefined = providerResult[PROVIDER_SETTINGS_KEY];
   
   const customApiKey = providerSettings?.apiKey ?? null;
-  const selectedModel = (providerSettings?.model as GeminiModelOption) ?? null;
+  // CANONICAL: selectedModel always comes from sync storage (single source of truth)
+  const selectedModel = normalizeModel(syncResult.selectedModel);
 
   const hasCustomKey = customApiKey && customApiKey.trim() !== '';
   
   // MODEL POLICY: 
-  // - Freemium (no custom key): Always use FREEMIUM_MODEL (gemini-2.5-flash-lite)
-  // - BYOK mode: Use normalized saved model (stale values fall back to freemium default)
-  const modelToUse = hasCustomKey && selectedModel
-    ? normalizeModel(selectedModel)
-    : FREEMIUM_MODEL;
+  // - Freemium (no custom key): Always use FREEMIUM_MODEL
+  // - BYOK mode: Use normalized selectedModel from sync (single source of truth)
+  const modelToUse = hasCustomKey ? selectedModel : FREEMIUM_MODEL;
   
   // Build payload with model
   const requestPayload = { ...payload, model: modelToUse };
@@ -488,10 +491,8 @@ export async function fetchWithBYOK(
 
       if (hasCustomKey) {
         headers.set('X-Custom-Api-Key', customApiKey.trim());
-        // Also send the selected model so backend can use it with BYOK
-        if (selectedModel) {
-          headers.set('X-Custom-Model', selectedModel);
-        }
+        // CANONICAL: Always send the selected model from sync storage (single source of truth)
+        headers.set('X-Custom-Model', selectedModel);
       }
 
       const clientSecret = import.meta.env.VITE_CLIENT_SECRET;

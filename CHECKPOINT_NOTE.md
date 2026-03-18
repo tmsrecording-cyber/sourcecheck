@@ -32,7 +32,7 @@
    - Sends MODEL_CHANGED message to worker
 
 3. **Backend** (`backend/src/lib/gemini.ts:2,543-567`)
-   - `DEFAULT_MODEL = 'gemini-2.5-flash-lite'` (⚠️ DIFFERENT from worker)
+   - `FREEMIUM_MODEL = 'gemini-2.5-flash'` (synced with worker via shared types)
    - `ALLOWED_MODELS` whitelist security check
    - Dynamic model selection from client requests
 

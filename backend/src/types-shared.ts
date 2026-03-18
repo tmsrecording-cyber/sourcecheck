@@ -36,16 +36,37 @@ export const FREEMIUM_MODEL: GeminiModelOption = 'gemini-2.5-flash';
  */
 export const BYOK_DEFAULT_MODEL: GeminiModelOption = 'gemini-2.5-flash';
 
+/**
+ * Map of deprecated model IDs to their current equivalents.
+ * These are automatically migrated during normalization.
+ */
+const MODEL_MIGRATION_MAP: Record<string, string> = {
+  'gemini-3-preview': 'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
+  'gemini-2.5-flash-lite': 'gemini-2.5-flash',
+};
+
 /** 
  * Validate and normalize a model name to an allowed value.
- * Returns the freemium default if the input is not in ALLOWED_MODELS.
+ * First migrates deprecated model IDs, then validates against ALLOWED_MODELS.
+ * Returns the freemium default if the input cannot be normalized.
  * This prevents stale/invalid saved settings from breaking the app.
  */
 export function normalizeModel(model: string | null | undefined): GeminiModelOption {
   if (!model) return FREEMIUM_MODEL;
-  if (ALLOWED_MODELS.includes(model as GeminiModelOption)) {
-    return model as GeminiModelOption;
+  
+  // First: migrate deprecated model IDs to current equivalents
+  const migrated = MODEL_MIGRATION_MAP[model] || model;
+  
+  // Then: validate against allowed models
+  if (ALLOWED_MODELS.includes(migrated as GeminiModelOption)) {
+    // Log migration for debugging (only if changed)
+    if (migrated !== model) {
+      console.log(`[model-policy] Migrated '${model}' to '${migrated}'`);
+    }
+    return migrated as GeminiModelOption;
   }
+  
   // Stale/invalid model - normalize to freemium default
   console.warn(`[model-policy] Invalid model '${model}' rejected, using '${FREEMIUM_MODEL}'`);
   return FREEMIUM_MODEL;

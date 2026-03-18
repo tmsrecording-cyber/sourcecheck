@@ -54,37 +54,54 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
   const [storedKeyLast4, setStoredKeyLast4] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
-      if (chrome.runtime.lastError) {
-        // Ignore storage errors (e.g., extension context invalidated)
-        return;
-      }
-      const stored = result[PROVIDER_SETTINGS_KEY];
-      if (!stored || typeof stored !== 'object') return;
-      
-      // Check for stored key
-      if (typeof stored.apiKey === 'string' && stored.apiKey.trim()) {
-        const key = stored.apiKey.trim();
-        setStoredKeyLast4(key.slice(-4));
-        
-        // Determine status based on last error (UNIFIED: handles AUTH_ERROR, INVALID_API_KEY, QUOTA_EXHAUSTED)
-        if (lastError?.code === 'AUTH_ERROR' || lastError?.code === 'INVALID_API_KEY' || lastError?.message?.toLowerCase().includes('invalid')) {
-          setKeyStatus('invalid');
-        } else if (lastError?.code === 'QUOTA_EXHAUSTED' || lastError?.message?.toLowerCase().includes('quota')) {
-          setKeyStatus('quota_exhausted');
-        } else {
-          setKeyStatus('present');
-        }
-      } else {
-        setKeyStatus('missing');
-      }
-      
-      // MODEL POLICY: Normalize any stored model to allowed values
-      if (typeof stored.model === 'string' && stored.model.trim()) {
-        const normalizedModel = normalizeModel(stored.model.trim());
-        setSelectedModel(normalizedModel);
-      }
-    });
+    // CANONICAL: Read API key from local, model from sync (single source of truth)
+    Promise.all([
+      new Promise<void>((resolve) => {
+        chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
+          if (chrome.runtime.lastError) {
+            resolve();
+            return;
+          }
+          const stored = result[PROVIDER_SETTINGS_KEY];
+          if (!stored || typeof stored !== 'object') {
+            resolve();
+            return;
+          }
+          
+          // Check for stored key
+          if (typeof stored.apiKey === 'string' && stored.apiKey.trim()) {
+            const key = stored.apiKey.trim();
+            setStoredKeyLast4(key.slice(-4));
+            
+            // Determine status based on last error (UNIFIED: handles AUTH_ERROR, INVALID_API_KEY, QUOTA_EXHAUSTED)
+            if (lastError?.code === 'AUTH_ERROR' || lastError?.code === 'INVALID_API_KEY' || lastError?.message?.toLowerCase().includes('invalid')) {
+              setKeyStatus('invalid');
+            } else if (lastError?.code === 'QUOTA_EXHAUSTED' || lastError?.message?.toLowerCase().includes('quota')) {
+              setKeyStatus('quota_exhausted');
+            } else {
+              setKeyStatus('present');
+            }
+          } else {
+            setKeyStatus('missing');
+          }
+          resolve();
+        });
+      }),
+      new Promise<void>((resolve) => {
+        chrome.storage.sync.get(['selectedModel'], (result) => {
+          if (chrome.runtime.lastError) {
+            resolve();
+            return;
+          }
+          // CANONICAL: Model always comes from sync storage
+          if (typeof result.selectedModel === 'string' && result.selectedModel.trim()) {
+            const normalizedModel = normalizeModel(result.selectedModel.trim());
+            setSelectedModel(normalizedModel);
+          }
+          resolve();
+        });
+      }),
+    ]);
   }, [lastError]);
 
   const handleSave = async () => {
@@ -111,9 +128,13 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
     setError(null);
 
     try {
-      await chrome.storage.local.set({
-        [PROVIDER_SETTINGS_KEY]: { provider: 'gemini', apiKey: trimmed, model: effectiveModel },
-      });
+      // CANONICAL: Write API key to local, model to sync (single source of truth)
+      await Promise.all([
+        chrome.storage.local.set({
+          [PROVIDER_SETTINGS_KEY]: { provider: 'gemini', apiKey: trimmed },
+        }),
+        chrome.storage.sync.set({ selectedModel: effectiveModel }),
+      ]);
       setKeyStatus('present');
       setStoredKeyLast4(trimmed.slice(-4));
       setApiKey('');

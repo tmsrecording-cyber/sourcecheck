@@ -168,8 +168,8 @@ VITE_REQUEST_TIMEOUT_MS=20000
 GEMINI_API_KEY=your_key_here
 
 # Optional: Model selection
-GEMINI_MODEL=gemini-3.1-flash-lite   # Default fast model
-# GEMINI_MODEL=gemini-2.5-pro         # Slower but more capable
+GEMINI_MODEL=gemini-2.5-flash        # Default freemium model
+# GEMINI_MODEL=gemini-3.1-flash-lite-preview  # BYOK alternative
 
 # Required for deployed backends
 SESSION_SECRET=openssl_rand_hex_32
@@ -322,12 +322,12 @@ The settings panel (`SettingsPanel.tsx`) provides UI for users to configure thei
 The Gemini model configuration is **hard-locked** to prevent drift and ensure consistent behavior:
 
 **Allowed Models (canonical):**
-- `gemini-2.5-flash-lite` — Freemium/trial/managed default
-- `gemini-3.1-flash-lite` — BYOK alternative  
-- `gemini-3-preview` — BYOK alternative
+- `gemini-2.5-flash` — Freemium/trial/managed default
+- `gemini-3.1-flash-lite-preview` — BYOK alternative  
+- `gemini-3-flash-preview` — BYOK alternative
 
 **Policy Rules:**
-1. Freemium/trial/managed tier → ONLY `gemini-2.5-flash-lite` (enforced server-side)
+1. Freemium/trial/managed tier → ONLY `gemini-2.5-flash` (enforced server-side)
 2. BYOK (Bring Your Own Key) mode → User can select any of the 3 allowed models
 3. Stale/invalid saved model names are normalized to the freemium default via `normalizeModel()`
 

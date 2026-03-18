@@ -38,6 +38,7 @@ async function makeVerifyRequest(overrides: Record<string, unknown> = {}, includ
       claimType: 'study',
       timestampSeconds: 42,
     },
+    videoId: 'test-video-123',
     videoTitle: 'Test Video',
     channelName: 'Test Channel',
     ...overrides,
@@ -272,6 +273,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST({
       json: () => Promise.resolve({
         claim: { claimText: 'Test claim', claimType: 'study', timestampSeconds: 42 },
+        videoId: 'test-video-123',
         videoTitle: 'Test Video',
         channelName: 'Test Channel',
       }),

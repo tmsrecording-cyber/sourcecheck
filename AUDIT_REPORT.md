@@ -369,7 +369,7 @@ This is a plan only, not implementation.
 ### Recommended Architecture (Pragmatic)
 
 1. Server-enforced freemium quotas (cannot trust the client).
-   - Enforce model = `gemini-2.5-flash-lite` server-side for free tier regardless of `body.model`.
+   - Enforce model = `gemini-2.5-flash` (FREEMIUM_MODEL) server-side for free tier regardless of `body.model`.
    - Add a weekly quota bucket:
      - Key candidates:
        - Minimum: `ip` only (simple, weakest, may throttle shared networks).
@@ -389,7 +389,7 @@ This is a plan only, not implementation.
      - Downside: backend becomes a sensitive secret relay; harder to guarantee you never log the key.
 
 3. Model gating rules:
-   - Free: hard force `gemini-2.5-flash-lite`.
+   - Free: hard force `gemini-2.5-flash` (FREEMIUM_MODEL constant).
    - Premium: allow list expands (maybe `gemini-3.1-flash-lite`), still server-side allowlisted.
    - Remove any “custom model override” capability for free users.
 

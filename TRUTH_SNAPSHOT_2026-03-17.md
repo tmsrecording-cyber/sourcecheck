@@ -192,9 +192,9 @@ Types exist as placeholders:
 ### Allowed Models
 | Model | Tier | Status |
 |-------|------|--------|
-| `gemini-2.5-flash-lite` | Freemium | Default |
-| `gemini-3.1-flash-lite` | BYOK | Optional |
-| `gemini-3-flash` | BYOK | Optional |
+| `gemini-2.5-flash` | Freemium | Default (FREEMIUM_MODEL) |
+| `gemini-3.1-flash-lite-preview` | BYOK | Optional |
+| `gemini-3-flash-preview` | BYOK | Optional |
 
 ### Model Selection Flow
 1. User selects model in UI (saved to chrome.storage.sync)

@@ -390,8 +390,44 @@ export async function POST(request: NextRequest) {
     // BYOK: Use header model if provided (from x-custom-model), else fall back to body
     const effectiveModel = customApiKey && headerModel ? headerModel : body.model;
     
-    const { data: rawVerification, inputTokens, outputTokens, sources } =
-      await askGeminiJSONWithSearch<RawVerification>(prompt, 500, VERIFICATION_SCHEMA, effectiveModel, customApiKey);
+    console.log('[verify-claim] Calling Gemini with grounding:', {
+      requestId: `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+      claimId: claim.id,
+      claimType: claim.claimType,
+      model: effectiveModel,
+      isBYOK: !!customApiKey,
+      promptLength: prompt.length,
+    });
+    
+    let rawVerification: RawVerification;
+    let inputTokens: number;
+    let outputTokens: number;
+    let sources: Array<{ title: string; url: string }>;
+    
+    try {
+      const result = await askGeminiJSONWithSearch<RawVerification>(
+        prompt, 
+        500, 
+        VERIFICATION_SCHEMA, 
+        effectiveModel, 
+        customApiKey
+      );
+      rawVerification = result.data;
+      inputTokens = result.inputTokens;
+      outputTokens = result.outputTokens;
+      sources = result.sources;
+    } catch (geminiError) {
+      console.error('[verify-claim] Gemini grounding call failed:', {
+        claimId: claim.id,
+        model: effectiveModel,
+        error: geminiError instanceof Error ? {
+          name: geminiError.name,
+          message: geminiError.message,
+          code: (geminiError as { code?: string }).code,
+        } : 'Unknown error',
+      });
+      throw geminiError;
+    }
 
     // ---- Validate status ----
     const validStatuses: VerificationStatus[] = ['supported', 'partial', 'disputed', 'unverifiable'];
@@ -528,6 +564,10 @@ export async function POST(request: NextRequest) {
       name: error instanceof Error ? error.name : typeof error,
       code: isGeminiError(error) ? error.code : undefined,
       status: isGeminiError(error) ? error.status : undefined,
+      claimId: body?.claim?.id,
+      claimType: body?.claim?.claimType,
+      model: body?.model,
+      isBYOK: !!customApiKey,
     });
 
     // Log provider errors via observability layer

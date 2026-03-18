@@ -31,7 +31,13 @@ const COMPACT_LABELS: Record<GeminiModelOption, string> = {
 export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false }: ModelPickerProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const currentModel = AVAILABLE_MODELS.find(m => m.id === selectedModel) ?? AVAILABLE_MODELS[0];
+  
+  // Freemium users can only use the freemium model; BYOK users see all options
+  const availableModels = hasCustomKey 
+    ? AVAILABLE_MODELS 
+    : AVAILABLE_MODELS.filter(m => m.id === FREEMIUM_MODEL);
+  
+  const currentModel = availableModels.find(m => m.id === selectedModel) ?? availableModels[0];
 
   // Close dropdown when clicking outside or pressing Escape
   useEffect(() => {
@@ -108,7 +114,7 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
             <span>Select Model</span>
           </div>
           
-          {AVAILABLE_MODELS.map((model) => (
+          {availableModels.map((model) => (
             <button
               key={model.id}
               type="button"
@@ -138,7 +144,7 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
           ))}
 
           <div className="model-picker-footer">
-            <span>Switch models instantly</span>
+            <span>{hasCustomKey ? 'BYOK mode: all models available' : 'Freemium: locked to Gemini 2.5 Flash'}</span>
           </div>
         </div>
       )}

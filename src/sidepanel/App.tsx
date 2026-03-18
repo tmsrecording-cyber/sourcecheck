@@ -97,6 +97,7 @@ export const App = () => {
   const [lastProviderError, setLastProviderError] = useState<{ code?: string; message?: string } | null>(null);
   const [hasCustomKey, setHasCustomKey] = useState(false);
   const isMountedRef = useRef(true);
+  const lastSettingsSaveAtRef = useRef(0);
 
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -108,7 +109,7 @@ export const App = () => {
   useEffect(() => {
     const checkByokStatus = () => {
       chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
-        if (chrome.runtime.lastError) {
+        if (chrome.runtime.lastError || !isMountedRef.current) {
           return;
         }
         const stored = result[PROVIDER_SETTINGS_KEY];
@@ -255,6 +256,12 @@ export const App = () => {
           const message = typeof payload.message === 'string' ? payload.message : undefined;
           const shouldOpenSettings = typeof payload.showSettings === 'boolean' ? payload.showSettings : false;
           
+          // Gate: ignore stale errors that arrive shortly after settings save
+          // This prevents delayed error messages from reopening settings immediately after user saves
+          if (Date.now() - lastSettingsSaveAtRef.current < 1500) {
+            return;
+          }
+          
           setLastProviderError({ code, message });
           
           // Auto-open settings when error signals it's needed (AUTH, QUOTA, INVALID_KEY)
@@ -273,6 +280,7 @@ export const App = () => {
     return (
       <SettingsPanel 
         onSaved={() => {
+          lastSettingsSaveAtRef.current = Date.now();
           setShowSettings(false);
           setLastProviderError(null);
         }} 

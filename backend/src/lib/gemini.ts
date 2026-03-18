@@ -374,6 +374,7 @@ const logJsonFailure = ({
     useGrounding,
     validationError: validationError ?? null,
     rawTextLength: rawText.length,
+    rawTextPreview: rawText.slice(0, 500).replace(/\s+/g, ' ').trim(),
   });
 };
 
@@ -551,31 +552,27 @@ function getTierForRequest(_identity?: string): 'free' | 'pro' {
  * Validate and get the effective model for a request.
  * 
  * POLICY ENFORCEMENT:
- * - Freemium/trial/managed tier: ONLY gemini-2.5-flash-lite is allowed
+ * - Freemium/trial/managed tier: ONLY gemini-2.5-flash is allowed (FREEMIUM_MODEL)
  * - BYOK mode: User can select any model from ALLOWED_MODELS
  * - Invalid/stale models are normalized to the BYOK default
+ * 
+ * NOTE: Header model resolution (x-custom-model) is handled at the route layer
+ * before calling this function. Pass the already-resolved model here.
  */
 function getEffectiveModel(
   requestedModel: string | undefined,
   tier: 'free' | 'pro',
-  customApiKey: string | undefined,
-  headerModel?: string | undefined
+  customApiKey: string | undefined
 ): GeminiModelOption {
-  // BYOK mode: Check header model first (from x-custom-model header)
-  // This ensures BYOK model selection is properly honored
-  const effectiveRequested = customApiKey && headerModel 
-    ? headerModel 
-    : requestedModel;
-  
   // Normalize the requested model (handles null/undefined and stale values)
-  const normalizedRequested = normalizeModel(effectiveRequested);
+  const normalizedRequested = normalizeModel(requestedModel);
   
   // Freemium/trial/managed tier: HARD LOCK to freemium model only
   // This cannot be overridden by client request
   if (tier === 'free' && !customApiKey) {
-    if (effectiveRequested && normalizedRequested !== FREEMIUM_MODEL) {
+    if (requestedModel && normalizedRequested !== FREEMIUM_MODEL) {
       console.warn(
-        `[model-policy] Freemium tier requested '${effectiveRequested}' but hard-locked to '${FREEMIUM_MODEL}'`
+        `[model-policy] Freemium tier requested '${requestedModel}' but hard-locked to '${FREEMIUM_MODEL}'`
       );
     }
     return FREEMIUM_MODEL;
@@ -583,7 +580,7 @@ function getEffectiveModel(
   
   // BYOK mode: Allow any valid model from ALLOWED_MODELS
   // If no model specified, fall back to BYOK default
-  if (customApiKey && !effectiveRequested) {
+  if (customApiKey && !requestedModel) {
     console.log(`[model-policy] BYOK mode with no model specified, using default: ${BYOK_DEFAULT_MODEL}`);
     return BYOK_DEFAULT_MODEL;
   }
@@ -895,10 +892,10 @@ export async function generateEmbedding(
   // Truncate very long text to stay within model limits
   const truncatedText = text.slice(0, 8000);
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
 
+  try {
     const apiUrl = `${API_BASE}/models/${EMBEDDING_MODEL}:embedContent`;
     
     const response = await fetch(apiUrl, {
@@ -914,8 +911,6 @@ export async function generateEmbedding(
       }),
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
@@ -951,6 +946,8 @@ export async function generateEmbedding(
       console.warn('[gemini.ts] Embedding generation failed:', error instanceof Error ? error.message : 'Unknown error');
     }
     return [];
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

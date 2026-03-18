@@ -7,6 +7,8 @@ import {
   FREEMIUM_MODEL,
 } from '../../../shared/types';
 
+// CANONICAL: Initial runtime state uses FREEMIUM_MODEL as default (single source of truth)
+
 export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   lifecycle: 'idle',
   currentVideo: null,
@@ -28,7 +30,7 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
   eventLog: [],
-  selectedModel: 'gemini-3.1-flash-lite-preview',
+  selectedModel: FREEMIUM_MODEL,
 };
 
 /**
