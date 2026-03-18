@@ -403,15 +403,25 @@ export async function POST(request: NextRequest) {
     let sources: Array<{ title: string; url: string }>;
     let usedFallback = false;
     
-    // Helper to check if error is recoverable for retry
+    // Helper to check if error is recoverable for retry/fallback
+    // SAFETY/OTHER/RECITATION: Policy blocks on sensitive content (geopolitical, etc.)
+    // PARSE_ERROR: JSON malformed/empty/truncated
+    // MAX_TOKENS: Response truncated
     const isRecoverableGroundingError = (err: unknown): boolean => {
       if (!isGeminiError(err)) return false;
-      // PARSE_ERROR: JSON malformed/empty/truncated
-      // API_ERROR with 502/504: upstream transient failure
-      // MAX_TOKENS: Response truncated, retry with higher budget
       if (err.code === 'PARSE_ERROR') return true;
-      if (err.code === 'API_ERROR' && (err.status === 502 || err.status === 504)) return true;
-      if (err.code === 'API_ERROR' && err.message.includes('MAX_TOKENS')) return true;
+      if (err.code === 'API_ERROR') {
+        // Upstream transient failures
+        if (err.status === 502 || err.status === 504) return true;
+        // MAX_TOKENS: retry with higher budget
+        if (err.message.includes('MAX_TOKENS')) return true;
+        // SAFETY/OTHER/RECITATION: Policy blocks (geopolitical, sensitive content)
+        // These are product conditions, not server failures
+        if (err.message.includes('SAFETY') || 
+            err.message.includes('RECITATION') ||
+            err.message.includes('OTHER') ||
+            err.message.includes('finishReason')) return true;
+      }
       return false;
     };
     
@@ -450,10 +460,33 @@ export async function POST(request: NextRequest) {
           console.info('[verify-claim] Retry succeeded for claim:', claim.id);
         } catch (retryError) {
           // Both attempts failed - use graceful fallback instead of 502
-          console.warn('[verify-claim] Retry also failed, using graceful fallback:', {
+          // Classify the failure category for observability
+          const classifyFailure = (err: unknown): string => {
+            if (!isGeminiError(err)) return 'unknown';
+            const msg = err.message;
+            if (msg.includes('SAFETY')) return 'safety_policy';
+            if (msg.includes('RECITATION')) return 'recitation';
+            if (msg.includes('MAX_TOKENS')) return 'max_tokens';
+            if (msg.includes('PARSE_ERROR') || msg.includes('parse')) return 'parse_error';
+            if (msg.includes('schema') || msg.includes('validation')) return 'schema_error';
+            if (msg.includes('finishReason')) return 'empty_response';
+            if (msg.includes('timeout') || msg.includes('timed out')) return 'timeout';
+            if (err.status === 502 || err.status === 504) return 'upstream_non_ok';
+            return 'other';
+          };
+          
+          const category = classifyFailure(retryError);
+          const geminiErr = isGeminiError(retryError) ? retryError : null;
+          
+          console.warn('[verify-claim] Fallback: grounding failed after retry', {
+            category,
+            model: effectiveModel,
             claimId: claim.id,
-            retryErrorCode: isGeminiError(retryError) ? retryError.code : 'unknown',
+            retryAttempt: 2,
+            status: geminiErr?.status,
+            finishReason: geminiErr?.message.match(/finishReason=(\w+)/)?.[1] || null,
           });
+          
           usedFallback = true;
           rawVerification = {
             status: 'unverifiable',
