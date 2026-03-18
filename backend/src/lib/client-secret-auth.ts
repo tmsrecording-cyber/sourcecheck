@@ -210,18 +210,9 @@ export function validateClientSecretAuth(request: NextRequest): ClientSecretAuth
   // Check if CLIENT_SECRET is set in environment
   const expectedSecret = getExpectedClientSecret();
   const hasSecret = expectedSecret.length > 0;
-  const isProduction = process.env.NODE_ENV === 'production';
   
-  // In production: fail hard if CLIENT_SECRET is missing
-  if (!hasSecret && isProduction) {
-    console.error(
-      '[SourceCheck/auth] CLIENT_SECRET is not configured in production. ' +
-      'Set CLIENT_SECRET environment variable to enable the weak client gate.'
-    );
-    return { authorized: false, response: createUnauthorizedResponse(request) };
-  }
-  
-  // Skip secret check in local development if not configured
+  // Skip secret check if not configured (fail open for backward compatibility)
+  // The real authentication boundary is session-token verification
   if (!hasSecret) {
     return { authorized: true };
   }
