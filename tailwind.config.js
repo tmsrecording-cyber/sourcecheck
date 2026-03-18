@@ -7,33 +7,33 @@ export default {
     extend: {
       colors: {
         sc: {
-          // Authentic Gemini / Google Cloud Dark Mode Palette
-          'bg-0': '#131314', // Core Gemini deep background
-          'bg-1': '#1E1F22', // Elevated surface
-          'bg-2': '#282A2D', // Higher surface
-          'surface-0': '#1E1F22', // Default card background
-          'surface-1': '#282A2D', // Hovered card
-          'surface-2': '#333538', // Borders/Dividers
-          'surface-glass': 'rgba(30, 31, 34, 0.75)', // True glass
-          line: 'rgba(255, 255, 255, 0.08)',
-          'line-strong': 'rgba(255, 255, 255, 0.12)',
-          'border-soft': '#333538',
-          border: '#444746',
-          'border-strong': '#5F6368',
+          // LUMINOUS DARK - Premium Developer Tool Palette
+          'bg-0': '#09090B',       // True black canvas
+          'bg-1': '#18181B',       // Elevated surface
+          'bg-2': '#27272A',       // Higher surface
+          'surface-0': '#18181B',  // Default card background
+          'surface-1': '#27272A',  // Hovered card
+          'surface-2': '#3F3F46',  // Borders/Dividers
+          'surface-glass': 'rgba(24, 24, 27, 0.75)', // True glass
+          line: 'rgba(255, 255, 255, 0.1)',
+          'line-strong': 'rgba(255, 255, 255, 0.2)',
+          'border-soft': 'rgba(255, 255, 255, 0.06)',
+          border: 'rgba(255, 255, 255, 0.12)',  // Crisp borders
+          'border-strong': 'rgba(255, 255, 255, 0.22)',
           
-          // High-contrast, highly readable text
-          text: '#E3E3E3',         // Crisp primary text
-          'text-soft': '#C4C7C5',  // Secondary text
-          muted: '#9AA0A6',        // De-emphasized
-          'text-faint': '#80868B', // Very faint
+          // Luminous Typography - Crisp whites
+          text: '#FAFAFA',         // Stark primary text
+          'text-soft': '#E4E4E7',  // Secondary text (zinc-200)
+          muted: '#A1A1AA',        // De-emphasized (zinc-400)
+          'text-faint': '#71717A', // Very faint (zinc-500)
           
-          // The TRUE Gemini CLI Accents
-          accent: '#A8C7FA',       // Gemini Sparkle Blue
-          'accent-soft': '#D7AEFB', // Gemini Sparkle Purple
-          supported: '#81C995',    // Google CLI Success Green
-          partial: '#FDE293',      // Google CLI Warning Yellow
-          disputed: '#F28B82',     // Google CLI Error Red
-          neutral: '#9AA0A6',      // Google CLI Neutral Gray
+          // Neon Accents - High saturation
+          accent: '#60A5FA',       // Bright blue-400
+          'accent-soft': '#93C5FD', // Blue-300
+          supported: '#34D399',    // Bright emerald-400
+          partial: '#FBBF24',      // Vivid amber-400
+          disputed: '#FB7185',     // Sharp rose-400
+          neutral: '#A1A1AA',      // Zinc-400
           // Google Brand Colors (for logo/identity)
           'google-blue': '#4285F4',
           'google-red': '#EA4335',

@@ -805,15 +805,16 @@ const checkVideoState = async () => {
 
   if (videoId === currentVideoId) return;
 
-  // Tear down old playback listeners before we update the video ID.
-  // This prevents stale timeupdate/seeked events from being attributed to the new video.
+  // IMMEDIATELY reset ALL local state before any async work.
+  // This prevents race conditions during YouTube SPA navigation.
   stopPlaybackTracking();
+  clearPendingWork();
+  hasClearedInactiveState = false;
+  hasReportedTranscriptUnavailable = false;
+  transcriptSuccessLockedForVideo = false;
   currentVideoId = videoId;
   setPlaybackVideoId(videoId);
   resetTranscriptExtractionState();
-  hasClearedInactiveState = false;
-  hasReportedTranscriptUnavailable = false;
-  resetPanelFallbackGuards();
   transcriptDeadlineAt = Date.now() + TRANSCRIPT_LOAD_DEADLINE_MS;
   transcriptAttemptCount = 0;
   lastTranscriptDebug = {

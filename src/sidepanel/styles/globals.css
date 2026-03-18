@@ -4,37 +4,37 @@
 @tailwind utilities;
 
 :root {
-  /* GEMINI CLI COLOR PALETTE - ENHANCED CONTRAST */
-  --sc-bg-0: #0d0d0e;
-  --sc-bg-1: #18191a;
-  --sc-bg-2: #222426;
-  --sc-surface-0: rgba(26, 27, 28, 0.98);
-  --sc-surface-1: rgba(36, 38, 41, 0.95);
-  --sc-surface-2: #404449;
-  --sc-surface-glass: rgba(24, 25, 26, 0.92);
+  /* LUMINOUS DARK - Premium Developer Tool Palette */
+  --sc-bg-0: #09090B;           /* True black canvas like Gemini CLI */
+  --sc-bg-1: #18181B;           /* Elevated surface */
+  --sc-bg-2: #27272A;           /* Higher elevation */
+  --sc-surface-0: rgba(24, 24, 27, 0.98);
+  --sc-surface-1: rgba(39, 39, 42, 0.95);
+  --sc-surface-2: #3F3F46;
+  --sc-surface-glass: rgba(24, 24, 27, 0.92);
   --sc-line: rgba(255, 255, 255, 0.1);
-  --sc-line-strong: rgba(255, 255, 255, 0.18);
-  --sc-border-soft: rgba(255, 255, 255, 0.08);
-  --sc-border: rgba(255, 255, 255, 0.14);
+  --sc-line-strong: rgba(255, 255, 255, 0.2);
+  --sc-border-soft: rgba(255, 255, 255, 0.06);
+  --sc-border: rgba(255, 255, 255, 0.12);        /* Crisp borders */
   --sc-border-strong: rgba(255, 255, 255, 0.22);
   
-  /* GEMINI TEXT COLORS - ENHANCED */
-  --sc-text: #f0f0f0;
-  --sc-text-soft: #d0d5d8;  /* Slightly brighter for better readability */
-  --sc-muted: #b0b8bc;      /* Increased from #a8aeb4 for metadata clarity */
-  --sc-text-faint: #7a8290; /* Increased from #6b7280 for timestamps/source info */
+  /* LUMINOUS TYPOGRAPHY - Crisp whites */
+  --sc-text: #FAFAFA;           /* Stark primary text */
+  --sc-text-soft: #E4E4E7;      /* Secondary text - zinc-200 */
+  --sc-muted: #A1A1AA;          /* De-emphasized - zinc-400 */
+  --sc-text-faint: #71717A;     /* Timestamps/source info - zinc-500 */
   
-  /* GEMINI ACCENT COLORS - ENHANCED POP */
-  --sc-accent: #8ab4f8;
-  --sc-accent-soft: rgba(138, 180, 248, 0.25);
-  --sc-purple: #c9a8f7;
-  --sc-purple-soft: rgba(201, 168, 247, 0.2);
+  /* NEON ACCENTS - High saturation, luminous */
+  --sc-accent: #60A5FA;         /* Bright blue-400 */
+  --sc-accent-soft: rgba(96, 165, 250, 0.3);
+  --sc-purple: #C084FC;         /* Bright purple-400 */
+  --sc-purple-soft: rgba(192, 132, 252, 0.25);
   
-  /* STATUS COLORS - ENHANCED */
-  --sc-supported: #7ee3a0;
-  --sc-partial: #fde68a;
-  --sc-disputed: #fca5a5;
-  --sc-neutral: #a8aeb4;
+  /* STATUS COLORS - Neon/Glowing */
+  --sc-supported: #34D399;      /* Bright emerald-400 */
+  --sc-partial: #FBBF24;        /* Vivid amber-400 */
+  --sc-disputed: #FB7185;       /* Sharp rose-400 */
+  --sc-neutral: #A1A1AA;        /* Zinc-400 */
   
   /* GOOGLE GEMINI BRAND COLORS - for logo/identity */
   --sc-google-blue: #4285F4;
@@ -303,17 +303,17 @@ body::before {
     opacity: 0;
   }
 
-  /* ── Cards with Tactile Depth ── */
+  /* ── Cards with Luminous Dark Depth ── */
   .feed-card {
     position: relative;
     isolation: isolate;
     overflow: hidden;
     border-radius: 12px;
-    background: linear-gradient(180deg, rgba(38, 40, 44, 0.96), rgba(24, 25, 28, 0.98));
-    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: linear-gradient(180deg, rgba(39, 39, 42, 0.95), rgba(24, 24, 27, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.12);
     box-shadow: 
-      inset 0 1px 0 0 rgba(255, 255, 255, 0.07),
-      0 8px 24px rgba(0, 0, 0, 0.45);
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+      0 8px 24px rgba(0, 0, 0, 0.5);
     transform-style: preserve-3d;
     perspective: 1200px;
   }
@@ -533,26 +533,29 @@ body::before {
   }
 
   .verdict-badge-supported {
-    background: rgba(74, 222, 128, 0.2);
-    color: #4ade80;
-    box-shadow: 0 0 10px rgba(74, 222, 128, 0.15);
+    background: rgba(52, 211, 153, 0.15);
+    color: #34D399;
+    box-shadow: 0 0 12px rgba(52, 211, 153, 0.25);
+    text-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
   }
 
   .verdict-badge-partial {
-    background: rgba(250, 204, 21, 0.2);
-    color: #facc15;
-    box-shadow: 0 0 10px rgba(250, 204, 21, 0.15);
+    background: rgba(251, 191, 36, 0.15);
+    color: #FBBF24;
+    box-shadow: 0 0 12px rgba(251, 191, 36, 0.25);
+    text-shadow: 0 0 8px rgba(251, 191, 36, 0.3);
   }
 
   .verdict-badge-disputed {
-    background: rgba(248, 113, 113, 0.2);
-    color: #f87171;
-    box-shadow: 0 0 10px rgba(248, 113, 113, 0.15);
+    background: rgba(251, 113, 133, 0.15);
+    color: #FB7185;
+    box-shadow: 0 0 12px rgba(251, 113, 133, 0.25);
+    text-shadow: 0 0 8px rgba(251, 113, 133, 0.3);
   }
 
   .verdict-badge-unverifiable {
-    background: rgba(156, 163, 175, 0.2);
-    color: #9ca3af;
+    background: rgba(161, 161, 170, 0.15);
+    color: #A1A1AA;
   }
 
   /* ── HUD Header ── */
@@ -927,6 +930,19 @@ body::before {
     font-family: var(--font-mono);
   }
   
+  /* Luminous Text Colors */
+  .text-textMain {
+    color: var(--sc-text);
+  }
+  
+  .text-textMuted {
+    color: var(--sc-muted);
+  }
+  
+  .text-accentSoft {
+    color: var(--sc-accent);
+  }
+  
   .text-balance {
     text-wrap: balance;
   }
@@ -983,21 +999,21 @@ body::before {
   }
   
   .status-icon-supported {
-    background: rgba(74, 222, 128, 0.15);
-    color: var(--sc-supported);
-    box-shadow: 0 0 8px rgba(74, 222, 128, 0.3);
+    background: rgba(52, 211, 153, 0.12);
+    color: #34D399;
+    box-shadow: 0 0 10px rgba(52, 211, 153, 0.35);
   }
   
   .status-icon-partial {
-    background: rgba(250, 204, 21, 0.15);
-    color: var(--sc-partial);
-    box-shadow: 0 0 8px rgba(250, 204, 21, 0.3);
+    background: rgba(251, 191, 36, 0.12);
+    color: #FBBF24;
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.35);
   }
   
   .status-icon-disputed {
-    background: rgba(248, 113, 113, 0.15);
-    color: var(--sc-disputed);
-    box-shadow: 0 0 8px rgba(248, 113, 113, 0.3);
+    background: rgba(251, 113, 133, 0.12);
+    color: #FB7185;
+    box-shadow: 0 0 10px rgba(251, 113, 133, 0.35);
   }
   
   .status-icon-neutral {

@@ -1,18 +1,20 @@
 /**
  * Shared rate limiting utilities for API routes.
  * 
- * Mirrors the rate-limit behavior from proxy.ts:
- * - BYOK (x-custom-api-key header present) skips rate limiting
+ * Rate limiting behavior:
+ * - Standard users: 80 points per window
+ * - BYOK users (x-custom-api-key header): 400 points per window (5x standard)
  * - Rate limits are per-extension-ID + IP + path
  * - Uses Redis if configured, otherwise in-memory
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { InMemoryRateLimitStore, RedisRateLimitStore } from './rate-limit-store';
+import { InMemoryRateLimitStore, RedisRateLimitStore, UpstashRateLimitStore } from './rate-limit-store';
 
 // Default rate limit config (mirrors proxy.ts defaults)
 const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_POINTS = 80;
+const BYOK_MAX_POINTS = 400;
 
 // Route-specific costs (mirrors proxy.ts RATE_LIMIT_COST_BY_PATH)
 export const RATE_LIMIT_COSTS: Record<string, number> = {
@@ -22,30 +24,51 @@ export const RATE_LIMIT_COSTS: Record<string, number> = {
 };
 
 // Module-level singleton store (mirrors proxy.ts pattern)
-let _rateLimitStore: InMemoryRateLimitStore | RedisRateLimitStore | null = null;
+let _rateLimitStore: InMemoryRateLimitStore | RedisRateLimitStore | UpstashRateLimitStore | null = null;
 let _redisUnavailableLogged = false;
 
 function isLocalApiHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
-async function getRateLimitStore(request: NextRequest): Promise<InMemoryRateLimitStore | RedisRateLimitStore> {
+async function getRateLimitStore(request: NextRequest): Promise<InMemoryRateLimitStore | RedisRateLimitStore | UpstashRateLimitStore> {
   if (_rateLimitStore) return _rateLimitStore;
 
-  const redisUrl = process.env.REDIS_URL?.trim();
-  if (redisUrl) {
-    _rateLimitStore = new RedisRateLimitStore(redisUrl);
+  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  
+  // Priority 1: Upstash Redis (Distributed/shared store)
+  if (upstashUrl && upstashToken) {
+    _rateLimitStore = new UpstashRateLimitStore();
     
-    if (!isLocalApiHost(request.headers.get('host')?.split(':')[0] || '') && !_redisUnavailableLogged) {
-      console.warn(
-        '[SourceCheck/rate-limit] Redis configured. If you see ioredis errors, ' +
-        'the deployment environment may not support Node.js-specific modules.'
-      );
-      _redisUnavailableLogged = true;
+    if (!isLocalApiHost(request.headers.get('host')?.split(':')[0] || '')) {
+      console.log('[SourceCheck/rate-limit] Using Upstash Redis (Distributed/shared store)');
     }
-  } else {
-    _rateLimitStore = new InMemoryRateLimitStore();
   }
+  // Priority 2: ioredis (Node.js, for backward compatibility)
+  else {
+    const redisUrl = process.env.REDIS_URL?.trim();
+    if (redisUrl) {
+      _rateLimitStore = new RedisRateLimitStore(redisUrl);
+      
+      if (!isLocalApiHost(request.headers.get('host')?.split(':')[0] || '') && !_redisUnavailableLogged) {
+        console.warn(
+          '[SourceCheck/rate-limit] Redis configured. If you see ioredis errors, ' +
+          'the serverless/distributed environment may not support Node.js-specific modules.'
+        );
+        _redisUnavailableLogged = true;
+      }
+    }
+    // Priority 3: In-memory (fallback)
+    else {
+      _rateLimitStore = new InMemoryRateLimitStore();
+      
+      if (!isLocalApiHost(request.headers.get('host')?.split(':')[0] || '')) {
+        console.log('[SourceCheck/rate-limit] Using in-memory rate limit store');
+      }
+    }
+  }
+  
   return _rateLimitStore;
 }
 
@@ -100,12 +123,32 @@ function getRateLimitWindowMs(): number {
 }
 
 /**
- * Check if request should skip rate limiting (BYOK mode).
- * Mirrors proxy.ts behavior: x-custom-api-key header present = skip rate limits.
+ * Check if request should skip rate limiting.
+ * Note: BYOK users are no longer exempt - they get a higher tier limit instead.
+ * Currently no users skip rate limiting (all tiers are subject to limits).
  */
-export function shouldSkipRateLimit(request: NextRequest): boolean {
+export function shouldSkipRateLimit(_request: NextRequest): boolean {
+  return false;
+}
+
+/**
+ * Check if request is BYOK mode (bring your own key).
+ */
+export function isByokMode(request: NextRequest): boolean {
   const customApiKey = request.headers.get('x-custom-api-key')?.trim();
   return !!customApiKey && customApiKey.length > 0;
+}
+
+/**
+ * Get the rate limit max points for the user's tier.
+ * - BYOK users: 400 points per window (5x standard)
+ * - Standard users: 80 points per window (default)
+ */
+export function getRateLimitMaxPointsForTier(request: NextRequest): number {
+  if (isByokMode(request)) {
+    return BYOK_MAX_POINTS;
+  }
+  return getRateLimitMaxPoints();
 }
 
 /**
@@ -123,16 +166,11 @@ export async function checkRateLimit(
   request: NextRequest,
   identity: string
 ): Promise<RateLimitResult> {
-  // BYOK: skip rate limiting
-  if (shouldSkipRateLimit(request)) {
-    return { allowed: true };
-  }
-
   const store = await getRateLimitStore(request);
   const path = request.nextUrl.pathname;
   const cost = getRateLimitCost(path);
   const key = getRateLimitKey(request, identity);
-  const maxPoints = getRateLimitMaxPoints();
+  const maxPoints = getRateLimitMaxPointsForTier(request);
   const windowMs = getRateLimitWindowMs();
 
   const allowed = await store.tryConsume(key, cost, maxPoints, windowMs);

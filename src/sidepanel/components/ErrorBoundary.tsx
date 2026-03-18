@@ -67,7 +67,7 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div className="flex h-screen w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
+        <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
           <div className="w-full max-w-[320px]">
             <div className="instrument-shell px-5 py-5 border border-sc-border shadow-sc-main bg-sc-surface-glass backdrop-blur-md">
               <div className="relative">

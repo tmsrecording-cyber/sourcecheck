@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { issueSessionToken } from '@/proxy';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { logSessionInitFailure } from '@/lib/observability';
+import { validateClientSecretAuth } from '@/lib/client-secret-auth';
 
 // POST /api/session/init
 //
@@ -25,6 +26,12 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Pre-shared client secret authentication (additional layer)
+  const clientSecretAuth = validateClientSecretAuth(request);
+  if (!clientSecretAuth.authorized) {
+    return clientSecretAuth.response;
+  }
+
   const body = await request.json().catch(() => null);
 
   if (!body || typeof body.extensionId !== 'string' || !body.extensionId.trim()) {

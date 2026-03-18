@@ -2,8 +2,8 @@
 // Interface
 // ---------------------------------------------------------------------------
 
-// ioredis is dynamically imported to avoid Edge runtime compatibility issues
-// (ioredis uses Node.js Buffer APIs not available in Edge)
+// ioredis is dynamically imported to avoid serverless/distributed environment compatibility issues
+// (ioredis uses Node.js Buffer APIs not available in all serverless runtimes)
 
 /**
  * Minimal rate-limit store contract.
@@ -130,12 +130,14 @@ return 1
  *
  * Atomic via a server-side Lua script — no race between read and increment.
  *
- * FAILS CLOSED: if the Redis command throws (connection refused, timeout,
- * etc.) the request is denied rather than allowed, so the rate limit cannot
- * be bypassed during a Redis outage.
+ * FAILS SAFE WITH FALLBACK: if the Redis command throws (connection refused,
+ * timeout, etc.), the request is NOT automatically allowed. Instead, the store
+ * immediately falls back to InMemoryRateLimitStore which enforces the same
+ * rate limits using local memory. This ensures the rate limit cannot be
+ * bypassed during a Redis outage — requests are denied if limits are exceeded.
  */
-// Dynamically import ioredis to avoid Edge runtime issues
-// This module uses a lazy-loading pattern to prevent bundler issues in Edge runtimes
+// Dynamically import ioredis to avoid serverless environment issues
+// This module uses a lazy-loading pattern to prevent bundler issues in serverless/distributed environments
 
 type RedisClient = {
   eval(...args: (string | number)[]): Promise<unknown>;
@@ -146,7 +148,7 @@ type RedisClient = {
 let ioredisModule: { default: new (url: string, options: Record<string, unknown>) => RedisClient } | null = null;
 
 /**
- * Lazily load ioredis module. This is wrapped in a try-catch to handle Edge runtime
+ * Lazily load ioredis module. This is wrapped in a try-catch to handle serverless/distributed
  * environments where ioredis may not be available or may fail to load due to
  * Node.js-specific dependencies (like 'net', 'tls').
  */
@@ -162,10 +164,10 @@ async function loadIoRedis(): Promise<typeof ioredisModule> {
     ioredisModule = imported as typeof ioredisModule;
     return ioredisModule;
   } catch (error) {
-    // ioredis failed to load (likely in Edge runtime or missing dependencies)
+    // ioredis failed to load (likely in serverless runtime or missing dependencies)
     console.error(
       '[SourceCheck/ratelimit] Failed to load ioredis module. ' +
-      'This is expected in Edge runtimes. Error:',
+      'This is expected in serverless runtimes. Error:',
       error instanceof Error ? error.message : String(error)
     );
     return null;
@@ -251,7 +253,7 @@ export class RedisRateLimitStore implements RateLimitStore {
     try {
       const client = await this.getClient();
       
-      // If Redis client couldn't be initialized (e.g., in Edge runtime),
+      // If Redis client couldn't be initialized (e.g., in serverless runtime),
       // gracefully fall back to in-memory store
       if (!client) {
         console.warn(
@@ -282,5 +284,136 @@ export class RedisRateLimitStore implements RateLimitStore {
       this.isUsingFallback = true;
       return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Upstash Redis implementation (Serverless/Distributed-compatible)
+// ---------------------------------------------------------------------------
+
+// Minimal Upstash Redis client interface for type safety
+type UpstashRedisClient = {
+  eval: <T = unknown>(script: string, keys: string[], args: string[]) => Promise<T>;
+};
+
+// Module-level cache for the Upstash Redis client
+let upstashRedisClient: UpstashRedisClient | null = null;
+
+/**
+ * Lazily load and initialize the Upstash Redis client.
+ * Uses @upstash/redis which is serverless/distributed-compatible (REST-based, no Node.js deps).
+ */
+async function getUpstashRedisClient(): Promise<UpstashRedisClient | null> {
+  if (upstashRedisClient) {
+    return upstashRedisClient;
+  }
+
+  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+
+  if (!upstashUrl || !upstashToken) {
+    return null;
+  }
+
+  try {
+    // Dynamic import to avoid bundling issues when not using Upstash
+    const { Redis } = await import('@upstash/redis');
+    upstashRedisClient = new Redis({
+      url: upstashUrl,
+      token: upstashToken,
+    }) as UpstashRedisClient;
+    return upstashRedisClient;
+  } catch (error) {
+    console.error(
+      '[SourceCheck/ratelimit] Failed to initialize Upstash Redis client:',
+      error instanceof Error ? error.message : String(error)
+    );
+    return null;
+  }
+}
+
+/**
+ * Upstash Redis-backed fixed-window store.
+ *
+ * Serverless/Distributed-compatible implementation using Upstash's REST-based Redis client.
+ * Uses the same Lua script as the ioredis implementation for atomic operations.
+ *
+ * FAILS SAFE WITH FALLBACK: if the Upstash command throws (connection error,
+ * timeout, etc.), the request is NOT automatically allowed. Instead, the store
+ * immediately falls back to InMemoryRateLimitStore which enforces the same
+ * rate limits using local memory. This ensures the rate limit cannot be
+ * bypassed during an Upstash outage — requests are denied if limits are exceeded.
+ */
+export class UpstashRateLimitStore implements RateLimitStore {
+  private client: UpstashRedisClient | null = null;
+  private loadError: Error | null = null;
+  private fallbackStore: InMemoryRateLimitStore | null = null;
+  private isUsingFallback = false;
+
+  async tryConsume(
+    key: string,
+    cost: number,
+    maxPoints: number,
+    windowMs: number,
+  ): Promise<boolean> {
+    // If we're already using fallback, continue using it
+    if (this.isUsingFallback) {
+      return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
+    }
+
+    try {
+      const client = await this.getClient();
+
+      if (!client) {
+        console.warn(
+          '[SourceCheck/ratelimit] Upstash Redis unavailable, activating in-memory fallback. ' +
+          'Rate limits will be process-local only.'
+        );
+        this.isUsingFallback = true;
+        return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
+      }
+
+      const result = (await client.eval(
+        RATE_LIMIT_LUA,
+        [`rl:${key}`],
+        [String(cost), String(maxPoints), String(windowMs), String(Date.now())]
+      )) as number;
+      return result === 1;
+    } catch (err) {
+      // Upstash command failed — switch to fallback for graceful degradation
+      console.error(
+        '[SourceCheck/ratelimit] Upstash Redis eval failed, switching to in-memory fallback:',
+        err instanceof Error ? err.message : String(err),
+      );
+      this.isUsingFallback = true;
+      return this.getFallbackStore().tryConsume(key, cost, maxPoints, windowMs);
+    }
+  }
+
+  private async getClient(): Promise<UpstashRedisClient | null> {
+    if (this.loadError) {
+      return null;
+    }
+
+    if (!this.client) {
+      this.client = await getUpstashRedisClient();
+
+      if (!this.client) {
+        this.loadError = new Error('Failed to initialize Upstash Redis client');
+      }
+    }
+
+    return this.client;
+  }
+
+  private getFallbackStore(): InMemoryRateLimitStore {
+    if (!this.fallbackStore) {
+      this.fallbackStore = new InMemoryRateLimitStore();
+      console.warn(
+        '[SourceCheck/ratelimit] Initialized in-memory fallback store. ' +
+        'Rate limits will be process-local only until Upstash Redis recovers.'
+      );
+    }
+    return this.fallbackStore;
   }
 }
