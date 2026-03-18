@@ -1601,12 +1601,22 @@ const parseXmlTranscript = (xmlText: string): TranscriptChunk[] => {
     const textNodes = Array.from(xmlDoc.getElementsByTagName('text'));
 
     return textNodes
-      .map(node => ({
-        text: cleanTranscriptText(decodeHtmlEntities(node.textContent || '')),
-        startMs: Math.round(parseFloat(node.getAttribute('start') || '0') * 1000),
-        durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('dur') || '0') * 1000)),
-      }))
-      .filter((chunk) => chunk.text.length > 0);
+      .map(node => {
+        // Defensive: skip null/undefined nodes
+        if (!node) return null;
+        try {
+          const text = cleanTranscriptText(decodeHtmlEntities(node.textContent || ''));
+          const startMs = Math.round(parseFloat(node.getAttribute('start') || '0') * 1000);
+          const durationMs = Math.max(1000, Math.round(parseFloat(node.getAttribute('dur') || '0') * 1000));
+          return { text, startMs, durationMs };
+        } catch (nodeError) {
+          // Fail-soft for individual node parsing errors
+          return null;
+        }
+      })
+      .filter((chunk): chunk is { text: string; startMs: number; durationMs: number } => 
+        chunk !== null && chunk.text.length > 0
+      );
   } catch (error) {
     console.warn('[SourceCheck] Failed to parse XML transcript:', error);
     return [];
@@ -1728,18 +1738,27 @@ const parseSrv3Transcript = (xmlText: string): TranscriptChunk[] => {
 
     return paragraphNodes
       .map((node) => {
-        const segmentNodes = Array.from(node.getElementsByTagName('s'));
-        const text = segmentNodes.length > 0
-          ? segmentNodes.map((segment) => decodeHtmlEntities(segment.textContent || '')).join(' ')
-          : decodeHtmlEntities(node.textContent || '');
+        // Defensive: skip null/undefined nodes
+        if (!node) return null;
+        try {
+          const segmentNodes = Array.from(node.getElementsByTagName('s'));
+          const text = segmentNodes.length > 0
+            ? segmentNodes.map((segment) => decodeHtmlEntities(segment.textContent || '')).join(' ')
+            : decodeHtmlEntities(node.textContent || '');
 
-        return {
-          text: cleanTranscriptText(text),
-          startMs: Math.max(0, Math.round(parseFloat(node.getAttribute('t') || '0'))),
-          durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('d') || '0'))),
-        };
+          return {
+            text: cleanTranscriptText(text),
+            startMs: Math.max(0, Math.round(parseFloat(node.getAttribute('t') || '0'))),
+            durationMs: Math.max(1000, Math.round(parseFloat(node.getAttribute('d') || '0'))),
+          };
+        } catch (nodeError) {
+          // Fail-soft for individual node parsing errors
+          return null;
+        }
       })
-      .filter((chunk) => chunk.text.length > 0);
+      .filter((chunk): chunk is { text: string; startMs: number; durationMs: number } => 
+        chunk !== null && chunk.text.length > 0
+      );
   } catch (error) {
     console.warn('[SourceCheck] Failed to parse SRV3 transcript:', error);
     return [];
