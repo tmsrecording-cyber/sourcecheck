@@ -46,8 +46,6 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState<GeminiModelOption>(DEFAULT_GEMINI_MODEL);
-  const [customModel, setCustomModel] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [keyStatus, setKeyStatus] = useState<KeyStatus>('missing');
@@ -119,22 +117,14 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
       return;
     }
 
-    // MODEL POLICY: Normalize custom model input to allowed values
-    const effectiveModel = customModel.trim() 
-      ? normalizeModel(customModel.trim())
-      : selectedModel;
-
     setSaving(true);
     setError(null);
 
     try {
-      // CANONICAL: Write API key to local, model to sync (single source of truth)
-      await Promise.all([
-        chrome.storage.local.set({
-          [PROVIDER_SETTINGS_KEY]: { provider: 'gemini', apiKey: trimmed },
-        }),
-        chrome.storage.sync.set({ selectedModel: effectiveModel }),
-      ]);
+      // CANONICAL: Write API key to local (model is managed from header picker)
+      await chrome.storage.local.set({
+        [PROVIDER_SETTINGS_KEY]: { provider: 'gemini', apiKey: trimmed },
+      });
       setKeyStatus('present');
       setStoredKeyLast4(trimmed.slice(-4));
       setApiKey('');
@@ -153,8 +143,6 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
       setKeyStatus('missing');
       setStoredKeyLast4(null);
       setApiKey('');
-      // Reset to default model
-      setSelectedModel(DEFAULT_GEMINI_MODEL);
     } catch (err) {
       console.error('[SourceCheck/UI] Failed to clear provider settings:', err);
     }
@@ -259,44 +247,13 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
 
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-sc-muted">Model</label>
-                  <select
-                    value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value as GeminiModelOption)}
-                    className="w-full rounded border border-sc-border bg-sc-bg-1 px-3 py-2 text-[13px] text-sc-text focus:border-sc-accent-soft focus:outline-none"
-                  >
-                    {GEMINI_MODELS.map((m) => (
-                      <option key={m} value={m}>{MODEL_LABELS[m]}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced((v) => !v)}
-                  className="text-[11px] text-sc-muted transition-colors hover:text-sc-text-soft"
-                >
-                  {showAdvanced ? '▲ Hide advanced' : '▼ Advanced'}
-                </button>
-
-                {showAdvanced && (
-                  <div>
-                    <label className="mb-1 block text-[11px] font-medium text-sc-muted">
-                      Custom model override
-                    </label>
-                    <input
-                      type="text"
-                      value={customModel}
-                      onChange={(e) => setCustomModel(e.target.value)}
-                      placeholder="e.g. gemini-2.5-flash"
-                      className="w-full rounded border border-sc-border bg-sc-bg-1 px-3 py-2 text-[13px] text-sc-text placeholder:text-sc-muted focus:border-sc-accent-soft focus:outline-none"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    <p className="mt-1 text-[11px] text-sc-muted">
-                      Any non-allowed model will be normalized to the default.
-                    </p>
+                  <div className="w-full rounded border border-sc-border bg-sc-surface-1 px-3 py-2 text-[13px] text-sc-text-soft">
+                    {MODEL_LABELS[selectedModel]}
                   </div>
-                )}
+                  <p className="mt-1 text-[11px] text-sc-muted">
+                    Change this from the top bar.
+                  </p>
+                </div>
 
                 {error && (
                   <div className="flex items-start gap-2 rounded border border-sc-disputed/30 bg-sc-disputed/10 px-3 py-2">
