@@ -62,6 +62,37 @@ function getVectorClient(): Index | null {
 }
 
 /**
+ * Expected vector dimension - must match the Upstash Vector index configuration.
+ * Current index was created with 768 dimensions.
+ * Note: gemini-embedding-2-preview produces 3072-dim vectors, so we project down.
+ */
+const EXPECTED_VECTOR_DIMENSION = 768;
+
+/**
+ * Project high-dimensional embedding to expected dimension using averaging.
+ * This preserves semantic meaning while matching index configuration.
+ */
+function projectEmbedding(embedding: number[], targetDim: number): number[] {
+  if (embedding.length === targetDim) return embedding;
+  
+  // Simple averaging projection: group dimensions and average
+  const ratio = embedding.length / targetDim;
+  const projected: number[] = [];
+  
+  for (let i = 0; i < targetDim; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.floor((i + 1) * ratio);
+    let sum = 0;
+    for (let j = start; j < end; j++) {
+      sum += embedding[j];
+    }
+    projected.push(sum / (end - start));
+  }
+  
+  return projected;
+}
+
+/**
  * Upsert a claim vector to the index
  * Called after successful claim verification
  */
@@ -72,10 +103,13 @@ export async function upsertClaimVector(
   const client = getVectorClient();
   if (!client) return;
   
+  // Project embedding to match index dimension
+  const projectedEmbedding = projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+  
   try {
     await client.upsert({
       id: claimData.id,
-      vector: embedding,
+      vector: projectedEmbedding,
       metadata: {
         claimText: claimData.claimText,
         status: claimData.status,
@@ -107,9 +141,12 @@ export async function findSimilarClaim(
   const client = getVectorClient();
   if (!client) return null;
   
+  // Project embedding to match index dimension
+  const projectedEmbedding = projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+  
   try {
     const results = await client.query({
-      vector: embedding,
+      vector: projectedEmbedding,
       topK: MAX_RESULTS,
       includeMetadata: true,
     });

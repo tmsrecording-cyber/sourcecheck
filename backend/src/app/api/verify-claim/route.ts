@@ -408,8 +408,10 @@ export async function POST(request: NextRequest) {
       if (!isGeminiError(err)) return false;
       // PARSE_ERROR: JSON malformed/empty/truncated
       // API_ERROR with 502/504: upstream transient failure
+      // MAX_TOKENS: Response truncated, retry with higher budget
       if (err.code === 'PARSE_ERROR') return true;
       if (err.code === 'API_ERROR' && (err.status === 502 || err.status === 504)) return true;
+      if (err.code === 'API_ERROR' && err.message.includes('MAX_TOKENS')) return true;
       return false;
     };
     
