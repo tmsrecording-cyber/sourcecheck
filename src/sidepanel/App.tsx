@@ -354,7 +354,6 @@ export const App = () => {
               hasCustomKey={hasCustomKey}
               onModelChange={async (model) => {
                 try {
-                  await chrome.storage.sync.set({ selectedModel: model });
                   await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
                 } catch (error) {
                   console.error('[SourceCheck/UI] Model change failed:', error);

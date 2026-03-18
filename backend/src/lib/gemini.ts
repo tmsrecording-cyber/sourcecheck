@@ -657,8 +657,6 @@ async function callGemini(
     console.log('[gemini.ts] Calling Gemini API:', {
       url: apiUrl,
       model,
-      hasApiKey: !!apiKey,
-      apiKeyLength: apiKey?.length || 0,
       useGrounding,
     });
     

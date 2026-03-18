@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { WorkerRuntimeState, TranscriptChunk } from '../../../shared/types';
+import { PROVIDER_SETTINGS_KEY } from '../../background/providers/types';
 import {
   INITIAL_RUNTIME_STATE,
   sanitizeWorkerRuntimeState,
@@ -9,7 +10,6 @@ import {
 const WORKER_RUNTIME_STATE_KEY = 'workerRuntimeState' as const;
 const LOCAL_TRANSCRIPT_KEY = 'transcriptSnapshot' as const;
 const TRANSCRIPT_FETCH_LOG_KEY = 'transcriptFetchLog' as const;
-const USER_API_KEY = 'userApiKey' as const;
 
 // Debounce delay for storage updates - batches rapid changes during analysis
 const UPDATE_DEBOUNCE_MS = 100;
@@ -107,13 +107,16 @@ export const useExtensionStorage = () => {
     // Load user API key for BYOK
     const getUserApiKey = () =>
       new Promise<string | null>((resolve, reject) => {
-        chrome.storage.local.get([USER_API_KEY], (result) => {
+        chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
           if (chrome.runtime.lastError) {
             reject(chrome.runtime.lastError);
             return;
           }
-          const key = result[USER_API_KEY];
-          resolve(typeof key === 'string' && key.trim() ? key.trim() : null);
+          const stored = result[PROVIDER_SETTINGS_KEY];
+          const key = stored && typeof stored === 'object' && typeof stored.apiKey === 'string'
+            ? stored.apiKey.trim()
+            : null;
+          resolve(key);
         });
       });
 
