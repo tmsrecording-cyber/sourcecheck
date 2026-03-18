@@ -179,8 +179,9 @@ type YouTubeWindow = Window & {
   };
 };
 
-const cleanTranscriptText = (value: string) =>
-  value
+const cleanTranscriptText = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  return value
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
@@ -189,6 +190,7 @@ const cleanTranscriptText = (value: string) =>
     .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+};
 
 const asSafeText = (value: unknown): string => {
   if (typeof value === 'string') {
