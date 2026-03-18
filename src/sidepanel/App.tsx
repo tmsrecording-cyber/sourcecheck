@@ -49,7 +49,7 @@ const PanelShell = ({
   error?: boolean;
   disclosureNote?: string;
 }) => (
-  <div className="flex h-screen w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
+  <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
     <div className="w-full max-w-[320px]">
       <div className="instrument-shell px-5 py-5 border border-sc-border shadow-sc-main bg-sc-surface-glass backdrop-blur-md">
         <div className="signal-rail" style={{ left: '24px', top: '18px', bottom: '18px' }} />
@@ -211,6 +211,7 @@ export const App = () => {
       });
     } catch (error) {
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
+      setAskError('Failed to retry transcript. Please reload the page and try again.');
     }
   };
 
@@ -224,13 +225,13 @@ export const App = () => {
           const payload = msg.payload as Record<string, unknown>;
           const code = typeof payload.code === 'string' ? payload.code : undefined;
           const message = typeof payload.message === 'string' ? payload.message : undefined;
-          const showSettings = typeof payload.showSettings === 'boolean' ? payload.showSettings : false;
+          const shouldOpenSettings = typeof payload.showSettings === 'boolean' ? payload.showSettings : false;
           
           setLastProviderError({ code, message });
           
           // Auto-open settings when error signals it's needed (AUTH, QUOTA, INVALID_KEY)
           // This is the unified behavior across all error paths
-          if (showSettings || code === 'AUTH_ERROR' || code === 'QUOTA_EXHAUSTED' || code === 'INVALID_API_KEY') {
+          if (shouldOpenSettings || code === 'AUTH_ERROR' || code === 'QUOTA_EXHAUSTED' || code === 'INVALID_API_KEY') {
             setShowSettings(true);
           }
         }
@@ -285,7 +286,7 @@ export const App = () => {
     <div className="hud-shell font-sc">
       <div className="hud-grid" aria-hidden="true" />
       <div className="hud-circuit" aria-hidden="true" />
-      <div className="flex h-screen w-full flex-col bg-sc-bg-0 relative">
+      <div className="flex h-full min-h-0 w-full flex-col bg-sc-bg-0 relative">
         <div className="tactile-header flex-shrink-0 flex justify-between items-center h-[44px] px-3.5 hud-header z-20">
           <div className="flex gap-3.5 items-center h-full min-w-0">
             <SourceCheckLogo size={18} className="flex-shrink-0" />
@@ -372,15 +373,17 @@ export const App = () => {
             selectedModel={runtimeState.selectedModel}
           />
         </div>
-        <AskBox
-          transcript={transcript}
-          cards={runtimeState.sourceCards}
-          queryDraft={askDraft}
-          onQueryDraftChange={setAskDraft}
-          isThinking={isThinking}
-          onSubmit={handleAskSubmit}
-          error={askError}
-        />
+        {activeTab === 'live' && (
+          <AskBox
+            transcript={transcript}
+            cards={runtimeState.sourceCards}
+            queryDraft={askDraft}
+            onQueryDraftChange={setAskDraft}
+            isThinking={isThinking}
+            onSubmit={handleAskSubmit}
+            error={askError}
+          />
+        )}
       </div>
     </div>
   );
