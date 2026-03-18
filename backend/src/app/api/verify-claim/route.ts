@@ -9,6 +9,7 @@ import { verifyBearerSessionToken } from '@/proxy';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
 import { validateClientSecretAuth } from '@/lib/client-secret-auth';
+import { findSimilarClaim, upsertClaimVector } from '@/lib/vector-store';
 import type {
   VerifyClaimRequest,
   VerifyClaimResponse,
@@ -161,6 +162,10 @@ const validateVerifyClaimRequest = (body: VerifyClaimRequest) => {
 
   if (body.claim.claimText.length > MAX_CLAIM_TEXT_LENGTH) {
     return `claimText exceeds ${MAX_CLAIM_TEXT_LENGTH} characters.`;
+  }
+  
+  if (!body.videoId || typeof body.videoId !== 'string') {
+    return 'videoId is required.';
   }
 
   if ((body.videoTitle || '').length > MAX_METADATA_FIELD_LENGTH) {
@@ -321,6 +326,62 @@ export async function POST(request: NextRequest) {
 
     const { claim, contextTranscript } = parsedBody;
 
+    // ============================================================================
+    // CROSS-VIDEO MEMORY: Check for similar claims before calling Gemini
+    // ============================================================================
+    // Generate embedding for the claim to search for similar previously verified claims
+    const embeddingText = `${claim.claimText} ${claim.claimType}`.trim();
+    const embedding = await generateEmbedding(embeddingText, customApiKey);
+    
+    let similarClaim = null;
+    if (embedding.length > 0) {
+      similarClaim = await findSimilarClaim(embedding);
+      if (similarClaim) {
+        console.log('[verify-claim] Cross-video memory: Found similar claim', {
+          claimId: claim.id,
+          similarClaimId: similarClaim.id,
+          score: similarClaim.score,
+          videoTitle: similarClaim.metadata.videoTitle,
+        });
+      }
+    }
+    
+    // If we found a very similar claim, return it immediately (skip Gemini API call)
+    if (similarClaim && similarClaim.score > 0.92) {
+      const cachedSourceCard: SourceCard = {
+        id: crypto.randomUUID(),
+        claim,
+        status: similarClaim.metadata.status,
+        sourceTitle: similarClaim.metadata.sourceTitle,
+        sourceUrl: similarClaim.metadata.sourceUrl,
+        sourceType: 'other',
+        nuance: `[From memory] ${similarClaim.metadata.nuance}`,
+        timestampSeconds: claim.timestampSeconds,
+        verifiedAt: new Date().toISOString(),
+        embedding,
+      };
+      
+      console.info('[verify-claim] Returning cached result from cross-video memory', {
+        originalVideo: similarClaim.metadata.videoTitle,
+        score: similarClaim.score,
+      });
+      
+      const response = NextResponse.json<VerifyClaimResponse>({ 
+        sourceCard: cachedSourceCard,
+        similarClaims: [{
+          id: similarClaim.id,
+          claimText: similarClaim.metadata.claimText,
+          status: similarClaim.metadata.status,
+          videoTitle: similarClaim.metadata.videoTitle,
+          videoId: similarClaim.metadata.videoId,
+          timestampSeconds: similarClaim.metadata.timestampSeconds,
+          similarity: similarClaim.score,
+        }],
+      });
+      Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+      return response;
+    }
+
     // ---- Single Gemini call with Google Search grounding ----
     // Gemini searches the web automatically and returns both
     // the verification JSON and the grounding source URLs.
@@ -411,10 +472,12 @@ export async function POST(request: NextRequest) {
       status
     );
 
-    // Generate embedding for cross-video memory / semantic deduplication
-    // Use claim text + nuance for richer semantic representation
-    const embeddingText = `${claim.claimText} ${resolvedNuance}`.trim();
-    const embedding = await generateEmbedding(embeddingText, customApiKey);
+    // Reuse embedding from cross-video memory check, or generate if needed
+    let claimEmbedding = embedding;
+    if (claimEmbedding.length === 0) {
+      const embeddingText = `${claim.claimText} ${resolvedNuance}`.trim();
+      claimEmbedding = await generateEmbedding(embeddingText, customApiKey);
+    }
 
     const sourceCard: SourceCard = {
       id,
@@ -427,8 +490,25 @@ export async function POST(request: NextRequest) {
       ...(evidenceSnippet ? { evidenceSnippet } : {}),
       timestampSeconds: claim.timestampSeconds,
       verifiedAt: new Date().toISOString(),
-      ...(embedding.length > 0 ? { embedding } : {}),
+      ...(claimEmbedding.length > 0 ? { embedding: claimEmbedding } : {}),
     };
+    
+    // ---- Cross-video memory: Save claim vector for future similarity search ----
+    // Fire and forget - don't await to avoid slowing down the response
+    if (claimEmbedding.length > 0) {
+      void upsertClaimVector({
+        id: sourceCard.id,
+        claimText: claim.claimText,
+        status: sourceCard.status,
+        nuance: sourceCard.nuance,
+        sourceTitle: sourceCard.sourceTitle,
+        sourceUrl: sourceCard.sourceUrl,
+        videoId: body?.videoId || 'unknown',
+        videoTitle: body?.videoTitle || 'Unknown Video',
+        timestampSeconds: claim.timestampSeconds,
+        verifiedAt: sourceCard.verifiedAt,
+      }, claimEmbedding);
+    }
 
     console.info('[verify-claim]', {
       parsedStatus,

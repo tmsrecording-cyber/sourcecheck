@@ -246,6 +246,7 @@ export interface AnalyzeChunkResponse {
 /** What the extension sends to /api/verify-claim */
 export interface VerifyClaimRequest {
   claim: ExtractedClaim;
+  videoId: string;
   videoTitle: string;
   channelName: string;
   model?: GeminiModelOption;         // optional model selection (validated server-side)
