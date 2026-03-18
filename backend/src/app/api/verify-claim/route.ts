@@ -382,9 +382,7 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    // ---- Single Gemini call with Google Search grounding ----
-    // Gemini searches the web automatically and returns both
-    // the verification JSON and the grounding source URLs.
+    // ---- Gemini grounded verification with retry + graceful fallback ----
     const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType, contextTranscript);
 
     // BYOK: Use header model if provided (from x-custom-model), else fall back to body
@@ -403,6 +401,17 @@ export async function POST(request: NextRequest) {
     let inputTokens: number;
     let outputTokens: number;
     let sources: Array<{ title: string; url: string }>;
+    let usedFallback = false;
+    
+    // Helper to check if error is recoverable for retry
+    const isRecoverableGroundingError = (err: unknown): boolean => {
+      if (!isGeminiError(err)) return false;
+      // PARSE_ERROR: JSON malformed/empty/truncated
+      // API_ERROR with 502/504: upstream transient failure
+      if (err.code === 'PARSE_ERROR') return true;
+      if (err.code === 'API_ERROR' && (err.status === 502 || err.status === 504)) return true;
+      return false;
+    };
     
     try {
       const result = await askGeminiJSONWithSearch<RawVerification>(
@@ -416,17 +425,58 @@ export async function POST(request: NextRequest) {
       inputTokens = result.inputTokens;
       outputTokens = result.outputTokens;
       sources = result.sources;
-    } catch (geminiError) {
-      console.error('[verify-claim] Gemini grounding call failed:', {
-        claimId: claim.id,
-        model: effectiveModel,
-        error: geminiError instanceof Error ? {
-          name: geminiError.name,
-          message: geminiError.message,
-          code: (geminiError as { code?: string }).code,
-        } : 'Unknown error',
-      });
-      throw geminiError;
+    } catch (firstError) {
+      if (isRecoverableGroundingError(firstError)) {
+        console.warn('[verify-claim] Grounding call failed, attempting retry with safer params:', {
+          claimId: claim.id,
+          firstErrorCode: isGeminiError(firstError) ? firstError.code : 'unknown',
+        });
+        
+        // Retry once with higher token budget and no schema enforcement (more permissive)
+        try {
+          const retryResult = await askGeminiJSONWithSearch<RawVerification>(
+            prompt + '\n\nReturn ONLY valid JSON with no markdown formatting.',
+            800, // higher maxTokens for retry
+            undefined, // skip strict schema validation on retry
+            effectiveModel,
+            customApiKey
+          );
+          rawVerification = retryResult.data;
+          inputTokens = retryResult.inputTokens;
+          outputTokens = retryResult.outputTokens;
+          sources = retryResult.sources;
+          console.info('[verify-claim] Retry succeeded for claim:', claim.id);
+        } catch (retryError) {
+          // Both attempts failed - use graceful fallback instead of 502
+          console.warn('[verify-claim] Retry also failed, using graceful fallback:', {
+            claimId: claim.id,
+            retryErrorCode: isGeminiError(retryError) ? retryError.code : 'unknown',
+          });
+          usedFallback = true;
+          rawVerification = {
+            status: 'unverifiable',
+            sourceTitle: 'Verification unavailable',
+            sourceType: 'other',
+            nuance: 'We could not verify this claim reliably at this time. The verification service experienced temporary instability.',
+            evidenceSnippet: null,
+          };
+          inputTokens = 0;
+          outputTokens = 0;
+          sources = [];
+        }
+      } else {
+        // Non-recoverable error - re-throw to preserve existing error handling
+        console.error('[verify-claim] Gemini grounding call failed (non-recoverable):', {
+          claimId: claim.id,
+          model: effectiveModel,
+          error: firstError instanceof Error ? {
+            name: firstError.name,
+            message: firstError.message,
+            code: (firstError as { code?: string }).code,
+          } : 'Unknown error',
+        });
+        throw firstError;
+      }
     }
 
     // ---- Validate status ----
@@ -553,6 +603,7 @@ export async function POST(request: NextRequest) {
       sourceCount: Array.isArray(sources) ? sources.length : 0,
       inputTokens,
       outputTokens,
+      usedFallback,
     });
 
     const response = NextResponse.json<VerifyClaimResponse>({ sourceCard });

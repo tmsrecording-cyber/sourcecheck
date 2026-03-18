@@ -614,11 +614,9 @@ async function callGemini(
   const thinkingBudget = getThinkingBudget(model);
   const requestTimeoutMs = getRequestTimeoutMs();
 
+  // Suppress warning for grounded calls - this is expected behavior, not an issue
   if (useGrounding && thinkingBudget !== null) {
-    console.warn(
-      '[gemini.ts] `thinkingConfig` is ignored when Google Search grounding is enabled. ' +
-        'The model will use grounding instead of answering from training data.'
-    );
+    // No-op: thinkingConfig is intentionally ignored for grounded calls
   }
 
   if (!apiKey) {
