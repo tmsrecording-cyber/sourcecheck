@@ -30,6 +30,10 @@ const MAX_METADATA_FIELD_LENGTH = 300;
 const MAX_NUANCE_LENGTH = 600;
 const FALLBACK_NO_SOURCE_COPY = 'No grounded source attached.';
 
+// Wording format version - bump when changing user-facing unresolved wording
+// This invalidates cached nuance text that may contain old product language
+const WORDING_VERSION = 1;
+
 type UnverifiableCategory =
   | 'no_strong_match'
   | 'missing_context'
@@ -50,7 +54,7 @@ const PRIMARY_SOURCE_RE =
 // nuance that sounds stronger than the evidence warrants — whether positive or negative.
 const guardUnverifiableNuance = (nuance: string, hasGrounding: boolean): string => {
   if (!hasGrounding && (NEGATIVE_CERTAINTY_RE.test(nuance) || POSITIVE_CERTAINTY_RE.test(nuance))) {
-    return 'We could not verify this claim with a reliable web source.';
+    return 'No confirming source found.';
   }
   return nuance;
 };
@@ -89,20 +93,20 @@ const resolveUnverifiableLanguage = (params: {
   switch (params.category) {
     case 'missing_context':
       return {
-        sourceTitle: 'More context needed',
-        nuance: 'The claim needs specifics like timeframe, population, or definition.',
+        sourceTitle: 'Missing details',
+        nuance: 'The claim is too vague—needs dates, names, or specifics to verify.',
       };
     case 'needs_primary_source':
       return {
-        sourceTitle: 'Needs primary source',
-        nuance: 'This likely needs a paper, dataset, or official record.',
+        sourceTitle: 'Source not available',
+        nuance: 'This type of claim requires access to papers, filings, or official records.',
       };
     case 'no_strong_match':
       return {
-        sourceTitle: 'No strong web match',
+        sourceTitle: params.hasGrounding ? 'Evidence unclear' : 'Not found',
         nuance: params.hasGrounding
-          ? 'Search results mention the topic, but do not resolve this exact claim.'
-          : 'We could not verify this claim with a reliable web source.',
+          ? 'Sources mention the topic but do not clearly confirm or refute this claim.'
+          : 'No reliable source confirms this specific claim.',
       };
   }
 };
@@ -348,6 +352,36 @@ export async function POST(request: NextRequest) {
     
     // If we found a very similar claim, return it immediately (skip Gemini API call)
     if (similarClaim && similarClaim.score > 0.92) {
+      // Check wording version - invalidate stale cached wording
+      const cachedVersion = similarClaim.metadata.wordingVersion;
+      let nuance = similarClaim.metadata.nuance;
+      
+      // Always strip legacy "[From memory]" prefix - it should never be user-facing
+      nuance = nuance.replace(/^\[From memory\]\s*/i, '');
+      
+      if (cachedVersion !== WORDING_VERSION) {
+        // Regenerate nuance with current wording format
+        console.info('[verify-claim] Cached wording version mismatch, regenerating', {
+          cachedVersion,
+          currentVersion: WORDING_VERSION,
+          status: similarClaim.metadata.status,
+        });
+        
+        if (similarClaim.metadata.status === 'unverifiable') {
+          // Re-apply current unverifiable wording logic
+          const hasGrounding = !!similarClaim.metadata.sourceUrl;
+          const category = inferUnverifiableCategory({
+            claimText: claim.claimText,
+            claimType: claim.claimType,
+            sourceType: similarClaim.metadata.sourceType || 'other',
+            nuance: similarClaim.metadata.nuance,
+            sourceTitle: similarClaim.metadata.sourceTitle,
+          });
+          const resolved = resolveUnverifiableLanguage({ category, hasGrounding });
+          nuance = resolved.nuance;
+        }
+      }
+      
       const cachedSourceCard: SourceCard = {
         id: crypto.randomUUID(),
         claim,
@@ -355,7 +389,7 @@ export async function POST(request: NextRequest) {
         sourceTitle: similarClaim.metadata.sourceTitle,
         sourceUrl: similarClaim.metadata.sourceUrl,
         sourceType: 'other',
-        nuance: `[From memory] ${similarClaim.metadata.nuance}`,
+        nuance,
         timestampSeconds: claim.timestampSeconds,
         verifiedAt: new Date().toISOString(),
         embedding,
@@ -364,6 +398,7 @@ export async function POST(request: NextRequest) {
       console.info('[verify-claim] Returning cached result from cross-video memory', {
         originalVideo: similarClaim.metadata.videoTitle,
         score: similarClaim.score,
+        wordingRegenerated: cachedVersion !== WORDING_VERSION,
       });
       
       const response = NextResponse.json<VerifyClaimResponse>({ 
@@ -428,10 +463,11 @@ export async function POST(request: NextRequest) {
     try {
       const result = await askGeminiJSONWithSearch<RawVerification>(
         prompt, 
-        500, 
+        1200, 
         VERIFICATION_SCHEMA, 
         effectiveModel, 
-        customApiKey
+        customApiKey,
+        '/api/verify-claim'
       );
       rawVerification = result.data;
       inputTokens = result.inputTokens;
@@ -454,10 +490,11 @@ export async function POST(request: NextRequest) {
         try {
           const retryResult = await askGeminiJSONWithSearch<RawVerification>(
             prompt + '\n\nReturn ONLY valid JSON with no markdown formatting.',
-            800, // higher maxTokens for retry
+            1800, // higher maxTokens for retry
             undefined, // skip strict schema validation on retry
             effectiveModel,
-            customApiKey
+            customApiKey,
+            '/api/verify-claim'
           );
           rawVerification = retryResult.data;
           inputTokens = retryResult.inputTokens;
@@ -497,7 +534,7 @@ export async function POST(request: NextRequest) {
             status: 'unverifiable',
             sourceTitle: 'Verification unavailable',
             sourceType: 'other',
-            nuance: 'We could not verify this claim reliably at this time. The verification service experienced temporary instability.',
+            nuance: 'Verification temporarily unavailable. The claim will be retried automatically.',
             evidenceSnippet: null,
           };
           inputTokens = 0;
@@ -629,12 +666,27 @@ export async function POST(request: NextRequest) {
         nuance: sourceCard.nuance,
         sourceTitle: sourceCard.sourceTitle,
         sourceUrl: sourceCard.sourceUrl,
+        sourceType: sourceCard.sourceType,
         videoId: body?.videoId || 'unknown',
         videoTitle: body?.videoTitle || 'Unknown Video',
         timestampSeconds: claim.timestampSeconds,
         verifiedAt: sourceCard.verifiedAt,
+        wordingVersion: WORDING_VERSION,
       }, claimEmbedding);
     }
+
+    // Explicit downgrade logging for auditability
+    const wasDowngraded = parsedStatus !== 'unverifiable' && status === 'unverifiable';
+    const downgradeInfo = wasDowngraded
+      ? {
+          downgradedToUnverifiable: true,
+          downgradeReason: hasQualityGrounding ? 'trust_guard_unknown' : 'no_quality_grounding',
+          parsedStatus,
+          finalStatus: status,
+          sourceCount: Array.isArray(sources) ? sources.length : 0,
+          bestSourceUrlPresent: bestSourceUrl !== '',
+        }
+      : { downgradedToUnverifiable: false };
 
     console.info('[verify-claim]', {
       parsedStatus,
@@ -644,6 +696,7 @@ export async function POST(request: NextRequest) {
       inputTokens,
       outputTokens,
       usedFallback,
+      ...downgradeInfo,
     });
 
     const response = NextResponse.json<VerifyClaimResponse>({ sourceCard });

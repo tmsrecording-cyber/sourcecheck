@@ -76,7 +76,7 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="h-[32px] px-3 text-[11px] font-medium tracking-wide border border-sc-border bg-sc-surface-0 hover:bg-sc-surface-1 rounded-md text-sc-text-soft transition-all duration-150 flex items-center gap-1.5 focus:outline-none focus-visible:ring-0 whitespace-nowrap flex-shrink-0 min-w-0"
-        style={{ '--model-accent-rgb': selectedModel === 'gemini-3.1-flash-lite-preview' ? '168, 199, 250' : '215, 174, 251' } as React.CSSProperties}
+        style={{ '--model-accent-rgb': selectedModel === 'gemini-3-flash-preview' ? '215, 174, 251' : '168, 199, 250' } as React.CSSProperties}
         onMouseEnter={(e) => {
           e.currentTarget.style.boxShadow = '0 0 8px rgba(var(--model-accent-rgb), 0.3)';
         }}

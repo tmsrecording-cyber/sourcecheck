@@ -124,7 +124,7 @@ type WorkerEvent =
   | { type: 'TRANSCRIPT_LOADED'; chunkCount: number; debug: TranscriptDebugState }
   | { type: 'TRANSCRIPT_FAILED'; debug: TranscriptDebugState }
   | { type: 'ANALYZE_STARTED' }
-  | { type: 'ANALYZE_COMPLETED'; claimCount: number }
+  | { type: 'ANALYZE_COMPLETED'; claimCount: number; backendMetrics?: { rawCandidates: number; anchorFiltered: number; verifiabilityFiltered: number; finalCandidates: number } }
   | { type: 'VERIFY_STARTED'; claimText: string }
   | { type: 'VERIFY_COMPLETED' }
   | { type: 'HYDRATED_FROM_SNAPSHOT'; chunkCount: number }
@@ -165,6 +165,87 @@ let transcriptDebug: TranscriptDebugState = {
   reason: null,
   attemptCount: 0,
 };
+// METRICS ACCUMULATOR — tracks detailed pipeline counts for diagnosis
+const metricsAccumulator = {
+  transcriptChunksLoaded: 0,
+  chunksScannedCount: 0,
+  batchesSent: 0,
+  candidatesReturned: 0,
+  candidatesRejectedBackendAnchor: 0,
+  candidatesRejectedBackendVerifiability: 0,
+  candidatesRejectedClientQuality: 0,
+  candidatesRejectedDedupe: 0,
+  itemsEnqueued: 0,
+  verifyStarted: 0,
+  verifySucceeded: 0,
+  verifyDowngradedUnverifiable: 0,
+  cardsAppended: 0,
+  finalVisibleCards: 0,
+  // Detailed skip reasons
+  skipReasons: {} as Record<string, number>,
+  // Batch-level detail
+  batchDetails: [] as Array<{
+    batchIndex: number;
+    chunkRange: string;
+    candidates: number;
+    accepted: number;
+    rejected: number;
+    rejectReasons: string[];
+  }>,
+  reset() {
+    this.transcriptChunksLoaded = 0;
+    this.chunksScannedCount = 0;
+    this.batchesSent = 0;
+    this.candidatesReturned = 0;
+    this.candidatesRejectedBackendAnchor = 0;
+    this.candidatesRejectedBackendVerifiability = 0;
+    this.candidatesRejectedClientQuality = 0;
+    this.candidatesRejectedDedupe = 0;
+    this.itemsEnqueued = 0;
+    this.verifyStarted = 0;
+    this.verifySucceeded = 0;
+    this.verifyDowngradedUnverifiable = 0;
+    this.cardsAppended = 0;
+    this.finalVisibleCards = 0;
+    this.skipReasons = {};
+    this.batchDetails = [];
+  },
+  log() {
+    console.log('[METRICS] ╔══════════════════════════════════════════════════════════╗');
+    console.log('[METRICS] ║           SOURCECHECK PIPELINE METRICS REPORT            ║');
+    console.log('[METRICS] ╠══════════════════════════════════════════════════════════╣');
+    console.log(`[METRICS] ║ TRANSCRIPT:                                              ║`);
+    console.log(`[METRICS] ║   Chunks loaded:              ${this.transcriptChunksLoaded.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Chunks scanned:             ${this.chunksScannedCount.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Batches sent to analyze:    ${this.batchesSent.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║ ──────────────────────────────────────────────────────── ║`);
+    console.log(`[METRICS] ║ EXTRACTION (backend):                                    ║`);
+    console.log(`[METRICS] ║   Raw candidates returned:    ${this.candidatesReturned.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Rejected - anchor mismatch: ${this.candidatesRejectedBackendAnchor.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Rejected - verifiability:   ${this.candidatesRejectedBackendVerifiability.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║ ──────────────────────────────────────────────────────── ║`);
+    console.log(`[METRICS] ║ CLIENT-SIDE FILTERING:                                   ║`);
+    console.log(`[METRICS] ║   Quality filter:             ${this.candidatesRejectedClientQuality.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Dedupe (near-duplicate):    ${this.candidatesRejectedDedupe.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║ ──────────────────────────────────────────────────────── ║`);
+    console.log(`[METRICS] ║ VERIFICATION:                                            ║`);
+    console.log(`[METRICS] ║   Items enqueued:             ${this.itemsEnqueued.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Verify started:             ${this.verifyStarted.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Verify succeeded:           ${this.verifySucceeded.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Downgraded (no grounding):  ${this.verifyDowngradedUnverifiable.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║ ──────────────────────────────────────────────────────── ║`);
+    console.log(`[METRICS] ║ CARDS:                                                   ║`);
+    console.log(`[METRICS] ║   Appended to sourceCards:    ${this.cardsAppended.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Final visible:              ${this.finalVisibleCards.toString().padStart(5)}                    ║`);
+    console.log('[METRICS] ╠══════════════════════════════════════════════════════════╣');
+    console.log('[METRICS] ║ DETAILED SKIP REASONS:                                   ║');
+    Object.entries(this.skipReasons).forEach(([reason, count]) => {
+      console.log(`[METRICS] ║   ${reason.slice(0, 44).padEnd(44)} ${count.toString().padStart(3)} ║`);
+    });
+    console.log('[METRICS] ╚══════════════════════════════════════════════════════════╝');
+  }
+};
+
 let transcriptFetchLog: TranscriptFetchDebugEntry[] = [];
 let pendingTranscriptBuffer: PendingTranscriptBuffer | null = null;
 let pendingTranscriptBufferPersistTimeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -193,6 +274,7 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   pendingTranscriptBufferSummary: { present: false, receivedCount: 0, totalCount: 0 },
   transcriptMessageStats: { startsSeen: 0, appendsSeen: 0, loadedSeen: 0, failedSeen: 0 },
   sourceCards: [],
+  allSourceCards: [],
   pendingClaims: [],
   chunksScanned: 0,
   lastScannedTimestamp: null,
@@ -412,6 +494,7 @@ const dispatch = (event: WorkerEvent) => {
     transcriptDebug,
     transcriptFetchLog,
     sourceCards,
+    allSourceCards,
     pendingClaims,
     chunksScanned,
     lastScannedTimestamp,
@@ -682,6 +765,8 @@ console.log(`[SourceCheck/SW] API_BASE=${API_BASE}`);
 const VALID_TRANSCRIPT_DEBUG_SOURCES = new Set<TranscriptDebugSource>(['window', 'scripts', 'html', 'panel', null]);
 const VALID_TRANSCRIPT_DEBUG_REASONS = new Set<TranscriptDebugReason>([
   'pending', 'caption-tracks-found', 'no-caption-tracks', 'fetch-failed',
+  'fetch-non-ok', 'fetch-empty-body', 'fetch-html-instead-of-transcript',
+  'fetch-json-no-events', 'fetch-xml-no-text', 'parse-threw',
   'response-empty', 'parse-empty', 'parse-error', 'chunks-filtered-empty',
   'all-tracks-response-empty', 'no-usable-track',
   'panel-open-button-missing', 'panel-open-click-failed', 'panel-root-present-no-segments',
@@ -795,6 +880,7 @@ const isValidRawTranscriptChunk = (value: unknown): value is RawTranscriptChunk 
   Boolean(value) &&
   typeof value === 'object' &&
   typeof (value as RawTranscriptChunk).text === 'string' &&
+  (value as RawTranscriptChunk).text.trim().length > 0 &&
   Number.isFinite((value as RawTranscriptChunk).startMs) &&
   Number.isFinite((value as RawTranscriptChunk).durationMs);
 
@@ -1036,12 +1122,22 @@ const syncVisibleTimelineState = (currentTime: number | null = currentPlaybackSt
   }
 
   const leashCutoff = getLeashCutoff(currentTime);
+  const preFilterCount = allSourceCards.length;
+  // PHASE 1D.12 FIX: Sort by video timeline position (timestampSeconds desc) so the
+  // most recent claim in the video is always the hero card (index 0), regardless of
+  // verification completion order. This fixes the LIVE feed stacking bug.
+  const sortedSourceCards = [...allSourceCards].sort(
+    (a, b) => b.timestampSeconds - a.timestampSeconds
+  );
+  const sortedPendingClaims = [...allPendingClaims].sort(
+    (a, b) => b.timestampSeconds - a.timestampSeconds
+  );
   sourceCards = leashCutoff === null
-    ? [...allSourceCards]
-    : allSourceCards.filter((card) => card.timestampSeconds <= leashCutoff);
+    ? sortedSourceCards
+    : sortedSourceCards.filter((card) => card.timestampSeconds <= leashCutoff);
   pendingClaims = leashCutoff === null
-    ? [...allPendingClaims]
-    : allPendingClaims.filter((claim) => claim.timestampSeconds <= leashCutoff);
+    ? sortedPendingClaims
+    : sortedPendingClaims.filter((claim) => claim.timestampSeconds <= leashCutoff);
 
   const currentIndex = getTranscriptIndexAtTime(currentTime);
   const hasLiveTranscript = currentIndex !== -1;
@@ -1231,7 +1327,10 @@ const getVerificationSkipReason = (claim: ExtractedClaim) => {
   
   // Too short to be meaningful (less than 3 words is definitely a fragment)
   if (claimWords < 3) {
-    return `claim too short (${claimWords} words)`;
+    const reason = `claim too short (${claimWords} words)`;
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
 
   // --- 2. Specificity / concreteness detection ---
@@ -1251,12 +1350,18 @@ const getVerificationSkipReason = (claim: ExtractedClaim) => {
   
   // Short claims (< 5 words) must be highly concrete to pass
   if (claimWords < 5 && !isConcrete) {
-    return 'short claim lacks concrete specificity';
+    const reason = 'short claim lacks concrete specificity';
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
   
   // Medium claims (5-7 words) need at least some concreteness
   if (claimWords >= 5 && claimWords <= 7 && !isConcrete && claim.claimText.length < 30) {
-    return 'claim lacks sufficient specificity for verification';
+    const reason = 'claim lacks sufficient specificity for verification';
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
 
   // --- 3. Vagueness / opinion pattern detection ---
@@ -1269,17 +1374,26 @@ const getVerificationSkipReason = (claim: ExtractedClaim) => {
   
   // Long but vague claims should be rejected
   if (claimWords > 10 && hasVagueGeneralization && !isConcrete) {
-    return 'vague generalization without concrete specifics';
+    const reason = 'vague generalization without concrete specifics';
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
   
   // Opinion claims
   if (hasOpinionMarker) {
-    return 'opinion statement not suitable for fact-checking';
+    const reason = 'opinion statement not suitable for fact-checking';
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
   
   // Predictions about future
   if (hasPredictionMarker && !hasNumber) {
-    return 'prediction about future events';
+    const reason = 'prediction about future events';
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
 
   // --- 4. Confidence threshold (using actual backend confidence) ---
@@ -1287,21 +1401,33 @@ const getVerificationSkipReason = (claim: ExtractedClaim) => {
   // MIN_CONFIDENCE is 0.65, so this is effectively a no-op for normal claims
   // We keep it as a safety floor for malformed data
   if (claim.confidence < MIN_CONFIDENCE) {
-    return `confidence ${claim.confidence.toFixed(2)} below threshold ${MIN_CONFIDENCE.toFixed(2)}`;
+    const reason = `confidence ${claim.confidence.toFixed(2)} below threshold ${MIN_CONFIDENCE.toFixed(2)}`;
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
 
   // --- 5. Duplicate detection ---
   if (hasCardForClaim(claim)) {
-    return 'matching source card already exists';
+    const reason = 'matching source card already exists';
+    metricsAccumulator.candidatesRejectedDedupe++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
 
   if (hasQueuedVerificationForKey(key) || activeVerificationKeys.has(key)) {
-    return 'claim already queued or verifying';
+    const reason = 'claim already queued or verifying';
+    metricsAccumulator.candidatesRejectedDedupe++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
   
   // Near-duplicate check for similar claims within time window
   if (isNearDuplicate(claim)) {
-    return 'similar claim recently checked';
+    const reason = 'similar claim recently checked';
+    metricsAccumulator.candidatesRejectedDedupe++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
   }
 
   if (hasPendingClaim(claim)) {
@@ -1382,7 +1508,7 @@ const markTranscriptUnavailable = () => {
   // Explicitly clear the persisted transcript snapshot so the sidepanel
   // cannot keep using stale transcript context (e.g. keeping Ask enabled)
   // after a transcript failure for the same video.
-  chrome.storage.local.remove('transcriptSnapshot', () => {
+  chrome.storage.local.remove(TRANSCRIPT_SNAPSHOT_KEY, () => {
     if (chrome.runtime.lastError) {
       console.error('[SourceCheck/SW] Failed to clear transcript snapshot:', chrome.runtime.lastError.message);
     }
@@ -1419,6 +1545,10 @@ const resetSessionState = (nextVideo: ActiveVideoContext | null) => {
   abortActiveRequests();
   clearTranscriptLoadTimeout();
   clearPendingTranscriptBufferPersistTimeout();
+  if (pendingAnalysisTimeout) {
+    clearTimeout(pendingAnalysisTimeout);
+    pendingAnalysisTimeout = null;
+  }
   currentVideoInfo = nextVideo;
   currentTranscript = [];
   currentPlaybackState = null;
@@ -1460,6 +1590,37 @@ const resetSessionState = (nextVideo: ActiveVideoContext | null) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// METRICS DUMP (exposed for debugging)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const dumpMetrics = () => {
+  metricsAccumulator.finalVisibleCards = sourceCards.length;
+  metricsAccumulator.log();
+  
+  // Also log as JSON for easy parsing
+  console.log('[METRICS_JSON]', JSON.stringify({
+    transcriptChunksLoaded: metricsAccumulator.transcriptChunksLoaded,
+    chunksScannedCount: metricsAccumulator.chunksScannedCount,
+    batchesSent: metricsAccumulator.batchesSent,
+    candidatesReturned: metricsAccumulator.candidatesReturned,
+    candidatesRejectedBackendAnchor: metricsAccumulator.candidatesRejectedBackendAnchor,
+    candidatesRejectedBackendVerifiability: metricsAccumulator.candidatesRejectedBackendVerifiability,
+    candidatesRejectedClientQuality: metricsAccumulator.candidatesRejectedClientQuality,
+    candidatesRejectedDedupe: metricsAccumulator.candidatesRejectedDedupe,
+    itemsEnqueued: metricsAccumulator.itemsEnqueued,
+    verifyStarted: metricsAccumulator.verifyStarted,
+    verifySucceeded: metricsAccumulator.verifySucceeded,
+    verifyDowngradedUnverifiable: metricsAccumulator.verifyDowngradedUnverifiable,
+    cardsAppended: metricsAccumulator.cardsAppended,
+    finalVisibleCards: sourceCards.length,
+    skipReasons: metricsAccumulator.skipReasons,
+  }));
+};
+
+// Expose to window for manual triggering via console
+(globalThis as any).dumpSourceCheckMetrics = dumpMetrics;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PERSISTENCE
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1479,15 +1640,16 @@ const buildPersistableRuntimeState = (): WorkerRuntimeState => ({
   transcriptFetchLog: [],
   // ESSENTIAL DATA: cap to safe limits for persistence
   sourceCards: sourceCards.slice(0, MAX_SOURCE_CARDS),
+  allSourceCards: allSourceCards.slice(0, MAX_SOURCE_CARDS),
   pendingClaims: pendingClaims.slice(0, MAX_PENDING_CLAIMS),
   // PROGRESS TRACKING: essential for restore
   chunksScanned,
   lastScannedTimestamp,
-  // TRANSIENT UI STATE: clear for persistence (live only)
-  currentScanPreview: null,
-  currentScanEntities: [],
-  currentScanActionState: null,
-  currentScanReason: null,
+  // UI STATE: persist actual live values (not null) for sidepanel display
+  currentScanPreview,
+  currentScanEntities,
+  currentScanActionState,
+  currentScanReason,
   lastProcessedIndex,
   // TRANSIENT TIMEOUT: clear for persistence
   transcriptLoadDeadlineAt: null,
@@ -1529,6 +1691,15 @@ const persistPanelState = (options: {
     // Keep compat fields for hydration of processing state (already capped above)
     sourceCards: persistableRuntimeState.sourceCards,
     pendingClaims: persistableRuntimeState.pendingClaims,
+    // PHASE 1D.12 FIX: Persist full card history for proper restoration
+    // (sourceCards is filtered by leash, allSourceCards is complete history)
+    allSourceCards: allSourceCards.slice(0, MAX_SOURCE_CARDS),
+    // PHASE 1D.11 FIX: Write live preview at top level for sidepanel to read
+    // (persistableRuntimeState may have stale values, these are current)
+    currentScanPreview,
+    currentScanEntities,
+    currentScanActionState,
+    currentScanReason,
   };
 
   if (options.includeTranscript) {
@@ -1549,25 +1720,46 @@ const persistPanelState = (options: {
     if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
       payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 10);
       payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 20);
+      payload.allSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 10);
       // Update the runtimeState in payload to match
       (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = payload.sourceCards as SourceCard[];
       (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = payload.pendingClaims as PendingClaimPreview[];
+      (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allSourceCards = payload.allSourceCards as SourceCard[];
     }
 
-    // If STILL too large, only persist core runtime state
+    // If STILL too large, aggressively truncate cards but DON'T delete them entirely
     if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
-      console.warn('[SourceCheck/SW] Panel state too large, using minimal payload');
-      // Only persist the minimal runtime state (no cards/claims)
-      const minimalPayload = {
+      console.warn('[SourceCheck/SW] Panel state too large, using emergency truncation');
+      // Keep at least the most recent cards - don't wipe them completely
+      const emergencySourceCards = (payload.sourceCards as SourceCard[]).slice(0, 5);
+      const emergencyPendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 10);
+      const emergencyAllSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 5);
+      
+      const emergencyPayload = {
         [WORKER_RUNTIME_STATE_KEY]: {
           ...persistableRuntimeState,
-          sourceCards: [],
-          pendingClaims: [],
+          sourceCards: emergencySourceCards,
+          pendingClaims: emergencyPendingClaims,
+          allSourceCards: emergencyAllSourceCards,
         } as WorkerRuntimeState,
+        sourceCards: emergencySourceCards,
+        pendingClaims: emergencyPendingClaims,
+        allSourceCards: emergencyAllSourceCards,
+        currentScanPreview,
+        currentScanEntities,
+        currentScanActionState,
+        currentScanReason,
       };
-      chrome.storage.session.set(minimalPayload, () => {
+      
+      chrome.storage.session.set(emergencyPayload, () => {
         if (chrome.runtime.lastError) {
-          console.error('[SourceCheck/SW] Failed to persist minimal panel state:', chrome.runtime.lastError.message);
+          console.error('[SourceCheck/SW] Failed to persist emergency panel state:', chrome.runtime.lastError.message);
+        } else {
+          console.log('[Pipeline] Emergency state persisted:', {
+            sourceCardsCount: emergencySourceCards.length,
+            allSourceCardsCount: emergencyAllSourceCards.length,
+            pendingClaimsCount: emergencyPendingClaims.length,
+          });
         }
       });
       return;
@@ -1593,17 +1785,40 @@ const persistPanelState = (options: {
 };
 
 const persistPanelDiagnostics = () => {
-  runtimeState = {
+  // BUGFIX #7: Apply quota guard — persist only diagnostic subsets, not full runtimeState.
+  // Build minimal payload similar to buildPersistableRuntimeState but for diagnostics only.
+  const minimalRuntimeState: WorkerRuntimeState = {
     ...runtimeState,
     pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
     debugStage,
     transcriptMessageStats,
-    transcriptFetchLog,
+    // Drop heavy fields: transcriptFetchLog, eventLog, sourceCards, pendingClaims
+    transcriptFetchLog: [],
+    eventLog: [],
+    sourceCards: [],
+    pendingClaims: [],
   };
-  chrome.storage.session.set({
-    [WORKER_RUNTIME_STATE_KEY]: runtimeState,
-    transcriptFetchLog,
-  }, () => {
+  
+  // Persist only the diagnostic subsets to avoid quota issues
+  const payload: Record<string, unknown> = {
+    [WORKER_RUNTIME_STATE_KEY]: minimalRuntimeState,
+    transcriptFetchLog: transcriptFetchLog.slice(-MAX_TRANSCRIPT_FETCH_LOG),
+  };
+  
+  // Quota guard: if still too large, drop transcriptFetchLog
+  if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
+    console.warn('[SourceCheck/SW] Diagnostics payload too large, using minimal version');
+    chrome.storage.session.set({
+      [WORKER_RUNTIME_STATE_KEY]: minimalRuntimeState,
+    }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[SourceCheck/SW] Failed to persist minimal diagnostics:', chrome.runtime.lastError.message);
+      }
+    });
+    return;
+  }
+  
+  chrome.storage.session.set(payload, () => {
     if (chrome.runtime.lastError) {
       console.error('[SourceCheck/SW] Failed to persist diagnostics:', chrome.runtime.lastError.message);
     } else {
@@ -1677,10 +1892,11 @@ const hydrateState = async () => {
           // Restore selectedModel from sync storage if not in session
           // Validate against allowed models to prevent corrupted values
           selectedModel: (() => {
-            // MODEL POLICY: All valid models must be from ALLOWED_MODELS in shared/types.ts
-// CANONICAL: Use shared ALLOWED_MODELS from shared/types.ts (single source of truth)
-            const model = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
-            return (ALLOWED_MODELS.includes(model as GeminiModelOption) ? model : INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
+            // BUGFIX #2: HYDRATION MODEL NORMALIZATION — Normalize first, then validate.
+            // Prevents stale aliases or malformed but normalizable values from being rejected inconsistently.
+            const rawModel = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
+            const normalized = normalizeModel(rawModel);
+            return (normalized ?? INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
           })(),
         };
 
@@ -1747,11 +1963,12 @@ const hydrateState = async () => {
 // PROCESSING LOGIC
 // ─────────────────────────────────────────────────────────────────────────────
 
-const enqueueClaimsForVerification = (claims: AnalyzeChunkResponse['claims']) => {
+const enqueueClaimsForVerification = (claims: AnalyzeChunkResponse['claims'], backendMetrics?: AnalyzeChunkResponse['_metrics']) => {
   const video = currentVideoInfo;
   if (!video) return;
 
   let didQueueClaims = false;
+  let queuedCount = 0;
   claims.forEach((claim) => {
     const key = getClaimKey(claim);
     const skipReason = getVerificationSkipReason(claim);
@@ -1777,12 +1994,15 @@ const enqueueClaimsForVerification = (claims: AnalyzeChunkResponse['claims']) =>
         console.warn('[SourceCheck/SW] Verification queue at capacity, dropped oldest item');
       }
     }
+    queuedCount++;
     verificationQueue.push({ claim, videoId: video.videoId, videoTitle: video.title, channelName: video.channel, key, retryCount: 0 });
     upsertPendingClaim(claim, 'queued');
     didQueueClaims = true;
   });
+  
+  metricsAccumulator.itemsEnqueued += queuedCount;
 
-  dispatch({ type: 'ANALYZE_COMPLETED', claimCount: didQueueClaims ? claims.length : 0 });
+  dispatch({ type: 'ANALYZE_COMPLETED', claimCount: didQueueClaims ? claims.length : 0, backendMetrics });
   persistPanelState({ includeCards: true, includeQueue: true });
 
   if (didQueueClaims) void processVerificationQueue().catch((err) => console.error('[SW] processVerificationQueue error:', err));
@@ -1848,6 +2068,8 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
   upsertPendingClaim(item.claim, 'verifying');
   dispatch({ type: 'VERIFY_STARTED', claimText: item.claim.claimText });
   persistPanelState({ includeCards: true, includeQueue: true });
+  
+  metricsAccumulator.verifyStarted++;
 
   try {
     console.log(
@@ -1855,7 +2077,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       `timestamp=${item.claim.timestampSeconds}`
     );
     console.log(
-      `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds}`
+      `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds} model=${runtimeState.selectedModel}`  // TRIAGE: Log model
     );
     // Gather surrounding transcript context for better verification
     // Get chunks within 30 seconds of the claim timestamp
@@ -1879,14 +2101,14 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     console.log(
       `[SourceCheck/SW] verify-claim success video=${item.videoId} card=${sourceCard.status}`
     );
-
-    if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) {
-      console.warn(
-        `[SourceCheck/SW] skipped verification finish because session changed video=${item.videoId} ` +
-        `timestamp=${item.claim.timestampSeconds}`
-      );
-      return;
+    
+    // Track verification outcome
+    metricsAccumulator.verifySucceeded++;
+    if (sourceCard.status === 'unverifiable') {
+      metricsAccumulator.verifyDowngradedUnverifiable++;
     }
+    metricsAccumulator.cardsAppended++;
+
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) {
       console.warn(
         `[SourceCheck/SW] skipped card insert because session changed video=${item.videoId} ` +
@@ -1903,6 +2125,9 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     syncVisibleTimelineState(currentPlaybackState?.currentTime ?? null);
     dispatch({ type: 'VERIFY_COMPLETED' });
     persistPanelState({ includeCards: true, includeQueue: true });
+    
+    // Dump metrics after each successful card
+    dumpMetrics();
   } catch (error) {
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) {
       console.warn(
@@ -1925,8 +2150,9 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     const isNonRetryable = !classifiedError.retryable;
     
     // Only retry if it's a potentially transient error
+    // BUGFIX #3: Pass original error status (preserves 429 backoff behavior), not hardcoded 500.
     if (!isNonRetryable) {
-      if (await retryVerificationItem(item, runGeneration, 500)) {
+      if (await retryVerificationItem(item, runGeneration, errorStatus)) {
         console.warn('[SourceCheck/SW] Verification queue error, retrying.', summarizeErrorForLog(error));
         return;
       }
@@ -1988,6 +2214,8 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       removePendingClaimByKey(item.key);
     }
     
+    // PHASE 1D.12 FIX: Ensure error cards are immediately visible in UI
+    syncVisibleTimelineState(currentPlaybackState?.currentTime ?? null);
     dispatch({ type: 'VERIFY_COMPLETED' });
     persistPanelState({ includeCards: true, includeQueue: true });
   } finally {
@@ -2020,8 +2248,8 @@ const processVerificationQueue = async () => {
       await Promise.all(batch.map((item) => verifyOneItem(item, runGeneration)));
     }
   } finally {
-    if (runGeneration !== verificationGeneration) return;
     isVerifying = false;
+    if (runGeneration !== verificationGeneration) return;
     dispatch({ type: 'VERIFY_COMPLETED' });
     persistPanelState({ includeCards: true, includeQueue: true });
   }
@@ -2029,6 +2257,15 @@ const processVerificationQueue = async () => {
 
 const flushPipelineForSeek = (currentTime: number) => {
   abortActiveRequests();
+  
+  // FIX: Clear pending debounced analysis and the request queue to prevent
+  // stale queued requests from firing after seek and analyzing old chunks.
+  if (pendingAnalysisTimeout) {
+    clearTimeout(pendingAnalysisTimeout);
+    pendingAnalysisTimeout = null;
+  }
+  analysisRequestQueue = [];
+  
   processingGeneration += 1;
   verificationGeneration += 1;
   isProcessing = false;
@@ -2177,12 +2414,10 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
   
   // If already processing, queue the request and return
   if (isProcessing) {
-    // Limit queue size to prevent memory growth during long videos
-    if (analysisRequestQueue.length >= 5) {
-      analysisRequestQueue.shift(); // Remove oldest
-    }
-    analysisRequestQueue.push({ currentTime, scheduledAt: Date.now() });
-    console.log('[Pipeline] Queued analysis request:', { queueLength: analysisRequestQueue.length });
+    // FIX: Overwrite with the latest timestamp. We don't care about the intervening
+    // milliseconds; we just want the pipeline to snap to the live playhead when ready.
+    analysisRequestQueue = [{ currentTime, scheduledAt: Date.now() }];
+    console.log('[Pipeline] Queued next analysis at latest playhead');
     return;
   }
   
@@ -2194,7 +2429,14 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
     return;
   }
 
-  currentScanPreview = getLivePreview(currentTime);
+  // PHASE 1D.11 FIX: Don't wipe preview if getLivePreview returns null
+  // This preserves the fallback preview from first chunks until real live preview exists
+  const nextPreview = getLivePreview(currentTime);
+  if (nextPreview !== null) {
+    currentScanPreview = nextPreview;
+  } else if (!currentScanPreview && currentTranscript.length > 0) {
+    currentScanPreview = currentTranscript.slice(0, 3).map(c => c.text).join(' ').trim() || null;
+  }
   syncVisibleTimelineState(currentTime);
   const currentIndex = getTranscriptIndexAtTime(currentTime);
 
@@ -2261,16 +2503,37 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
       wordCount: chunksToProcess.map(c => c.text).join(' ').split(/\s+/).length,
       firstChunk: chunksToProcess[0]?.text?.slice(0, 50),
       lastChunk: chunksToProcess[chunksToProcess.length - 1]?.text?.slice(0, 50),
+      model: runtimeState.selectedModel,  // TRIAGE: Log model for each analyze call
     });
 
-    const extraction = await fetchWithBYOK('/api/analyze-chunk', {
-      videoId: requestVideoId,
-      videoTitle: activeVideo.title,
-      channelName: activeVideo.channel,
-      chunks: chunksToProcess,
-      currentTimestamp: currentTime,
-      model: runtimeState.selectedModel,
-    }) as AnalyzeChunkResponse;
+    const analyzeStartTime = Date.now();
+    let extraction: AnalyzeChunkResponse;
+    try {
+      extraction = await fetchWithBYOK('/api/analyze-chunk', {
+        videoId: requestVideoId,
+        videoTitle: activeVideo.title,
+        channelName: activeVideo.channel,
+        chunks: chunksToProcess,
+        currentTimestamp: currentTime,
+        model: runtimeState.selectedModel,
+      }) as AnalyzeChunkResponse;
+    } catch (analyzeError) {
+      // TRIAGE: Log model-specific failures
+      console.error('[Pipeline] ANALYZE CHUNK FAILED:', {
+        videoId: requestVideoId,
+        model: runtimeState.selectedModel,
+        error: analyzeError instanceof Error ? analyzeError.message : String(analyzeError),
+        durationMs: Date.now() - analyzeStartTime,
+      });
+      throw analyzeError;
+    }
+    // Track metrics including backend filtering
+    metricsAccumulator.batchesSent++;
+    metricsAccumulator.candidatesReturned += extraction._metrics?.rawCandidates || extraction.claims?.length || 0;
+    metricsAccumulator.candidatesRejectedBackendAnchor += extraction._metrics?.anchorFiltered || 0;
+    metricsAccumulator.candidatesRejectedBackendVerifiability += extraction._metrics?.verifiabilityFiltered || 0;
+    metricsAccumulator.chunksScannedCount += chunksToProcess.length;
+    
     console.log('[Pipeline] API Response:', {
       videoId: requestVideoId,
       hasClaim: extraction.has_claim,
@@ -2324,10 +2587,10 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
 
     if (claims.length > 0) {
       console.log('[Pipeline] Claims extracted, enqueueing for verification:', claims.length);
-      enqueueClaimsForVerification(claims);
+      enqueueClaimsForVerification(claims, extraction._metrics);
     } else {
       console.log('[Pipeline] No claims in this batch.');
-      dispatch({ type: 'ANALYZE_COMPLETED', claimCount: 0 });
+      dispatch({ type: 'ANALYZE_COMPLETED', claimCount: 0, backendMetrics: extraction._metrics });
       persistPanelState();
     }
   } catch (error) {
@@ -2363,8 +2626,17 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
           clearTimeout(pendingAnalysisTimeout);
         }
         
+        // BUGFIX #4: Capture generation and video identity to prevent stale analysis after seek/reset.
+        const scheduledGeneration = processingGeneration;
+        const scheduledVideoId = currentVideoInfo?.videoId;
+        
         pendingAnalysisTimeout = setTimeout(() => {
           pendingAnalysisTimeout = null;
+          // Guard: bail if generation or video changed since scheduling
+          if (scheduledGeneration !== processingGeneration || scheduledVideoId !== currentVideoInfo?.videoId) {
+            console.log('[Pipeline] Discarding stale queued analysis after seek/video change');
+            return;
+          }
           const currentPlaybackTime = currentPlaybackState?.currentTime ?? nextRequest.currentTime;
           void processPlayback(currentPlaybackTime);
         }, delayMs);
@@ -2597,8 +2869,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         reason: 'loaded',
       };
       lastProcessedIndex = -1;
-      currentScanPreview = getLivePreview(currentPlaybackState?.currentTime ?? null);
+      const livePreview = getLivePreview(currentPlaybackState?.currentTime ?? null);
+      // PHASE 1D.10 FIX: If live preview is null (e.g., video at start before first chunk),
+      // use the first chunk as a fallback so the transcript is visible immediately
+      if (livePreview === null && currentTranscript.length > 0) {
+        const firstChunkText = currentTranscript.slice(0, 3).map(c => c.text).join(' ').trim();
+        currentScanPreview = firstChunkText || null;
+        console.log('[SourceCheck/SW] Fallback preview from first chunks:', firstChunkText?.slice(0, 80));
+      } else {
+        currentScanPreview = livePreview;
+      }
       syncVisibleTimelineState(currentPlaybackState?.currentTime ?? null);
+      // Reset metrics for new video
+      metricsAccumulator.reset();
+      metricsAccumulator.transcriptChunksLoaded = currentTranscript.length;
+      
       dispatch({ type: 'TRANSCRIPT_LOADED', chunkCount: currentTranscript.length, debug: transcriptDebug });
       persistPanelState({ includeTranscript: true });
       if (currentPlaybackState?.currentTime !== undefined && currentPlaybackState.paused !== true) {
@@ -2628,14 +2913,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === 'MODEL_CHANGED') {
-      runtimeState.selectedModel = message.model;
+      // BUGFIX #1: MODEL POLICY ENFORCEMENT — Always normalize and validate through shared policy.
+      // Prevents corrupted/stale UI values from persisting invalid models to storage/runtime.
+      const normalizedModel = normalizeModel(message.model);
+      if (!normalizedModel) {
+        console.error('[SourceCheck/SW] Invalid model rejected:', message.model);
+        sendResponse({ status: 'error', error: 'Invalid model selection.' });
+        return;
+      }
+      runtimeState.selectedModel = normalizedModel;
       try {
-        await chrome.storage.sync.set({ selectedModel: message.model });
+        await chrome.storage.sync.set({ selectedModel: normalizedModel });
       } catch (storageError) {
         console.error('[SourceCheck/SW] Failed to persist model selection:', storageError);
       }
       persistPanelState();
-      console.log('[SourceCheck/SW] Model changed to:', message.model);
+      console.log('[SourceCheck/SW] Model changed to:', normalizedModel);
       sendResponse({ status: 'ok' });
       return;
     }
@@ -2645,10 +2938,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const result = await askVideoQuestion(message.payload.question);
         sendResponse({ status: 'ok', ...result });
       } catch (error: unknown) {
-        console.error('[SourceCheck/SW] Ask question failed:', error);
+        // BUGFIX #5: Unified error classification for ASK_QUESTION (consistent with verify path).
+        const errorCode = (error as Error & { errorCode?: string }).errorCode;
+        const errorStatus = (error as Error & { status?: number }).status;
+        const classifiedError = classifyError(error, { 
+          errorCode, 
+          status: errorStatus,
+          url: '/api/ask-video'
+        });
+        
+        console.error('[SourceCheck/SW] Ask question failed:', summarizeErrorForLog(error));
+        
+        // Broadcast provider error when appropriate (auth/quota/BYOK failures)
+        if (shouldShowSettings(classifiedError.code)) {
+          void broadcastProviderError(classifiedError).catch(() => {});
+        }
+        
         sendResponse({
           status: 'error',
-          error: error instanceof Error ? error.message : 'Unknown ask error.',
+          error: classifiedError.message,
+          errorCode: classifiedError.code,
         });
       }
       return;

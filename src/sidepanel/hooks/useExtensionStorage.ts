@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { WorkerRuntimeState, TranscriptChunk } from '../../../shared/types';
-import { PROVIDER_SETTINGS_KEY } from '../../background/providers/types';
+import { useState, useEffect, useRef } from 'react';
+import { WorkerRuntimeState, TranscriptChunk, ExtractionActionState } from '../../../shared/types';
 import {
   INITIAL_RUNTIME_STATE,
   sanitizeWorkerRuntimeState,
@@ -14,41 +13,10 @@ const TRANSCRIPT_FETCH_LOG_KEY = 'transcriptFetchLog' as const;
 // Debounce delay for storage updates - batches rapid changes during analysis
 const UPDATE_DEBOUNCE_MS = 100;
 
-/**
- * Debounce hook for batching rapid state updates.
- * Prevents UI thrashing during active analysis when many chunks are processed.
- */
-const useDebouncedCallback = <T extends unknown[]>(
-  callback: (...args: T) => void,
-  delay: number
-) => {
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const debouncedCallback = useCallback((...args: T) => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-    timeoutRef.current = setTimeout(() => {
-      callback(...args);
-    }, delay);
-  }, [callback, delay]);
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  return debouncedCallback;
-};
-
 export const useExtensionStorage = () => {
   const [isStorageReady, setIsStorageReady] = useState(false);
   const [runtimeState, setRuntimeState] = useState<WorkerRuntimeState>(INITIAL_RUNTIME_STATE);
   const [transcript, setTranscript] = useState<TranscriptChunk[] | null>(null);
-  const [userApiKey, setUserApiKey] = useState<string | null>(null);
   const currentVideoIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -61,13 +29,40 @@ export const useExtensionStorage = () => {
     const getStoredState = () =>
       Promise.all([
         new Promise<{ runtimeState: WorkerRuntimeState; compatTranscriptFetchLog: WorkerRuntimeState['transcriptFetchLog'] }>((resolve, reject) => {
-          chrome.storage.session.get([WORKER_RUNTIME_STATE_KEY, TRANSCRIPT_FETCH_LOG_KEY], (result) => {
+          chrome.storage.session.get([
+            WORKER_RUNTIME_STATE_KEY,
+            TRANSCRIPT_FETCH_LOG_KEY,
+            'currentScanPreview',
+            'currentScanEntities',
+            'currentScanActionState',
+            'currentScanReason',
+          ], (result) => {
             if (chrome.runtime.lastError) {
               reject(chrome.runtime.lastError);
               return;
             }
+            const baseRuntimeState = sanitizeWorkerRuntimeState(result[WORKER_RUNTIME_STATE_KEY]);
+            const runtimeState: WorkerRuntimeState = {
+              ...baseRuntimeState,
+              currentScanPreview:
+                typeof result.currentScanPreview === 'string' || result.currentScanPreview === null
+                  ? result.currentScanPreview
+                  : baseRuntimeState.currentScanPreview,
+              currentScanEntities:
+                Array.isArray(result.currentScanEntities)
+                  ? result.currentScanEntities
+                  : baseRuntimeState.currentScanEntities,
+              currentScanActionState:
+                typeof result.currentScanActionState === 'string' || result.currentScanActionState === null
+                  ? (result.currentScanActionState as ExtractionActionState | null)
+                  : baseRuntimeState.currentScanActionState,
+              currentScanReason:
+                typeof result.currentScanReason === 'string' || result.currentScanReason === null
+                  ? result.currentScanReason
+                  : baseRuntimeState.currentScanReason,
+            };
             resolve({
-              runtimeState: sanitizeWorkerRuntimeState(result[WORKER_RUNTIME_STATE_KEY]),
+              runtimeState,
               compatTranscriptFetchLog: Array.isArray(result[TRANSCRIPT_FETCH_LOG_KEY])
                 ? result[TRANSCRIPT_FETCH_LOG_KEY].filter((entry) =>
                     entry &&
@@ -93,10 +88,7 @@ export const useExtensionStorage = () => {
       ]).then(([sessionState, localState]) => {
         const runtimeState = sessionState.runtimeState.transcriptFetchLog.length > 0
           ? sessionState.runtimeState
-          : {
-              ...sessionState.runtimeState,
-              transcriptFetchLog: sessionState.compatTranscriptFetchLog,
-            };
+          : { ...sessionState.runtimeState, transcriptFetchLog: sessionState.compatTranscriptFetchLog };
         const transcript = readTranscriptSnapshotForVideo(
           localState[LOCAL_TRANSCRIPT_KEY],
           runtimeState.currentVideo?.videoId ?? null
@@ -104,28 +96,11 @@ export const useExtensionStorage = () => {
         return { runtimeState, transcript };
       });
 
-    // Load user API key for BYOK
-    const getUserApiKey = () =>
-      new Promise<string | null>((resolve, reject) => {
-        chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
-            return;
-          }
-          const stored = result[PROVIDER_SETTINGS_KEY];
-          const key = stored && typeof stored === 'object' && typeof stored.apiKey === 'string'
-            ? stored.apiKey.trim()
-            : null;
-          resolve(key);
-        });
-      });
-
-    Promise.all([getStoredState(), getUserApiKey()])
-      .then(([{ runtimeState: stored, transcript: storedTranscript }, storedApiKey]) => {
+    getStoredState()
+      .then(({ runtimeState: stored, transcript: storedTranscript }) => {
         if (didDispose) return;
         setRuntimeState(stored);
         setTranscript(storedTranscript);
-        setUserApiKey(storedApiKey);
         setIsStorageReady(true);
       })
       .catch((error) => {
@@ -135,11 +110,11 @@ export const useExtensionStorage = () => {
         setIsStorageReady(true);
       });
 
-    // Pending updates accumulator for debouncing
+    // We store a queue of updaters to ensure rapid storage deltas are merged perfectly 
+    // against the latest React state, without dropping unmodified keys.
     const pendingUpdates = {
-      runtimeState: null as WorkerRuntimeState | null,
+      runtimeStateUpdaters: [] as Array<(prev: WorkerRuntimeState) => WorkerRuntimeState>,
       transcript: null as TranscriptChunk[] | null,
-      transcriptFetchLog: null as WorkerRuntimeState['transcriptFetchLog'] | null,
     };
 
     let debounceTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -147,9 +122,15 @@ export const useExtensionStorage = () => {
     const flushPendingUpdates = () => {
       if (didDispose) return;
       
-      if (pendingUpdates.runtimeState !== null) {
-        setRuntimeState(pendingUpdates.runtimeState);
-        pendingUpdates.runtimeState = null;
+      if (pendingUpdates.runtimeStateUpdaters.length > 0) {
+        setRuntimeState((prev) => {
+          let next = prev;
+          for (const updater of pendingUpdates.runtimeStateUpdaters) {
+            next = updater(next);
+          }
+          return next;
+        });
+        pendingUpdates.runtimeStateUpdaters = [];
       }
       
       if (pendingUpdates.transcript !== null) {
@@ -157,21 +138,10 @@ export const useExtensionStorage = () => {
         pendingUpdates.transcript = null;
       }
       
-      if (pendingUpdates.transcriptFetchLog !== null) {
-        setRuntimeState((prev: WorkerRuntimeState) => (
-          prev.transcriptFetchLog.length > 0
-            ? prev
-            : { ...prev, transcriptFetchLog: pendingUpdates.transcriptFetchLog! }
-        ));
-        pendingUpdates.transcriptFetchLog = null;
-      }
-      
       debounceTimeout = null;
     };
 
-    const queueUpdate = (type: 'runtimeState' | 'transcript' | 'transcriptFetchLog', value: unknown) => {
-      pendingUpdates[type] = value as never;
-      
+    const scheduleFlush = () => {
       if (debounceTimeout === null) {
         debounceTimeout = setTimeout(flushPendingUpdates, UPDATE_DEBOUNCE_MS);
       }
@@ -180,38 +150,58 @@ export const useExtensionStorage = () => {
     const listener = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
       if (didDispose) return;
 
-      if (areaName === 'session' && changes[WORKER_RUNTIME_STATE_KEY]) {
-        const next = sanitizeWorkerRuntimeState(changes[WORKER_RUNTIME_STATE_KEY].newValue);
-        queueUpdate('runtimeState', next);
-      }
+      if (areaName === 'session') {
+        const hasBaseStateChange = !!changes[WORKER_RUNTIME_STATE_KEY];
+        const hasLogChange = !!changes[TRANSCRIPT_FETCH_LOG_KEY];
+        const liveChanges: Partial<WorkerRuntimeState> = {};
 
-      if (areaName === 'session' && changes[TRANSCRIPT_FETCH_LOG_KEY]) {
-        const compatTranscriptFetchLog = Array.isArray(changes[TRANSCRIPT_FETCH_LOG_KEY].newValue)
-          ? changes[TRANSCRIPT_FETCH_LOG_KEY].newValue.filter((entry) =>
-              entry &&
-              typeof entry === 'object' &&
-              Number.isFinite(entry.at) &&
-              typeof entry.source === 'string' &&
-              typeof entry.step === 'string' &&
-              typeof entry.message === 'string'
-            )
-          : [];
-        queueUpdate('transcriptFetchLog', compatTranscriptFetchLog);
+        // Capture any top-level keys that actually changed in this storage event
+        if (changes.currentScanPreview) liveChanges.currentScanPreview = changes.currentScanPreview.newValue;
+        if (changes.currentScanEntities) liveChanges.currentScanEntities = changes.currentScanEntities.newValue;
+        if (changes.currentScanActionState) liveChanges.currentScanActionState = changes.currentScanActionState.newValue;
+        if (changes.currentScanReason) liveChanges.currentScanReason = changes.currentScanReason.newValue;
+
+        if (hasLogChange) {
+          liveChanges.transcriptFetchLog = Array.isArray(changes[TRANSCRIPT_FETCH_LOG_KEY].newValue)
+            ? changes[TRANSCRIPT_FETCH_LOG_KEY].newValue.filter(entry => 
+                entry && typeof entry === 'object' && Number.isFinite(entry.at) && typeof entry.source === 'string'
+              )
+            : [];
+        }
+
+        if (hasBaseStateChange || Object.keys(liveChanges).length > 0) {
+          pendingUpdates.runtimeStateUpdaters.push((prev: WorkerRuntimeState) => {
+            let next = prev;
+            
+            // If the base state changed, sanitize it, but CARRY OVER the live UI fields 
+            // from the previous React state so we don't accidentally overwrite them with stale data.
+            if (hasBaseStateChange) {
+              next = sanitizeWorkerRuntimeState(changes[WORKER_RUNTIME_STATE_KEY].newValue);
+              next.currentScanPreview = prev.currentScanPreview;
+              next.currentScanEntities = prev.currentScanEntities;
+              next.currentScanActionState = prev.currentScanActionState;
+              next.currentScanReason = prev.currentScanReason;
+              next.transcriptFetchLog = prev.transcriptFetchLog;
+            }
+            
+            // Apply any fields that actually changed in this specific storage event
+            return { ...next, ...liveChanges };
+          });
+          scheduleFlush();
+        }
       }
 
       if (areaName === 'local' && changes[LOCAL_TRANSCRIPT_KEY]) {
         const snapshotValue = changes[LOCAL_TRANSCRIPT_KEY].newValue;
         const snapshotVideoId =
-          snapshotValue &&
-          typeof snapshotValue === 'object' &&
-          typeof (snapshotValue as { videoId?: unknown }).videoId === 'string'
+          snapshotValue && typeof snapshotValue === 'object' && typeof (snapshotValue as { videoId?: unknown }).videoId === 'string'
             ? (snapshotValue as { videoId: string }).videoId
             : null;
-        const nextTranscript = readTranscriptSnapshotForVideo(
+        pendingUpdates.transcript = readTranscriptSnapshotForVideo(
           snapshotValue,
           snapshotVideoId ?? currentVideoIdRef.current,
         );
-        queueUpdate('transcript', nextTranscript);
+        scheduleFlush();
       }
     };
 
@@ -220,8 +210,6 @@ export const useExtensionStorage = () => {
     return () => {
       didDispose = true;
       chrome.storage.onChanged.removeListener(listener);
-      
-      // Flush any pending updates before unmounting
       if (debounceTimeout !== null) {
         clearTimeout(debounceTimeout);
         flushPendingUpdates();

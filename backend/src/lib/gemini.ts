@@ -1,4 +1,5 @@
 import { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel, type GeminiModelOption } from '../types-shared';
+import { recordParseError, type ParseErrorRoute, type ParseErrorType } from './parse-evidence';
 
 const DEFAULT_THINKING_BUDGET = 128;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -115,51 +116,6 @@ export function validateAgainstSchema(data: unknown, schema: GeminiJsonSchema): 
   return null; // Unknown/unsupported schema construct — pass through.
 }
 
-const extractBalancedJsonValue = (value: string) => {
-  const startIndex = value.search(/[{[]/);
-  if (startIndex === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  let inString = false;
-  let isEscaped = false;
-
-  for (let index = startIndex; index < value.length; index += 1) {
-    const character = value[index];
-
-    if (inString) {
-      if (isEscaped) {
-        isEscaped = false;
-      } else if (character === '\\') {
-        isEscaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (character === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (character === '{' || character === '[') {
-      depth += 1;
-      continue;
-    }
-
-    if (character === '}' || character === ']') {
-      depth -= 1;
-      if (depth === 0) {
-        return value.slice(startIndex, index + 1);
-      }
-    }
-  }
-
-  return null;
-};
-
 const extractBalancedJsonValueFromIndex = (value: string, startIndex: number) => {
   const startChar = value[startIndex];
   if (startChar !== '{' && startChar !== '[') {
@@ -251,20 +207,61 @@ const cleanJsonSyntax = (value: string) => {
  * @internal
  */
 export const parseJsonResponse = <T>(rawText: string): T => {
-  // Gemini Flash can sometimes wrap the JSON in code fences with conversational
-  // text before or after. Prioritize extracting from a ```json block if present.
-  // If multiple fenced blocks exist, this uses the content of the first one.
-  const fencedContentMatch = rawText.match(/```(?:json)?\s*([\s\S]+?)\s*```/i);
-  const candidate = fencedContentMatch ? (fencedContentMatch[1] || '').trim() : rawText.trim();
+  // Extract JSON from fenced code blocks. Prioritize explicit ```json fences first.
+  // Only fall back to generic ``` fences if the trimmed content starts with { or [.
+  // This prevents matching arbitrary fenced prose/code as JSON candidates.
+  const explicitJsonFence = rawText.match(/```json\s*([\s\S]+?)\s*```/i);
+  const genericFenceMatch = rawText.match(/```\s*([\s\S]+?)\s*```/);
+  
+  let candidate: string;
+  let fenceType: 'explicit_json' | 'generic' | 'none' = 'none';
+  
+  if (explicitJsonFence) {
+    candidate = (explicitJsonFence[1] || '').trim();
+    fenceType = 'explicit_json';
+  } else if (genericFenceMatch) {
+    const content = (genericFenceMatch[1] || '').trim();
+    // Only use generic fence if content looks like JSON (starts with { or [)
+    if (content.startsWith('{') || content.startsWith('[')) {
+      candidate = content;
+      fenceType = 'generic';
+    } else {
+      candidate = rawText.trim();
+    }
+  } else {
+    candidate = rawText.trim();
+  }
+  
   const parseErrorMessage = 'No JSON object or array found in Gemini response.';
+
+  // Track recovery path for observability
+  let usedRecovery = false;
+  let recoveryMethod: 'none' | 'fenced_explicit' | 'fenced_generic' | 'balanced' = 'none';
+
+  if (fenceType === 'explicit_json') {
+    recoveryMethod = 'fenced_explicit';
+  } else if (fenceType === 'generic') {
+    recoveryMethod = 'fenced_generic';
+  }
 
   try {
     // First attempt: parse the candidate text directly (after cleaning syntax).
     // This works if the candidate is a clean JSON object.
-    return JSON.parse(cleanJsonSyntax(candidate)) as T;
+    const result = JSON.parse(cleanJsonSyntax(candidate)) as T;
+    // Log successful parse with recovery info for observability
+    if (recoveryMethod !== 'none') {
+      console.log('[gemini.ts] JSON parse succeeded with recovery:', {
+        recoveryMethod,
+        rawTextLength: rawText.length,
+        candidateLength: candidate.length,
+      });
+    }
+    return result;
   } catch {
     // Second attempt: If the first parse fails, the candidate might still contain
     // a valid JSON object surrounded by other text (e.g., if no code fences were used).
+    
+    const candidates: T[] = [];
     for (let index = 0; index < candidate.length; index += 1) {
       const character = candidate[index];
       if (character !== '{' && character !== '[') {
@@ -277,11 +274,54 @@ export const parseJsonResponse = <T>(rawText: string): T => {
       }
 
       try {
-        return JSON.parse(cleanJsonSyntax(extracted)) as T;
+        const result = JSON.parse(cleanJsonSyntax(extracted)) as T;
+        // FIX: If we find a non-empty array at the current position, check if it
+        // contains objects. Top-level arrays (like [{id:1}, {id:2}]) should be
+        // returned as-is rather than extracting the first object inside.
+        if (Array.isArray(result) && result.length > 0 && result.some(item => typeof item === 'object' && item !== null)) {
+          console.log('[gemini.ts] JSON parse succeeded with balanced array extraction:', {
+            recoveryMethod: 'balanced_array',
+            rawTextLength: rawText.length,
+            extractedLength: extracted.length,
+          });
+          return result;
+        }
+        // Prioritize returning an object if we find one first, or if we find 
+        // a plausible object at all. If it's an array, it might just be the 
+        // entities list prefix.
+        if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+          console.log('[gemini.ts] JSON parse succeeded with balanced object extraction:', {
+            recoveryMethod: 'balanced_object',
+            rawTextLength: rawText.length,
+            extractedLength: extracted.length,
+          });
+          return result;
+        }
+        // Save arrays as candidates in case we don't find a proper object later
+        // (but only if we didn't AlREADY find an object).
+        candidates.push(result);
       } catch {
         // Keep scanning: benign brace-like prose can precede the real JSON payload.
       }
     }
+
+    // If we reached here, we didn't find a perfect object. If we found any valid
+    // JSON arrays (like a solo entity list), use the first one as a fallback.
+    if (candidates.length > 0) {
+      console.log('[gemini.ts] JSON parse falling back to first balanced array/primitive:', {
+        recoveryMethod: 'balanced_fallback',
+        candidateCount: candidates.length,
+      });
+      return candidates[0];
+    }
+
+    // Log honest failure before throwing
+    console.warn('[gemini.ts] JSON parse failed - no recoverable JSON found:', {
+      rawTextLength: rawText.length,
+      rawTextPreview: rawText.slice(0, 300).replace(/\s+/g, ' ').trim(),
+      triedFenced: !!explicitJsonFence,
+      triedBalanced: true,
+    });
 
     throw new Error(parseErrorMessage);
   }
@@ -466,11 +506,25 @@ export const isGeminiError = (error: unknown): error is GeminiError =>
 const parseGeminiJsonResponse = <T>(
   response: GeminiResponse,
   schema: GeminiJsonSchema | undefined,
-  useGrounding: boolean
+  useGrounding: boolean,
+  route?: ParseErrorRoute,
+  recoveryAttempted?: boolean,
+  recoverySucceeded?: boolean
 ) => {
   const rawText = trimModelText(response.text);
 
   if (!rawText) {
+    if (route) {
+      recordParseError({
+        route,
+        model: response.model,
+        errorType: 'empty_response',
+        rawLength: 0,
+        recoveryAttempted: recoveryAttempted ?? false,
+        recoverySucceeded: recoverySucceeded ?? false,
+        schemaUsed: !!schema,
+      });
+    }
     throw new GeminiError(
       'PARSE_ERROR',
       `Gemini returned an empty ${useGrounding ? 'grounded ' : ''}JSON response (${response.model}).`,
@@ -488,11 +542,65 @@ const parseGeminiJsonResponse = <T>(
       useGrounding,
       rawText,
     });
+    if (route) {
+      recordParseError({
+        route,
+        model: response.model,
+        errorType: 'json_syntax',
+        rawLength: rawText.length,
+        recoveryAttempted: recoveryAttempted ?? false,
+        recoverySucceeded: recoverySucceeded ?? false,
+        schemaUsed: !!schema,
+      });
+    }
     throw new GeminiError(
       'PARSE_ERROR',
       `Failed to parse Gemini response as JSON (${response.model}). Raw: ${truncateForLog(rawText, 200)}`,
       502
     );
+  }
+
+  // FIX: Some models (e.g. gemini-3.1-flash-lite-preview) may return:
+  // 1. An array wrapping a single object: [{ ... }] - unwrap it
+  // 2. Just the entities array due to truncation - treat as parse error to trigger retry
+  if (schema?.type === 'object' && Array.isArray(data)) {
+    // Case 1: Single-element array containing an object - unwrap it
+    if (
+      data.length === 1 &&
+      typeof data[0] === 'object' &&
+      data[0] !== null &&
+      !Array.isArray(data[0])
+    ) {
+      console.log('[gemini.ts] Unwrapping single-element array to object:', {
+        model: response.model,
+      });
+      data = data[0] as T;
+    } else {
+      // Case 2: Array of primitives (e.g., entities array from truncated response)
+      // This indicates the model hit token limits or produced malformed output.
+      // Throw PARSE_ERROR to trigger extension retry logic.
+      console.log('[gemini.ts] Truncated response detected (got array, expected object):', {
+        model: response.model,
+        arrayLength: data.length,
+        firstElementType: typeof data[0],
+      });
+      if (route) {
+        recordParseError({
+          route,
+          model: response.model,
+          errorType: 'array_unwrap_failed',
+          rawLength: rawText.length,
+          recoveryAttempted: recoveryAttempted ?? false,
+          recoverySucceeded: recoverySucceeded ?? false,
+          schemaUsed: !!schema,
+        });
+      }
+      throw new GeminiError(
+        'PARSE_ERROR',
+        `Model returned array instead of object (truncated response) (${response.model})`,
+        502
+      );
+    }
   }
 
   if (schema) {
@@ -504,6 +612,17 @@ const parseGeminiJsonResponse = <T>(
         rawText,
         validationError,
       });
+      if (route) {
+        recordParseError({
+          route,
+          model: response.model,
+          errorType: 'schema_mismatch',
+          rawLength: rawText.length,
+          recoveryAttempted: recoveryAttempted ?? false,
+          recoverySucceeded: recoverySucceeded ?? false,
+          schemaUsed: !!schema,
+        });
+      }
       throw new GeminiError(
         'PARSE_ERROR',
         `Schema validation failed for Gemini JSON response (${response.model}): ${validationError}`,
@@ -561,26 +680,26 @@ function getTierForRequest(_identity?: string): 'free' | 'pro' {
  */
 function getEffectiveModel(
   requestedModel: string | undefined,
-  tier: 'free' | 'pro',
+  _tier: 'free' | 'pro',
   customApiKey: string | undefined
 ): GeminiModelOption {
   // Normalize the requested model (handles null/undefined and stale values)
   const normalizedRequested = normalizeModel(requestedModel);
-  
-  // Freemium/trial/managed tier: HARD LOCK to freemium model only
-  // This cannot be overridden by client request
-  if (tier === 'free' && !customApiKey) {
+
+  // Managed tier (no custom API key): HARD LOCK to freemium model only.
+  // This cannot be overridden by client request, regardless of claimed tier.
+  if (!customApiKey) {
     if (requestedModel && normalizedRequested !== FREEMIUM_MODEL) {
       console.warn(
-        `[model-policy] Freemium tier requested '${requestedModel}' but hard-locked to '${FREEMIUM_MODEL}'`
+        `[model-policy] Managed request requested '${requestedModel}' but hard-locked to '${FREEMIUM_MODEL}'`
       );
     }
     return FREEMIUM_MODEL;
   }
-  
+
   // BYOK mode: Allow any valid model from ALLOWED_MODELS
   // If no model specified, fall back to BYOK default
-  if (customApiKey && !requestedModel) {
+  if (!requestedModel) {
     console.log(`[model-policy] BYOK mode with no model specified, using default: ${BYOK_DEFAULT_MODEL}`);
     return BYOK_DEFAULT_MODEL;
   }
@@ -725,18 +844,37 @@ async function callGemini(
 
       const data: GeminiAPIResponse = await response.json();
 
+      // Map structured API errors to typed GeminiError
       if (data.error) {
-        throw new Error(`Gemini API error: ${data.error.message}`);
+        const status = data.error.code || 502;
+        const message = data.error.message || 'Unknown Gemini API error';
+        const lower = message.toLowerCase();
+
+        if (status === 401 || status === 403) {
+          throw new GeminiError('AUTH_ERROR', message, status);
+        }
+        if (status === 429) {
+          throw new GeminiError(
+            lower.includes('quota') || lower.includes('billing') || lower.includes('exhausted')
+              ? 'QUOTA_EXHAUSTED'
+              : 'RATE_LIMITED',
+            message,
+            429
+          );
+        }
+        if (status === 503) {
+          throw new GeminiError('OVERLOADED', message, 503);
+        }
+        throw new GeminiError('API_ERROR', message, status >= 400 ? status : 502);
       }
 
-      // Extract text — filter out thinking/reasoning parts (thought=true) so they
-      // don't corrupt JSON responses from thinking-capable models like Gemini 3.x.
+      // Extract text — unconditionally filter out thinking/reasoning parts (thought=true).
+      // We only want the final, actual response from the model.
       const rawTextParts = data.candidates?.[0]?.content?.parts || [];
-      const isMixedOutput = rawTextParts.some(p => p.thought) && rawTextParts.some(p => !p.thought);
 
       const text = trimModelText(
         rawTextParts
-          .filter((part) => isMixedOutput ? !part.thought : true)
+          .filter((part) => !part.thought)
           .map((part) => part.text || '')
           .join('')
       );
@@ -807,15 +945,24 @@ export async function askGeminiJSON<T = unknown>(
   maxTokens: number = 1000,
   schema?: GeminiJsonSchema,
   model?: string,
-  customApiKey?: string
+  customApiKey?: string,
+  route?: ParseErrorRoute
 ): Promise<{ data: T; inputTokens: number; outputTokens: number }> {
+  // Compute effective model first to determine correct behavior
+  // Tier is determined by presence of customApiKey (BYOK = pro, managed = free)
+  const effectiveModel = getEffectiveModel(model, customApiKey ? 'pro' : 'free', customApiKey);
+  
+  // FIX: gemini-3.1-flash-lite-preview produces severely truncated JSON (43-53 chars)
+  // when both responseMimeType:'application/json' AND responseJsonSchema are provided.
+  // Skip the API-level schema constraint for lite models and rely on prompt-based JSON
+  const isLiteModel = effectiveModel.includes('lite');
   const response = await askGemini(prompt, maxTokens, {
-    responseMimeType: 'application/json',
-    ...(schema ? { responseJsonSchema: schema } : {}),
-    ...(model ? { model } : {}),
+    ...(!isLiteModel ? { responseMimeType: 'application/json' } : {}),
+    ...(!isLiteModel && schema ? { responseJsonSchema: schema } : {}),
+    model: effectiveModel,
     ...(customApiKey ? { customApiKey } : {}),
   });
-  const data = parseGeminiJsonResponse<T>(response, schema, false);
+  const data = parseGeminiJsonResponse<T>(response, schema, false, route);
 
   return {
     data,
@@ -833,7 +980,8 @@ export async function askGeminiJSONWithSearch<T = unknown>(
   maxTokens: number = 1000,
   schema?: GeminiJsonSchema,
   model?: string,
-  customApiKey?: string
+  customApiKey?: string,
+  route?: ParseErrorRoute
 ): Promise<{
   data: T;
   inputTokens: number;
@@ -845,7 +993,7 @@ export async function askGeminiJSONWithSearch<T = unknown>(
   // We rely on prompt-based JSON instructions + parseJsonResponse() instead.
   // The schema is enforced via post-hoc validation (validateAgainstSchema) below.
   const response = await askGeminiWithSearch(prompt, maxTokens, { model, customApiKey });
-  const data = parseGeminiJsonResponse<T>(response, schema, true);
+  const data = parseGeminiJsonResponse<T>(response, schema, true, route);
 
   return {
     data,

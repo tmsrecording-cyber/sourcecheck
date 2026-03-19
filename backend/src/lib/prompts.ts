@@ -261,15 +261,16 @@ Determine:
    BAD: "While AI is widely projected to increase efficiency, there is no credible data supporting this."
    BAD: "This claim requires additional context to fully evaluate."
 
-Respond with ONLY a JSON object. No markdown, no backticks.
+Respond with ONLY a JSON object. No markdown, no backticks, no prose introduction, no explanation. Your entire response must be valid JSON that parses with JSON.parse().
 
 {
   "status": "partial",
   "sourceTitle": "Šrámek et al., 2000 — European Journal of Applied Physiology",
   "sourceType": "academic_paper",
   "nuance": "The 250% figure is from 1-hour ice baths, not cold showers."
-}`;
 }
+}`;
+};
 
 const formatTimestamp = (seconds: number) => {
   const safeSeconds = Math.max(0, Math.floor(seconds));

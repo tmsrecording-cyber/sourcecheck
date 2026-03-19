@@ -3,6 +3,7 @@ let timeUpdateListener: (() => void) | null = null;
 let seekedListener: (() => void) | null = null;
 let currentVideoId: string | null = null;
 let videoElementObserver: MutationObserver | null = null;
+let visibilityListener: (() => void) | null = null;
 
 export const setPlaybackVideoId = (videoId: string | null) => {
   currentVideoId = videoId;
@@ -93,6 +94,25 @@ const sendPlaybackUpdate = (video: HTMLVideoElement) => {
   });
 };
 
+const startVisibilityListener = () => {
+  if (visibilityListener) return;
+  visibilityListener = () => {
+    if (!document.hidden && trackedVideo) {
+      // Force immediate playback update when tab becomes visible
+      // to resume scanning promptly after background throttling
+      sendPlaybackUpdate(trackedVideo);
+    }
+  };
+  document.addEventListener('visibilitychange', visibilityListener);
+};
+
+const stopVisibilityListener = () => {
+  if (visibilityListener) {
+    document.removeEventListener('visibilitychange', visibilityListener);
+    visibilityListener = null;
+  }
+};
+
 export const stopPlaybackTracking = () => {
   if (trackedVideo && timeUpdateListener) {
     trackedVideo.removeEventListener('timeupdate', timeUpdateListener);
@@ -101,6 +121,7 @@ export const stopPlaybackTracking = () => {
     trackedVideo.removeEventListener('seeked', seekedListener);
   }
   stopVideoElementObserver();
+  stopVisibilityListener();
   trackedVideo = null;
   timeUpdateListener = null;
   seekedListener = null;
@@ -173,6 +194,7 @@ export const initPlaybackTracking = () => {
   video.addEventListener('seeked', seekedListener);
   sendPlaybackUpdateWithRetry(video, currentVideoId);
   startVideoElementObserver();
+  startVisibilityListener();
   console.log('[SourceCheck] Playback tracking initialized.');
   return true;
 };

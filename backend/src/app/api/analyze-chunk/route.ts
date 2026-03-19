@@ -47,7 +47,7 @@ const CLAIM_EXTRACTION_SCHEMA = {
     has_claim: { type: 'boolean' },
     action_state: {
       type: 'string',
-      enum: ['VERIFYING', 'REJECTED', 'BUFFERING'],
+      enum: ['VERIFYING', 'REJECTED', 'BUFFERING', 'PARSE_ERROR'],
     },
     reason: { type: 'string' },
     candidates: {
@@ -114,6 +114,12 @@ type NormalizedClaimResult = {
   actionState: ExtractionActionState;
   reason: string;
   claims: ExtractedClaim[];
+  metrics: {
+    rawCandidates: number;
+    anchorFiltered: number;
+    verifiabilityFiltered: number;
+    finalCandidates: number;
+  };
 };
 
 // ============================================================================
@@ -254,33 +260,56 @@ async function normalizeClaimResult(
     ? rawExtraction.candidates
     : null;
 
+  // METRICS: Track candidate filtering
+  let candidatesFilteredByAnchor = 0;
+  let candidatesFilteredByVerifiability = 0;
+  let finalCandidateCount = 0;
+  
   if (rawCandidates && rawCandidates.length > 0) {
     // Filter candidates with valid quotes found in transcript
     const validCandidates = rawCandidates.filter((candidate) => {
       const quote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
-      return quote && findAnchorInWindow(chunks, quote);
+      const isValid = quote && findAnchorInWindow(chunks, quote);
+      if (!isValid) candidatesFilteredByAnchor++;
+      return isValid;
     });
 
     // Score and rank candidates by quality (verifiability × value × speaker_confidence)
-    const scoredCandidates = validCandidates
-      .map((candidate) => {
-        const verifiability = typeof candidate.verifiability === 'number' 
-          ? Math.max(0, Math.min(1, candidate.verifiability)) 
-          : 0.5;
-        const value = typeof candidate.value === 'number' 
-          ? Math.max(0, Math.min(1, candidate.value)) 
-          : 0.5;
-        const speakerConfidence = typeof candidate.speaker_confidence === 'number' 
-          ? Math.max(0, Math.min(1, candidate.speaker_confidence)) 
-          : 0.5;
-        // Composite score weighted toward verifiability and value
-        const compositeScore = (verifiability * 0.4) + (value * 0.35) + (speakerConfidence * 0.25);
-        return { candidate, compositeScore, verifiability };
-      })
+    const scoredBeforeVerifiability = validCandidates.map((candidate) => {
+      const verifiability = typeof candidate.verifiability === 'number' 
+        ? Math.max(0, Math.min(1, candidate.verifiability)) 
+        : 0.5;
+      const value = typeof candidate.value === 'number' 
+        ? Math.max(0, Math.min(1, candidate.value)) 
+        : 0.5;
+      const speakerConfidence = typeof candidate.speaker_confidence === 'number' 
+        ? Math.max(0, Math.min(1, candidate.speaker_confidence)) 
+        : 0.5;
+      // Composite score weighted toward verifiability and value
+      const compositeScore = (verifiability * 0.4) + (value * 0.35) + (speakerConfidence * 0.25);
+      return { candidate, compositeScore, verifiability };
+    });
+    
+    const scoredCandidates = scoredBeforeVerifiability
       // Filter out low-verifiability candidates (< 0.65) - not concrete enough to check
-      .filter((scored) => scored.verifiability >= 0.65)
+      .filter((scored) => {
+        const passes = scored.verifiability >= 0.65;
+        if (!passes) candidatesFilteredByVerifiability++;
+        return passes;
+      })
       // Sort by composite score descending
       .sort((a, b) => b.compositeScore - a.compositeScore);
+    
+    finalCandidateCount = scoredCandidates.length;
+
+    // Log detailed metrics
+    console.log('[analyze-chunk:metrics]', {
+      rawCandidates: rawCandidates.length,
+      anchorFiltered: candidatesFilteredByAnchor,
+      verifiabilityFiltered: candidatesFilteredByVerifiability,
+      finalCandidates: scoredCandidates.length,
+      selected: scoredCandidates.length > 0 ? scoredCandidates[0].candidate.claim_text?.slice(0, 60) : null,
+    });
 
     if (scoredCandidates.length === 0) {
       allCandidatesRejected = true;
@@ -365,6 +394,12 @@ async function normalizeClaimResult(
     actionState,
     reason,
     claims,
+    metrics: {
+      rawCandidates: rawCandidates?.length || 0,
+      anchorFiltered: candidatesFilteredByAnchor,
+      verifiabilityFiltered: candidatesFilteredByVerifiability,
+      finalCandidates: finalCandidateCount,
+    },
   };
 }
 
@@ -555,10 +590,11 @@ export async function POST(request: NextRequest) {
       outputTokens,
     } = await askGeminiJSON<RawExtraction>(
       prompt,
-      800,
+      1200,
       CLAIM_EXTRACTION_SCHEMA,
       effectiveModel,
-      customApiKey
+      customApiKey,
+      '/api/analyze-chunk'
     );
 
     // -------------------------------------------------------------------------
@@ -580,6 +616,7 @@ export async function POST(request: NextRequest) {
       actionState,
       reason,
       claims,
+      metrics: extractionMetrics,
     } = await normalizeClaimResult(rawExtraction, parsedBody.chunks, approximateTimestamp, customApiKey);
 
     if (malformedClaimPayload) {
@@ -607,6 +644,7 @@ export async function POST(request: NextRequest) {
       reason,
       claims,
       chunkRange: buildChunkRange(parsedBody.chunks),
+      _metrics: extractionMetrics,
     });
 
   } catch (error: unknown) {

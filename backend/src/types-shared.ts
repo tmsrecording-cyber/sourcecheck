@@ -262,6 +262,13 @@ export interface AnalyzeChunkResponse {
     startIndex: number;
     endIndex: number;
   };
+  /** Backend extraction metrics for pipeline analysis */
+  _metrics?: {
+    rawCandidates: number;
+    anchorFiltered: number;
+    verifiabilityFiltered: number;
+    finalCandidates: number;
+  };
 }
 
 /** What the extension sends to /api/verify-claim */
@@ -323,6 +330,7 @@ export interface PendingClaimPreview {
   timestampSeconds: number;
   confidence: number;
   state: PendingClaimState;
+  normalizedClaimText?: string;
 }
 
 export interface PanelSessionState {
@@ -408,6 +416,7 @@ export interface WorkerRuntimeState {
   pendingTranscriptBufferSummary: PendingTranscriptBufferSummary;
   transcriptMessageStats: TranscriptMessageStats;
   sourceCards: SourceCard[];
+  allSourceCards: SourceCard[];
   pendingClaims: PendingClaimPreview[];
   chunksScanned: number;
   lastScannedTimestamp: number | null;

@@ -131,6 +131,13 @@ export async function proxy(request: NextRequest) {
     );
   }
 
+  // Debug endpoints bypass auth in development mode (they have their own auth)
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev && request.nextUrl.pathname.startsWith('/api/debug/')) {
+    console.log(`[SourceCheck/proxy] ${request.method} ${request.nextUrl.pathname} - Dev mode debug bypass`);
+    return NextResponse.next({ headers: corsHeaders });
+  }
+
   // Auth MUST run before rate-limiting so that an attacker cannot burn quota
   // for the real extension by spoofing the X-Extension-Id header.
   // The verified identity returned here is derived solely from the validated
@@ -255,6 +262,7 @@ function getCorsHeaders(request: NextRequest): Record<string, string> {
       'X-Extension-Version',
       'X-Extension-Id',
       'X-Custom-Api-Key',
+      'X-Custom-Model',
     ].join(', '),
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
@@ -457,17 +465,23 @@ const base64urlChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123
 function bytesToBase64url(bytes: Uint8Array): string {
   let result = '';
   let i = 0;
-  while (i < bytes.length) {
+  const len = bytes.length;
+  while (i < len) {
+    const iStart = i; // Remember start position for this group
     const b1 = bytes[i++];
-    const b2 = i < bytes.length ? bytes[i++] : 0;
-    const b3 = i < bytes.length ? bytes[i++] : 0;
+    const hasB2 = i < len;
+    const b2 = hasB2 ? bytes[i++] : 0;
+    const hasB3 = i < len;
+    const b3 = hasB3 ? bytes[i++] : 0;
     
     const bitmap = (b1 << 16) | (b2 << 8) | b3;
     
     result += base64urlChars[(bitmap >> 18) & 63];
     result += base64urlChars[(bitmap >> 12) & 63];
-    result += i - 2 < bytes.length ? base64urlChars[(bitmap >> 6) & 63] : '';
-    result += i - 1 < bytes.length ? base64urlChars[bitmap & 63] : '';
+    // Only emit 3rd char if we had a real b2 (not padding)
+    result += hasB2 ? base64urlChars[(bitmap >> 6) & 63] : '';
+    // Only emit 4th char if we had a real b3 (not padding)
+    result += hasB3 ? base64urlChars[bitmap & 63] : '';
   }
   return result;
 }
@@ -605,17 +619,17 @@ function bytesToHex(bytes: Uint8Array) {
 }
 
 function timingSafeEqual(left: unknown, right: unknown) {
-  if (typeof left !== 'string' || typeof right !== 'string') {
-    return false;
-  }
+  // Treat non-strings as empty to avoid early-return timing leaks.
+  const leftStr = typeof left === 'string' ? left : '';
+  const rightStr = typeof right === 'string' ? right : '';
 
   // Always iterate over the longer length so runtime does not reveal which
   // string is shorter, preventing length-based timing oracle attacks.
-  const maxLen = Math.max(left.length, right.length);
-  let mismatch = left.length ^ right.length; // non-zero if lengths differ
+  const maxLen = Math.max(leftStr.length, rightStr.length);
+  let mismatch = leftStr.length ^ rightStr.length; // non-zero if lengths differ
   for (let index = 0; index < maxLen; index += 1) {
-    const l = index < left.length ? left.charCodeAt(index) : 0;
-    const r = index < right.length ? right.charCodeAt(index) : 0;
+    const l = index < leftStr.length ? leftStr.charCodeAt(index) : 0;
+    const r = index < rightStr.length ? rightStr.charCodeAt(index) : 0;
     mismatch |= l ^ r;
   }
   return mismatch === 0;

@@ -1,6 +1,7 @@
 import { initPlaybackTracking, setPlaybackVideoId, stopPlaybackTracking, stopVideoElementObserver } from './playback';
 import { extractTranscriptData, resetTranscriptExtractionState } from './transcript';
 import type { TranscriptDebugState, TranscriptFetchDebugEntry } from '../../shared/types';
+import './remote-logger'; // Auto-starts remote logging if SC_LOG_ENDPOINT is set
 
 let currentVideoId: string | null = null;
 const pageSessionId = (() => {
@@ -403,7 +404,13 @@ const withTimeout = async <T>(
 
   try {
     return await Promise.race<T | null>([
-      promise,
+      promise.catch((err) => {
+        // Swallow AbortError as null (cancelled by new video/navigation)
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return null as T;
+        }
+        throw err;
+      }),
       new Promise<null>((resolve) => {
         timeoutId = window.setTimeout(() => {
           onTimeout?.();
@@ -445,7 +452,7 @@ const extractVideoMetadata = () => {
     document.querySelector('meta[name="title"]')?.getAttribute('content'),
     structuredData?.name,
     document.title.replace(/\s*-\s*YouTube$/, ''),
-  ];
+  ].filter((c): c is string => typeof c === 'string');
 
   const channelCandidates = [
     document.querySelector('#owner #channel-name a')?.textContent,
@@ -454,7 +461,7 @@ const extractVideoMetadata = () => {
     document.querySelector('link[itemprop="name"]')?.getAttribute('content'),
     document.querySelector('meta[itemprop="author"]')?.getAttribute('content'),
     structuredData?.author?.name,
-  ];
+  ].filter((c): c is string => typeof c === 'string');
 
   const title = titleCandidates.map(cleanText).find(Boolean) || 'Unknown Title';
   const channel = channelCandidates.map(cleanText).find(Boolean) || 'Unknown Channel';

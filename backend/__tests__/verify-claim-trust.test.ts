@@ -83,10 +83,10 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
+    expect(json.sourceCard.sourceTitle).toBe('Source not available');
     expect(json.sourceCard.sourceType).toBe('other');
     expect(json.sourceCard.sourceUrl).toBe('');
-    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
+    expect(json.sourceCard.nuance).toBe('This type of claim requires access to papers, filings, or official records.');
   });
 
   it('downgrades disputed verdict to unverifiable when no grounding sources', async () => {
@@ -106,7 +106,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
+    expect(json.sourceCard.sourceTitle).toBe('Source not available');
     expect(json.sourceCard.sourceType).toBe('other');
   });
 
@@ -126,7 +126,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
+    expect(json.sourceCard.nuance).toBe('This type of claim requires access to papers, filings, or official records.');
   });
 
   it('scrubs negative certainty language from ungrounded nuance', async () => {
@@ -145,7 +145,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
+    expect(json.sourceCard.nuance).toBe('This type of claim requires access to papers, filings, or official records.');
   });
 
   it('preserves neutral nuance even when ungrounded', async () => {
@@ -164,8 +164,8 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
-    expect(json.sourceCard.nuance).toBe('This likely needs a paper, dataset, or official record.');
+    expect(json.sourceCard.sourceTitle).toBe('Source not available');
+    expect(json.sourceCard.nuance).toBe('This type of claim requires access to papers, filings, or official records.');
   });
 
   it('uses missing-context language when the unresolved outcome lacks specifics', async () => {
@@ -185,8 +185,8 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('More context needed');
-    expect(json.sourceCard.nuance).toBe('The claim needs specifics like timeframe, population, or definition.');
+    expect(json.sourceCard.sourceTitle).toBe('Missing details');
+    expect(json.sourceCard.nuance).toBe('The claim is too vague—needs dates, names, or specifics to verify.');
   });
 
   it('keeps grounded response intact when sources are present', async () => {
@@ -209,7 +209,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const json = await res.json();
 
     expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('Needs primary source');
+    expect(json.sourceCard.sourceTitle).toBe('Source not available');
     expect(json.sourceCard.sourceType).toBe('other');
     expect(json.sourceCard.sourceUrl).toBe('');
   });
@@ -286,5 +286,41 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     
     // Should succeed despite low rate limit budget because BYOK skips rate limiting
     expect(res.status).toBe(200);
+  });
+
+  it('stores wording version with cached claims for future invalidation', async () => {
+    // Gemini returns unverifiable with no grounding
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'unverifiable',
+        sourceTitle: 'Some old title',
+        sourceType: 'other',
+        nuance: '[From memory] Old cached wording that should be versioned.',
+      },
+      sources: [], // No grounding sources
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+
+    const headers = await createAuthHeaders(TEST_EXTENSION_ID);
+    const res = await POST({
+      json: () => Promise.resolve({
+        claim: { claimText: 'Test versioning claim', claimType: 'study', timestampSeconds: 42 },
+        videoId: 'test-video-123',
+        videoTitle: 'Test Video',
+        channelName: 'Test Channel',
+      }),
+      headers: new Headers(headers),
+      nextUrl: { pathname: '/api/verify-claim', hostname: 'localhost' },
+    } as unknown as NextRequest);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    // Status should be unverifiable due to no grounding
+    expect(json.sourceCard.status).toBe('unverifiable');
+    
+    // The response should have scrubbed the old wording (guardUnverifiableNuance)
+    expect(json.sourceCard.nuance).not.toContain('[From memory]');
   });
 });

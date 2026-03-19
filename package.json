@@ -9,7 +9,8 @@
     "check:dist-release": "node scripts/check-release-dist.mjs",
     "check:release-secrets": "node scripts/check-release-secrets.mjs",
     "test:e2e:smoke": "playwright test tests/e2e/extension-smoke.spec.ts",
-    "release:gate": "npm run build && npm --prefix backend run build && npm --prefix backend test && npm run check:dist-release && npm run check:release-secrets && npm run test:e2e:smoke"
+    "test:unit": "vitest run tests/unit",
+    "release:gate": "npm run build && npm --prefix backend run build && npm --prefix backend test && npm run check:dist-release && npm run check:release-secrets && npm run test:unit && npm run test:e2e:smoke"
   },
   "dependencies": {
     "framer-motion": "^12.36.0",
@@ -29,7 +30,8 @@
     "sharp": "^0.34.5",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.5.3",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^4.1.0"
   },
   "overrides": {
     "@crxjs/vite-plugin": {

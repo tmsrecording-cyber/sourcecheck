@@ -1,13 +1,25 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Key, Eye, EyeOff, CheckCircle2, AlertCircle, ExternalLink, ArrowLeft } from 'lucide-react';
 import { PROVIDER_SETTINGS_KEY, GEMINI_MODELS, DEFAULT_GEMINI_MODEL, normalizeModel, type GeminiModelOption } from '../../background/providers/types';
 
 interface SettingsPanelProps {
   onSaved: () => void;
   lastError?: { code?: string; message?: string } | null;
+  effectiveModel?: string;
 }
 
 type KeyStatus = 'missing' | 'present' | 'invalid' | 'quota_exhausted';
+
+/**
+ * Error codes that can trigger troubleshooting guidance
+ */
+type ErrorCode = 'AUTH_ERROR' | 'INVALID_API_KEY' | 'QUOTA_EXHAUSTED' | 'RATE_LIMITED' | 'NETWORK_ERROR' | 'UPSTREAM_ERROR' | 'UNKNOWN_ERROR';
+
+interface TroubleshootingGuide {
+  title: string;
+  steps: string[];
+  link?: { text: string; url: string };
+}
 
 /** 
  * Display labels for BYOK model selector.
@@ -42,14 +54,93 @@ const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; icon: Rea
   },
 };
 
-export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
+export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPanelProps) => {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState<GeminiModelOption>(DEFAULT_GEMINI_MODEL);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [keyStatus, setKeyStatus] = useState<KeyStatus>('missing');
+  const [hasStoredKey, setHasStoredKey] = useState(false);
   const [storedKeyLast4, setStoredKeyLast4] = useState<string | null>(null);
+
+  // Derive keyStatus from hasStoredKey + lastError (always fresh, never stale)
+  const keyStatus: KeyStatus = useMemo(() => {
+    if (!hasStoredKey) return 'missing';
+    if (lastError?.code === 'AUTH_ERROR' || lastError?.code === 'INVALID_API_KEY' || lastError?.message?.toLowerCase().includes('invalid')) {
+      return 'invalid';
+    }
+    if (lastError?.code === 'QUOTA_EXHAUSTED' || lastError?.message?.toLowerCase().includes('quota')) {
+      return 'quota_exhausted';
+    }
+    return 'present';
+  }, [hasStoredKey, lastError]);
+
+  // Determine effective error code for troubleshooting
+  const effectiveErrorCode: ErrorCode = useMemo(() => {
+    const code = lastError?.code;
+    if (code === 'AUTH_ERROR' || code === 'INVALID_API_KEY') return 'AUTH_ERROR';
+    if (code === 'QUOTA_EXHAUSTED') return 'QUOTA_EXHAUSTED';
+    if (code === 'RATE_LIMITED') return 'RATE_LIMITED';
+    if (code === 'NETWORK_ERROR') return 'NETWORK_ERROR';
+    if (code === 'UPSTREAM_ERROR' || code === 'PROVIDER_OVERLOADED') return 'UPSTREAM_ERROR';
+    return 'UNKNOWN_ERROR';
+  }, [lastError]);
+
+  // Troubleshooting content by error code
+  const troubleshootingContent: Record<ErrorCode, TroubleshootingGuide | null> = {
+    AUTH_ERROR: {
+      title: 'API key issue',
+      steps: [
+        'Verify your key starts with "AIza" (39 characters)',
+        'If you just created it, wait 2–3 minutes for activation',
+        'Try generating a new key in AI Studio',
+      ],
+      link: { text: 'Get a new API key', url: 'https://aistudio.google.com/app/apikey' },
+    },
+    INVALID_API_KEY: {
+      title: 'API key invalid',
+      steps: [
+        'Verify your key starts with "AIza" (39 characters)',
+        'If you just created it, wait 2–3 minutes for activation',
+        'Try generating a new key in AI Studio',
+      ],
+      link: { text: 'Get a new API key', url: 'https://aistudio.google.com/app/apikey' },
+    },
+    QUOTA_EXHAUSTED: {
+      title: 'Quota exhausted',
+      steps: [
+        'Free tier has rate limits per minute and per day',
+        'Wait a few minutes and try again',
+        'Or create a new project in AI Studio for fresh quota',
+      ],
+      link: { text: 'Create new project', url: 'https://aistudio.google.com/app/apikey' },
+    },
+    RATE_LIMITED: {
+      title: 'Rate limited',
+      steps: [
+        'Too many requests in a short time',
+        'Wait 30–60 seconds and try again',
+        'This is temporary and clears automatically',
+      ],
+    },
+    NETWORK_ERROR: {
+      title: 'Network issue',
+      steps: [
+        'Check your internet connection',
+        'Verify YouTube is loading properly',
+        'Try refreshing the page',
+      ],
+    },
+    UPSTREAM_ERROR: {
+      title: 'Service temporarily unavailable',
+      steps: [
+        'Google AI service is experiencing issues',
+        'This usually resolves in a few minutes',
+        'Try again shortly',
+      ],
+    },
+    UNKNOWN_ERROR: null,
+  };
 
   useEffect(() => {
     // CANONICAL: Read API key from local, model from sync (single source of truth)
@@ -70,37 +161,17 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
           if (typeof stored.apiKey === 'string' && stored.apiKey.trim()) {
             const key = stored.apiKey.trim();
             setStoredKeyLast4(key.slice(-4));
-            
-            // Determine status based on last error (UNIFIED: handles AUTH_ERROR, INVALID_API_KEY, QUOTA_EXHAUSTED)
-            if (lastError?.code === 'AUTH_ERROR' || lastError?.code === 'INVALID_API_KEY' || lastError?.message?.toLowerCase().includes('invalid')) {
-              setKeyStatus('invalid');
-            } else if (lastError?.code === 'QUOTA_EXHAUSTED' || lastError?.message?.toLowerCase().includes('quota')) {
-              setKeyStatus('quota_exhausted');
-            } else {
-              setKeyStatus('present');
-            }
+            setHasStoredKey(true);
           } else {
-            setKeyStatus('missing');
+            setHasStoredKey(false);
           }
           resolve();
         });
       }),
-      new Promise<void>((resolve) => {
-        chrome.storage.sync.get(['selectedModel'], (result) => {
-          if (chrome.runtime.lastError) {
-            resolve();
-            return;
-          }
-          // CANONICAL: Model always comes from sync storage
-          if (typeof result.selectedModel === 'string' && result.selectedModel.trim()) {
-            const normalizedModel = normalizeModel(result.selectedModel.trim());
-            setSelectedModel(normalizedModel);
-          }
-          resolve();
-        });
-      }),
+      // Note: Model is now passed via effectiveModel prop from runtimeState
+      // This reflects what the server is actually using, not just user preference
     ]);
-  }, [lastError]);
+  }, []);
 
   const handleSave = async () => {
     const trimmed = apiKey.trim();
@@ -125,7 +196,7 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
       await chrome.storage.local.set({
         [PROVIDER_SETTINGS_KEY]: { provider: 'gemini', apiKey: trimmed },
       });
-      setKeyStatus('present');
+      setHasStoredKey(true);
       setStoredKeyLast4(trimmed.slice(-4));
       setApiKey('');
       onSaved();
@@ -140,7 +211,7 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
   const handleClearKey = async () => {
     try {
       await chrome.storage.local.remove(PROVIDER_SETTINGS_KEY);
-      setKeyStatus('missing');
+      setHasStoredKey(false);
       setStoredKeyLast4(null);
       setApiKey('');
     } catch (err) {
@@ -248,7 +319,8 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-sc-muted">Model</label>
                   <div className="w-full rounded border border-sc-border bg-sc-surface-1 px-3 py-2 text-[13px] text-sc-text-soft">
-                    {MODEL_LABELS[selectedModel]}
+                    {/* Show effective model (what server is actually using) */}
+                    {MODEL_LABELS[effectiveModel as GeminiModelOption] || MODEL_LABELS[selectedModel]}
                   </div>
                   <p className="mt-1 text-[11px] text-sc-muted">
                     Change this from the top bar.
@@ -290,14 +362,30 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
                   <li>Copy the key starting with &ldquo;AIza&rdquo;</li>
                 </ol>
                 
-                {(keyStatus === 'invalid' || keyStatus === 'quota_exhausted') && (
-                  <div className="mt-3 rounded border border-sc-disputed/20 bg-sc-disputed/5 px-3 py-2">
-                    <p className="text-[11px] leading-relaxed text-sc-text-soft">
-                      <strong className="text-sc-disputed">Troubleshooting:</strong>
-                      {keyStatus === 'invalid' 
-                        ? ' If you just created this key, wait 2–3 minutes for it to activate. If it persists, generate a new key.'
-                        : ' Free tier has rate limits. Wait a few minutes or create a new project in AI Studio for a fresh quota.'}
-                    </p>
+                {/* Troubleshooting Section */}
+                {effectiveErrorCode !== 'UNKNOWN_ERROR' && troubleshootingContent[effectiveErrorCode] && (
+                  <div className="mt-4 rounded border border-sc-partial/30 bg-sc-partial/10 px-3 py-3">
+                    <div className="flex items-center gap-1.5">
+                      <AlertCircle size={12} className="text-sc-partial" />
+                      <h3 className="text-[11px] font-semibold text-sc-partial">
+                        {troubleshootingContent[effectiveErrorCode]?.title}
+                      </h3>
+                    </div>
+                    <ol className="mt-2 space-y-1.5 text-[11px] leading-relaxed text-sc-text-soft list-decimal list-inside">
+                      {troubleshootingContent[effectiveErrorCode]?.steps.map((step, idx) => (
+                        <li key={idx}>{step}</li>
+                      ))}
+                    </ol>
+                    {troubleshootingContent[effectiveErrorCode]?.link && (hasStoredKey || apiKey.trim()) && (
+                      <a
+                        href={troubleshootingContent[effectiveErrorCode]?.link?.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex items-center gap-1 text-[11px] text-sc-accent hover:text-sc-accent/80"
+                      >
+                        {troubleshootingContent[effectiveErrorCode]?.link?.text} <ExternalLink size={10} />
+                      </a>
+                    )}
                   </div>
                 )}
               </div>

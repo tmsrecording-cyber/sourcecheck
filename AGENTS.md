@@ -353,6 +353,18 @@ The Gemini model configuration is **hard-locked** to prevent drift and ensure co
 
 ## Debugging
 
+### Mandatory Pre-Flight Check
+**Before investigating ANY bug**, run the pre-flight workflow:
+- File: `.agents/workflows/preflight-check.md`
+- Purpose: Verify backend/host health, runtime status, and build folder freshness
+- Cost of skipping: Hours wasted debugging stale code or infrastructure issues
+
+**Quick gates:**
+1. Backend reachable: `curl -s -m 5 http://localhost:3000/api/session/init -X POST ...`
+2. Runtime healthy: No stuck processes, no LevelDB corruption
+3. Build folder fresh: `dist/manifest.json` timestamp matches latest source
+4. No stale artifacts: Rebuild if `npm run build` output differs from current behavior
+
 ### Extension Debug Mode
 Add `?debug=1` to the side panel URL to show debug panels:
 ```

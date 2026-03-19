@@ -279,7 +279,8 @@ export async function POST(request: NextRequest) {
       900,
       ASK_VIDEO_SCHEMA,
       effectiveModel,  // Pass effective model (header override for BYOK)
-      customApiKey  // BYOK: Pass user's API key if provided
+      customApiKey,  // BYOK: Pass user's API key if provided
+      '/api/ask-video'
     );
 
     const answer = typeof rawAnswer?.answer === 'string' && rawAnswer.answer.trim()

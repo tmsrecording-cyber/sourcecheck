@@ -25,6 +25,8 @@ interface CardFeedProps {
     sources: AskQuestionSource[];
   }>;
   cards: SourceCard[];
+  /** Complete card history (unfiltered) for HISTORY tab */
+  allCards?: SourceCard[];
   pendingClaims: PendingClaimPreview[];
   status?: AnalysisStatus;
   chunksScanned?: number;
@@ -613,45 +615,57 @@ const RailEntry = ({
   timestampSeconds,
   style,
   glow = false,
+  isHistoryMode = false,
   children,
 }: {
   timestampSeconds: number | null;
   style: { from: string; node: string };
   glow?: boolean;
+  isHistoryMode?: boolean;
   children: ReactNode;
 }) => (
-  <div className="relative pl-[72px]">
-    {/* Continuous timeline rail - extends full height for visual continuity */}
-    <span 
-      className="absolute left-[53px] top-0 bottom-0 w-[1px] opacity-30"
-      style={{
-        background: `linear-gradient(180deg, transparent 0%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.4) 8%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 50%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.1) 92%, transparent 100%)`,
-      }}
-    />
-    {timestampSeconds !== null && (
-      <div className="absolute left-0 top-[13px] w-[38px] pr-1.5 text-right">
-        <span className="rail-timestamp font-mono text-[10.5px] font-semibold tracking-[0.04em] text-sc-text-soft/90">
-          {formatTime(timestampSeconds)}
-        </span>
+  <div className={`relative ${isHistoryMode ? 'pl-0' : 'pl-[72px]'}`}>
+    {!isHistoryMode && (
+      <>
+        {/* Continuous timeline rail - extends full height for visual continuity */}
+        <span 
+          className="absolute left-[53px] top-0 bottom-0 w-[1px] opacity-30"
+          style={{
+            background: `linear-gradient(180deg, transparent 0%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.4) 8%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 50%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.1) 92%, transparent 100%)`,
+          }}
+        />
+        {timestampSeconds !== null && (
+          <div className="absolute left-0 top-[13px] w-[38px] pr-1.5 text-right">
+            <span className="rail-timestamp font-mono text-[10.5px] font-semibold tracking-[0.04em] text-sc-text-soft/90">
+              {formatTime(timestampSeconds)}
+            </span>
+          </div>
+        )}
+        {/* Phase 3: Diamond Node - Centered alignment for 1:42 position */}
+        <span
+          className={`rail-node absolute h-[7px] w-[7px] left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
+          style={{ 
+            top: '11px',
+            borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.5)`,
+            boxShadow: '0 0 8px rgba(var(--model-accent-rgb, 168, 199, 250), 0.35), inset 0 0 2px rgba(255, 255, 255, 0.5)'
+          }}
+        />
+        {/* Phase 2: Razor-thin Fiber Optic Connector - fades before card */}
+        <span
+          className="rail-connector absolute h-[1px] w-[15px] left-[57px] opacity-80 transition-all duration-300"
+          style={{ 
+            top: '14px',
+            background: `linear-gradient(to right, rgba(var(--model-accent-rgb, 168, 199, 250), 0.85), rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 80%, transparent)`
+          }}
+        />
+      </>
+    )}
+    {/* History mode: compact timestamp badge */}
+    {isHistoryMode && timestampSeconds !== null && (
+      <div className="history-timestamp-badge">
+        {formatTime(timestampSeconds)}
       </div>
     )}
-    {/* Phase 3: Diamond Node - Centered alignment for 1:42 position */}
-    <span
-      className={`rail-node absolute h-[7px] w-[7px] left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
-      style={{ 
-        top: '11px',
-        borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.5)`,
-        boxShadow: '0 0 8px rgba(var(--model-accent-rgb, 168, 199, 250), 0.35), inset 0 0 2px rgba(255, 255, 255, 0.5)'
-      }}
-    />
-    {/* Phase 2: Razor-thin Fiber Optic Connector - fades before card */}
-    <span
-      className="rail-connector absolute h-[1px] w-[15px] left-[57px] opacity-80 transition-all duration-300"
-      style={{ 
-        top: '14px',
-        background: `linear-gradient(to right, rgba(var(--model-accent-rgb, 168, 199, 250), 0.85), rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 80%, transparent)`
-      }}
-    />
     {children}
   </div>
 );
@@ -771,7 +785,9 @@ const LiveReadingStrip = ({
   onEntitySelect?: (entityLabel: string) => void;
 }) => {
   const cleaned = previewText ? cleanPreview(previewText) : '';
-  const transcriptLine = cleaned || 'Listening…';
+  // PHASE 1D.11 FIX: Only show placeholder when no real preview exists
+  const hasRealPreview = Boolean(previewText?.trim());
+  const transcriptLine = cleaned || (hasRealPreview ? '' : 'Listening…');
   const wordCount = cleaned ? cleaned.split(/\s+/).filter(Boolean).length : 0;
   const [hudFrame, setHudFrame] = useState(0);
   const [selectedContextId, setSelectedContextId] = useState<string | null>(null);
@@ -797,8 +813,12 @@ const LiveReadingStrip = ({
     return availableContextSnippets[0] ?? null;
   }, [availableContextSnippets, selectedContextId]);
   const thoughtReadout = useMemo(
-    () => reason
-      ? {
+    () => {
+      // PHASE 1D.11 FIX: Don't show placeholder reason when we have real transcript
+      const hasContent = wordCount > 0;
+      const isPlaceholderReason = reason === 'Listening for checkable claims.';
+      if (reason && !(hasContent && isPlaceholderReason)) {
+        return {
           state:
             actionState === 'VERIFYING'
               ? 'queued'
@@ -806,8 +826,10 @@ const LiveReadingStrip = ({
                 ? 'rejected'
                 : 'tracking',
           message: reason,
-        }
-      : getThoughtReadout(wordCount, thoughtSignal, thoughtEntities),
+        };
+      }
+      return getThoughtReadout(wordCount, thoughtSignal, thoughtEntities);
+    },
     [wordCount, thoughtSignal, thoughtEntities, actionState, reason]
   );
 
@@ -1033,10 +1055,14 @@ const CheckedClaimRow = ({
   card,
   isExpanded,
   onToggle,
+  isHistoryMode = false,
+  isLast = false,
 }: {
   card: SourceCard;
   isExpanded: boolean;
   onToggle: () => void;
+  isHistoryMode?: boolean;
+  isLast?: boolean;
 }) => {
   const prefersReducedMotion = useReducedMotion();
   const verdictMeta = VERDICT_META[card.status];
@@ -1085,8 +1111,8 @@ const CheckedClaimRow = ({
       animate={{ opacity: 1, rotateX: 0, scale: 1 }}
       transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
     >
-      <RailEntry timestampSeconds={card.timestampSeconds} style={verdictMeta.railStyle}>
-        <div className={`history-entry ml-1${isExpanded ? ' history-entry-expanded' : ''}`}>
+      <RailEntry timestampSeconds={card.timestampSeconds} style={verdictMeta.railStyle} isHistoryMode={isHistoryMode}>
+        <div className={`history-entry ml-1${isExpanded ? ' history-entry-expanded' : ''}${isHistoryMode ? ' history-entry-history' : ''}${isLast && isHistoryMode ? ' history-entry-last' : ''}`}>
           <span
             className={`history-entry-accent ${verdictMeta.railStyle.node.split(' ')[0]}`}
             aria-hidden="true"
@@ -1104,7 +1130,7 @@ const CheckedClaimRow = ({
               <span className={`verdict-chip ${verdictMeta.tone}`}>{verdictMeta.label}</span>
             </div>
             <p
-              className="history-claim-text min-w-0 flex-1 mx-3 text-[13px] leading-[1.4] text-textMain/90 font-ui"
+              className={`history-claim-text min-w-0 flex-1 ${isHistoryMode ? '' : 'mx-3'} text-[13px] leading-[1.4] text-textMain/90 font-ui`}
               style={{
                 display: '-webkit-box',
                 WebkitLineClamp: 1,
@@ -1190,6 +1216,7 @@ export const CardFeed = ({
   onRetryTranscript,
   activeTab = 'live',
   selectedModel = 'gemini-3.1-flash-lite-preview',
+  allCards,
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
@@ -1199,10 +1226,13 @@ export const CardFeed = ({
     pendingClaims.length === 0 &&
     chunksScanned === 0;
 
+  // FIX: Use allCards (unfiltered) for HISTORY tab, cards (leash-filtered) for LIVE tab
+  const displayCards = activeTab === 'history' && allCards ? allCards : cards;
   const latestCheckedCard = activeTab === 'live' ? (cards[0] ?? null) : null;
+  // FIX: LIVE tab limits to MAX_HISTORY_ROWS, HISTORY tab shows ALL cards
   const olderCards = activeTab === 'live' 
     ? (cards.length > 1 ? cards.slice(1, MAX_HISTORY_ROWS + 1) : [])
-    : (cards.length > 0 ? cards.slice(0, MAX_HISTORY_ROWS + 1) : []);
+    : displayCards;
   const latestPendingClaim = pendingClaims[0] ?? null;
   const checkingTimestamp = latestPendingClaim?.timestampSeconds ?? lastScannedTimestamp;
   const activePreview = latestPendingClaim?.claimText?.trim() || currentScanPreview?.trim() || '';
@@ -1235,9 +1265,10 @@ export const CardFeed = ({
   }, [expandedClaimId, olderCards]);
 
   // Dynamic model accent color for HUD lighting
-  const modelAccentRgb = selectedModel === 'gemini-3.1-flash-lite-preview' 
-    ? '168, 199, 250' // Gemini Blue
-    : '215, 174, 251'; // Gemini Purple
+  // Blue for standard/freemium models, Purple for preview/experimental
+  const modelAccentRgb = selectedModel === 'gemini-3-flash-preview' 
+    ? '215, 174, 251' // Gemini Purple (preview/experimental)
+    : '168, 199, 250'; // Gemini Blue (default for 2.5-flash and 3.1-flash-lite)
 
   return (
     <div className="relative" style={{ '--model-accent-rgb': modelAccentRgb } as CSSProperties}>
@@ -1327,8 +1358,8 @@ export const CardFeed = ({
                   headline="Something went wrong."
                   supportLine="Refresh the YouTube tab to try again."
                 />
-              ) : status === 'monitoring' || status === 'verifying' ? (
-                // FIX: Never show Idle when monitoring/verifying - show scanning state instead
+              ) : status === 'monitoring' || status === 'verifying' || status === 'ready' ? (
+                // FIX: Never show Idle when monitoring/verifying/ready - show scanning state instead
                 <LiveReadingStrip
                   timestampSeconds={activeReadingTimestamp}
                   previewText={currentScanPreview || 'Scanning for claims…'}
@@ -1357,14 +1388,14 @@ export const CardFeed = ({
             {/* Checked claims list */}
             {olderCards.length > 0 && (
               <motion.div layout className="flex flex-col">
-                <motion.div layout className="pl-[72px]">
+                <motion.div layout className={activeTab === 'history' ? 'pl-[24px]' : 'pl-[72px]'}>
                   <div className="ml-1">
                     <p className="feed-section-label">
-                      {activeTab === 'history' ? 'All verified claims' : 'Checked so far'}
+                      {activeTab === 'history' ? 'All checked claims' : 'Checked so far'}
                     </p>
                   </div>
                 </motion.div>
-                {olderCards.map((card) => (
+                {olderCards.map((card, index) => (
                   <CheckedClaimRow
                     key={`h-${card.id}`}
                     card={card}
@@ -1372,14 +1403,16 @@ export const CardFeed = ({
                     onToggle={() => {
                       setExpandedClaimId((current) => (current === card.id ? null : card.id));
                     }}
+                    isHistoryMode={activeTab === 'history'}
+                    isLast={index === olderCards.length - 1}
                   />
                 ))}
               </motion.div>
             )}
 
             {/* Empty history state */}
-            {activeTab === 'history' && cards.length === 0 && askHistory.length === 0 && (
-              <div className="pl-[72px] py-8">
+            {activeTab === 'history' && displayCards.length === 0 && askHistory.length === 0 && (
+              <div className="pl-6 py-8">
                 <p className="text-[12px] text-sc-muted/60 font-sc italic">No checked claims yet. Results will appear here as claims are verified.</p>
               </div>
             )}

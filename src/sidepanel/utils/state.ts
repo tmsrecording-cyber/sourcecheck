@@ -19,6 +19,7 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   pendingTranscriptBufferSummary: { present: false, receivedCount: 0, totalCount: 0 },
   transcriptMessageStats: { startsSeen: 0, appendsSeen: 0, loadedSeen: 0, failedSeen: 0 },
   sourceCards: [],
+  allSourceCards: [],
   pendingClaims: [],
   chunksScanned: 0,
   lastScannedTimestamp: null,
@@ -141,6 +142,7 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
       return INITIAL_RUNTIME_STATE.transcriptMessageStats;
     })(),
     sourceCards: Array.isArray(candidate.sourceCards) ? candidate.sourceCards : INITIAL_RUNTIME_STATE.sourceCards,
+    allSourceCards: Array.isArray(candidate.allSourceCards) ? candidate.allSourceCards : INITIAL_RUNTIME_STATE.allSourceCards,
     pendingClaims: Array.isArray(candidate.pendingClaims) ? candidate.pendingClaims : INITIAL_RUNTIME_STATE.pendingClaims,
     chunksScanned: Number.isFinite(candidate.chunksScanned)
       ? Math.max(0, Math.floor(candidate.chunksScanned as number))

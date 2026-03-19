@@ -23,10 +23,12 @@ interface ClaimVector {
   nuance: string;
   sourceTitle: string;
   sourceUrl: string;
+  sourceType: string;
   videoId: string;
   videoTitle: string;
   timestampSeconds: number;
   verifiedAt: string;
+  wordingVersion: number; // For cache invalidation when user-facing wording changes
 }
 
 interface VectorMatch {
@@ -116,10 +118,12 @@ export async function upsertClaimVector(
         nuance: claimData.nuance,
         sourceTitle: claimData.sourceTitle,
         sourceUrl: claimData.sourceUrl,
+        sourceType: claimData.sourceType,
         videoId: claimData.videoId,
         videoTitle: claimData.videoTitle,
         timestampSeconds: claimData.timestampSeconds,
         verifiedAt: claimData.verifiedAt,
+        wordingVersion: claimData.wordingVersion,
       },
     });
     

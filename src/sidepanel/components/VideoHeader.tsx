@@ -76,6 +76,7 @@ export const VideoHeader = ({
   channel,
   status = 'idle',
   playbackState,
+  chunksScanned = 0,
   lastScannedTimestamp = null,
   cards = [],
 }: VideoHeaderProps) => {
@@ -172,8 +173,10 @@ export const VideoHeader = ({
         ? `Reading near ${formatTime(anchorTime)}`
         : 'Waiting for video';
 
+  // PHASE 1D.11 FIX: Show different status when transcript exists vs waiting for transcript
+  const hasTranscriptContent = (chunksScanned ?? 0) > 0 || (lastScannedTimestamp ?? 0) > 0;
   const statusLineCopy =
-    status === 'monitoring' ? 'Listening for a checkable claim.' :
+    status === 'monitoring' ? (hasTranscriptContent ? 'Scanning transcript for claims…' : 'Listening for a checkable claim.') :
     status === 'verifying' ? 'Verifying a claim…' :
     null;
 

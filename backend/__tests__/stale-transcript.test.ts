@@ -4,7 +4,8 @@
  * Fix 5 has two parts:
  *
  *   Part A — service-worker.ts: markTranscriptUnavailable() now clears
- *             currentTranscript and calls chrome.storage.local.remove('transcriptSnapshot').
+ *             currentTranscript and calls chrome.storage.local.remove(TRANSCRIPT_SNAPSHOT_KEY).
+ *             (Worker uses the constant; we assert against the canonical key value.)
  *
  *   Part B — sidepanel/App.tsx: the storage.onChanged listener no longer guards
  *             against null, so markTranscriptUnavailable's remove() call propagates
@@ -14,14 +15,17 @@
  *   then triggering the TRANSCRIPT_FAILED message path and asserting on the mock.
  *
  * Part B: App.tsx requires jsdom + React to mount. Because the sidepanel is a
- *   browser extension UI, we use source-level assertions as a regression guard:
+ *   browser extension UI, we use source-level assertions as a BRITTLE regression guard:
  *   the tests fail if the null guard is re-added or the unconditional setTranscript
- *   call is removed.
+ *   call is removed. These are intentionally fragile to catch logic regressions.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+
+// Canonical storage key used by service-worker.ts (keep in sync with src/background/service-worker.ts)
+const TRANSCRIPT_SNAPSHOT_KEY = 'transcriptSnapshot';
 
 // ---------------------------------------------------------------------------
 // Chrome API mock factory — must be installed before the service worker module
@@ -74,16 +78,28 @@ type ChromeMock = ReturnType<typeof makeChromeMock>;
 
 /**
  * Sends a message through the service worker's chrome.runtime.onMessage handler
- * and waits for the async inner function to settle.
+ * and resolves when sendResponse is called (or after a safety timeout).
+ * This is more robust than a fixed delay because it waits for actual completion.
  */
 async function sendMessage(
   listener: (msg: unknown, sender: unknown, sendResponse: () => void) => void,
-  message: unknown
+  message: unknown,
+  timeoutMs = 100
 ): Promise<void> {
   const sendResponse = vi.fn();
-  listener(message, { tab: null }, sendResponse);
-  // Yield to allow the async IIFE inside the listener to run to completion.
-  await new Promise<void>((resolve) => setTimeout(resolve, 30));
+  
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`sendMessage timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    
+    const wrappedSendResponse = () => {
+      clearTimeout(timeoutId);
+      resolve();
+    };
+    
+    listener(message, { tab: null }, wrappedSendResponse);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +144,7 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
       },
     });
 
-    expect(chrome.storage.local.remove).toHaveBeenCalledWith('transcriptSnapshot', expect.any(Function));
+    expect(chrome.storage.local.remove).toHaveBeenCalledWith(TRANSCRIPT_SNAPSHOT_KEY, expect.any(Function));
   });
 
   it('PASS: exact storage key "transcriptSnapshot" is used — App.tsx and worker agree', async () => {
@@ -146,10 +162,10 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
       payload: { videoId: 'yt-test-002', debug: { source: null, reason: 'timeout', attemptCount: 1 } },
     });
 
-    // App.tsx reads 'transcriptSnapshot' from local storage to populate transcript.
+    // App.tsx reads transcriptSnapshot from local storage to populate transcript.
     // If the key used in remove() ever drifts, the clear-on-failure mechanism breaks.
     const removeCall = (chrome.storage.local.remove.mock.calls as unknown[][]).find(
-      ([key]) => key === 'transcriptSnapshot'
+      ([key]) => key === TRANSCRIPT_SNAPSHOT_KEY
     );
     expect(removeCall).toBeDefined();
   });
@@ -221,20 +237,28 @@ describe('Fix 5 Part B: App.tsx storage listener propagates null transcript to R
     'utf-8'
   );
 
-  it('PASS: storage listener does not guard against null transcript', () => {
-    // The hook derives `nextTranscript` from readTranscriptSnapshotForVideo(...),
-    // then must call setTranscript(nextTranscript) without null-guarding.
+  it('PASS: storage listener does not guard against null transcript (BRITTLE: regex-based)', () => {
+    // BRITTLE REGRESSION GUARD: This test uses regex to detect the null guard.
+    // It will break on harmless refactors (renames, formatting). That's intentional:
+    // we want to catch if the guard is re-added. If this breaks, verify the logic
+    // still propagates null and update the regex accordingly.
     expect(storageHookSource).not.toMatch(/if\s*\(\s*nextTranscript\s*!==\s*null\s*\)/);
   });
 
-  it('PASS: storage listener queues transcript update unconditionally', () => {
-    // With debouncing, updates are queued via queueUpdate() and flushed asynchronously.
-    // The important thing is that nextTranscript (even if null) is queued without guards.
-    expect(storageHookSource).toMatch(/queueUpdate\('transcript',\s*nextTranscript\)/);
+  it('PASS: storage listener queues transcript update unconditionally (BRITTLE: regex-based)', () => {
+    // BRITTLE REGRESSION GUARD: This test uses regex to verify the call pattern.
+    // It will break on harmless refactors. That's intentional: we want to catch
+    // if the unconditional setTranscript is replaced with a guarded version.
+    // The hook assigns to pendingUpdates.transcript and flushes via setTranscript().
+    // The important thing is that the transcript value (even if null) is propagated without guards.
+    expect(storageHookSource).toMatch(/pendingUpdates\.transcript\s*=\s*readTranscriptSnapshotForVideo\(/);
   });
 
-  it('PASS: readTranscriptSnapshotForVideo returns null for undefined snapshotValue', () => {
-    // When the worker calls chrome.storage.local.remove('transcriptSnapshot'), Chrome
+  it('PASS: readTranscriptSnapshotForVideo returns null for undefined snapshotValue (BRITTLE: regex-based)', () => {
+    // BRITTLE REGRESSION GUARD: This test uses regex to verify the early-return pattern.
+    // It will break on harmless refactors. That's intentional: we want to catch
+    // if the null-return behavior changes, which would break stale-transcript clearing.
+    // When the worker calls chrome.storage.local.remove(TRANSCRIPT_SNAPSHOT_KEY), Chrome
     // fires storage.onChanged with newValue === undefined. The helper must return
     // null so setTranscript(null) clears stale UI state.
     expect(stateUtilsSource).toMatch(/if\s*\(!snapshotValue[\s\S]*?return null/);

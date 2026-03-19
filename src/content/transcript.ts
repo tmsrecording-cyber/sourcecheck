@@ -275,6 +275,10 @@ type TranscriptFetchAttemptResult = {
   reason: TranscriptDebugReason;
   format: TranscriptFetchCandidateFormat | null;
   detail: string | null;
+  // PHASE 1D.8: Debug info for last attempted format
+  lastStatus?: number;
+  lastContentType?: string;
+  lastBodyLength?: number;
 };
 
 type TranscriptPanelLoadResult = {
@@ -1106,6 +1110,20 @@ const getOrderedCaptionTracks = (playerResponse: Record<string, any> | null): Ca
     return [];
   }
 
+  // PHASE 1D.8 DEBUG: Log raw tracks before any processing
+  console.log('[SourceCheck][TRACK DEBUG] Raw caption tracks from playerResponse:', 
+    captionTracks.map((t, i) => ({
+      index: i,
+      languageCode: t.languageCode,
+      kind: t.kind,
+      vssId: t.vssId,
+      name: getTrackName(t),
+      hasBaseUrl: !!t.baseUrl,
+      baseUrlPreview: t.baseUrl?.slice(0, 100) + '...',
+      baseUrlContainsCapsAsr: t.baseUrl?.includes('caps=asr') ?? false,
+    }))
+  );
+
   const getTrackRank = (track: CaptionTrack) => {
     const isAsr = track.kind === 'asr';
     const isEnglish = track.languageCode === 'en' || track.vssId?.startsWith('.en');
@@ -1119,36 +1137,63 @@ const getOrderedCaptionTracks = (playerResponse: Record<string, any> | null): Ca
     return 3;
   };
 
-  return [...captionTracks]
-    .filter((track): track is CaptionTrack => Boolean(track?.baseUrl))
-    .map(track => {
-      // CRITICAL FIX: YouTube returns unicode ampersands that break URL parameters
-      if (typeof track.baseUrl === 'string') {
-        track.baseUrl = track.baseUrl.replace(/\\u0026/g, '&').replace(/\\"/g, '"');
-      }
-      return track;
-    })
-    .sort((left, right) => getTrackRank(left) - getTrackRank(right));
+  const filtered = [...captionTracks]
+    .filter((track): track is CaptionTrack => Boolean(track?.baseUrl));
+  
+  // PHASE 1D.8 DEBUG: Log after filtering
+  console.log('[SourceCheck][TRACK DEBUG] After filtering (has baseUrl):', 
+    filtered.map((t, i) => ({
+      index: i,
+      languageCode: t.languageCode,
+      kind: t.kind,
+      rank: getTrackRank(t),
+      rankLabel: ['manual-en', 'other-en', 'asr-en', 'other'][getTrackRank(t)],
+    }))
+  );
+
+  const processed = filtered.map(track => {
+    // CRITICAL FIX: YouTube returns unicode ampersands that break URL parameters
+    if (typeof track.baseUrl === 'string') {
+      track.baseUrl = track.baseUrl.replace(/\\u0026/g, '&').replace(/\\"/g, '"');
+    }
+    return track;
+  });
+
+  const sorted = processed.sort((left, right) => getTrackRank(left) - getTrackRank(right));
+
+  // PHASE 1D.8 DEBUG: Log final sorted order
+  console.log('[SourceCheck][TRACK DEBUG] Final sorted tracks:', 
+    sorted.map((t, i) => ({
+      finalIndex: i,
+      languageCode: t.languageCode,
+      kind: t.kind,
+      vssId: t.vssId,
+      name: getTrackName(t),
+      rank: getTrackRank(t),
+      rankLabel: ['manual-en', 'other-en', 'asr-en', 'other'][getTrackRank(t)],
+      baseUrlContainsCapsAsr: t.baseUrl?.includes('caps=asr') ?? false,
+    }))
+  );
+
+  return sorted;
 };
 
 const withCaptionFormat = (transcriptUrl: string, format: 'xml' | 'json3' | 'srv3') => {
   const url = new URL(transcriptUrl);
 
+  // FIX: Only modify the fmt param, preserve all other original params including
+  // signature, expire, sparams, etc. that are required for authenticated access
   if (format === 'xml') {
     url.searchParams.delete('fmt');
+  } else if (format === 'srv3') {
+    url.searchParams.set('fmt', 'srv3');
   } else {
     url.searchParams.set('fmt', 'json3');
-    if (format === 'srv3') {
-      url.searchParams.set('fmt', 'srv3');
-    }
   }
 
-  // CRITICAL WAF BYPASS: YouTube drops requests without a declared web client
-  if (!url.searchParams.has('c')) {
-    url.searchParams.set('c', 'WEB');
-    url.searchParams.set('client', 'WEB'); // Redundant client param for legacy WAF
-    url.searchParams.set('cver', '2.20240228.06.00'); // Valid recent client version
-  }
+  // Note: Removed WAF bypass params (c, client, cver) as they may conflict
+  // with the original URL's authentication signature. The baseUrl from YouTube
+  // already contains all required params for the request to succeed.
 
   return url.toString();
 };
@@ -1944,6 +1989,9 @@ const fetchTranscriptChunks = async (
           reason: 'fetch-non-ok',
           format: candidate.format,
           detail: `status=${response.status} contentType=${contentType} preview=${preview || '[empty]'}`,
+          lastStatus: response.status,
+          lastContentType: contentType,
+          lastBodyLength: bodyText.length,
         };
         bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
           ? failure
@@ -1971,6 +2019,9 @@ const fetchTranscriptChunks = async (
           reason: 'fetch-empty-body',
           format: candidate.format,
           detail: `fetch-empty-body bytes=${bodyText.length}`,
+          lastStatus: response.status,
+          lastContentType: contentType,
+          lastBodyLength: bodyText.length,
         };
         bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
           ? failure
@@ -1997,6 +2048,9 @@ const fetchTranscriptChunks = async (
           reason: 'fetch-html-instead-of-transcript',
           format: candidate.format,
           detail: 'fetch-html-instead-of-transcript: received HTML page instead of transcript',
+          lastStatus: response.status,
+          lastContentType: contentType,
+          lastBodyLength: bodyText.length,
         };
         bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
           ? failure
@@ -2114,9 +2168,24 @@ const fetchTranscriptChunks = async (
         console.log(`[SourceCheck] Failed to parse transcript ${candidate.format} response, trying next format.`, error);
       }
     } catch (error) {
+      // Distinguish between intentional aborts (stop everything) and network errors (try next format)
+      const isAbortError = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbortError) {
+        // Don't log aborts as errors - they're expected during video switch/cancel
+        emitTranscriptFetchDebug(
+          onFetchDebug,
+          'html',
+          'fetch_aborted',
+          `${candidate.format} request aborted (video changed or cancelled)`
+        );
+        throw error; // Propagate abort to stop all processing
+      }
+      
+      // Network/fetch errors should try next format, not fail entirely
       logTranscriptDetail('html', 'fetchError', {
         format: candidate.format,
         message: getErrorMessage(error),
+        isAbortError: false,
       });
       emitTranscriptFetchDebug(
         onFetchDebug,
@@ -2130,7 +2199,8 @@ const fetchTranscriptChunks = async (
         format: candidate.format,
         detail: getErrorMessage(error),
       };
-      throw error;
+      // Continue to next format candidate instead of throwing
+      continue;
     }
   }
 
@@ -2291,18 +2361,31 @@ export const extractTranscriptData = async (
         `baseUrl=${trackCandidate.baseUrl || 'null'} languageCode=${trackCandidate.languageCode || 'null'} kind=${trackCandidate.kind || 'null'} name=${getTrackName(trackCandidate) || 'null'}`
       );
 
-      const transcriptResult = await fetchTranscriptChunks(trackCandidate.baseUrl || '', signal, onFetchDebug);
-      
-      // Log detailed track-level result
-      console.log(`[SourceCheck][TRACK DEBUG] Track ${index + 1}/${trackCandidates.length} result:`, {
+      // PHASE 1D.8: Log exactly which track is being fetched
+      console.log(`[SourceCheck][TRACK DEBUG] ATTEMPT ${index + 1}/${trackCandidates.length} - FETCH START:`, {
+        attempt: index + 1,
         languageCode: trackCandidate.languageCode,
         kind: trackCandidate.kind,
-        baseUrl: trackCandidate.baseUrl?.slice(0, 200) + '...',
-        success: transcriptResult.chunks && transcriptResult.chunks.length > 0,
+        vssId: trackCandidate.vssId,
+        name: getTrackName(trackCandidate),
+        baseUrl: trackCandidate.baseUrl?.slice(0, 150) + '...',
+      });
+
+      const transcriptResult = await fetchTranscriptChunks(trackCandidate.baseUrl || '', signal, onFetchDebug);
+      
+      // PHASE 1D.8: Log the actual fetch result with HTTP details
+      const success = transcriptResult.chunks && transcriptResult.chunks.length > 0;
+      console.log(`[SourceCheck][TRACK DEBUG] ATTEMPT ${index + 1}/${trackCandidates.length} - FETCH RESULT:`, {
+        attempt: index + 1,
+        languageCode: trackCandidate.languageCode,
+        kind: trackCandidate.kind,
+        success,
         reason: transcriptResult.reason,
         format: transcriptResult.format,
-        detail: transcriptResult.detail,
-        chunkCount: transcriptResult.chunks?.length ?? 0,
+        status: transcriptResult.lastStatus,
+        contentType: transcriptResult.lastContentType,
+        bodyLength: transcriptResult.lastBodyLength,
+        fellThrough: !success && index < trackCandidates.length - 1,
       });
       
       if (transcriptResult.chunks?.length) {
@@ -2355,6 +2438,13 @@ export const extractTranscriptData = async (
         transcriptResult.reason === 'fetch-failed' ||
         transcriptResult.reason === 'fetch-non-ok' ||
         transcriptResult.reason === 'fetch-html-instead-of-transcript';
+      
+      // PHASE 1D.8 DEBUG: Log that this track failed and we're trying next (if any)
+      if (index < trackCandidates.length - 1) {
+        console.log(`[SourceCheck][TRACK DEBUG] Track ${index + 1} failed (${transcriptResult.reason}), trying next track...`);
+      } else {
+        console.log(`[SourceCheck][TRACK DEBUG] Track ${index + 1} failed (${transcriptResult.reason}), no more tracks to try.`);
+      }
     }
 
     // Determine final reason based on what we saw
@@ -2422,13 +2512,16 @@ export const extractTranscriptData = async (
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      console.log('[SourceCheck] Transcript extraction cancelled by new attempt.');
+      // Expected abort - video changed or extraction cancelled by new attempt
+      // Log at debug level only, not as an error
+      console.log('[SourceCheck] Transcript extraction cancelled (video changed or new attempt).');
       return withPanelState({
         transcript: null,
         debug: createTranscriptDebug(null, 'pending'),
       });
     }
-    console.error('[SourceCheck] Error extracting transcript:', error);
+    // Only log unexpected errors as errors
+    console.error('[SourceCheck] Unexpected error extracting transcript:', error);
     emitTranscriptFetchDebug(onFetchDebug, 'html', 'error', getErrorMessage(error));
     return withPanelState({
       transcript: null,

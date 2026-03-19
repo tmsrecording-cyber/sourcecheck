@@ -54,7 +54,7 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
   },
   permissions: ['sidePanel', 'storage', 'declarativeNetRequest', 'declarativeNetRequestWithHostAccess'],
   host_permissions: [
-    'https://www.youtube.com/*',
+    '*://*.youtube.com/*',
     getApiHostPermission(apiBase),
   ],
   declarative_net_request: {

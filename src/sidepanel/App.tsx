@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
 import { AlertTriangle, Settings, KeyRound } from 'lucide-react';
 import { PROVIDER_SETTINGS_KEY } from '../background/providers/types';
@@ -35,6 +35,9 @@ type AskQuestionResult =
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error;
   }
   return fallback;
 };
@@ -98,6 +101,14 @@ export const App = () => {
   const [hasCustomKey, setHasCustomKey] = useState(false);
   const isMountedRef = useRef(true);
   const lastSettingsSaveAtRef = useRef(0);
+  const byokCheckVersionRef = useRef(0);
+  
+  // Refs to avoid stale closures in message listeners
+  const hasCustomKeyRef = useRef(hasCustomKey);
+  const lastProviderErrorRef = useRef(lastProviderError);
+  
+  useEffect(() => { hasCustomKeyRef.current = hasCustomKey; }, [hasCustomKey]);
+  useEffect(() => { lastProviderErrorRef.current = lastProviderError; }, [lastProviderError]);
 
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -108,8 +119,13 @@ export const App = () => {
   // Check BYOK status from storage
   useEffect(() => {
     const checkByokStatus = () => {
+      const currentVersion = ++byokCheckVersionRef.current;
       chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
         if (chrome.runtime.lastError || !isMountedRef.current) {
+          return;
+        }
+        // Only apply if this is still the latest request (monotonic versioning)
+        if (currentVersion !== byokCheckVersionRef.current) {
           return;
         }
         const stored = result[PROVIDER_SETTINGS_KEY];
@@ -137,6 +153,10 @@ export const App = () => {
     setAskError(null);
     setIsThinking(false);
     setActiveTab('live');
+    // Clear stale provider errors when switching videos
+    setLastProviderError(null);
+    // Note: displayAnalysisStatus is synced separately via the effect below;
+    // do not force-set it here to avoid dual authority.
   }, [runtimeState.currentVideo?.videoId]);
 
   const analysisStatus = lifecycleToAnalysisStatus(runtimeState.lifecycle);
@@ -233,6 +253,9 @@ export const App = () => {
 
   const handleRetryTranscript = async () => {
     if (!runtimeState.currentVideo?.videoId) return;
+    // Clear stale errors before attempting fresh retry
+    setAskError(null);
+    setLastProviderError(null);
     try {
       await chrome.runtime.sendMessage({
         type: 'RETRY_TRANSCRIPT',
@@ -240,33 +263,39 @@ export const App = () => {
       });
     } catch (error) {
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
-      setAskError('Transcript recovery failed. Please refresh the page.');
+      if (isMountedRef.current) {
+        setAskError('Transcript recovery failed. Please refresh the page.');
+      }
     }
   };
 
   // Listen for provider errors - UNIFIED ERROR HANDLING
   // All errors now flow through classifyError() in background/utils/api.ts
   useEffect(() => {
-    const listener = (message: unknown) => {
-      if (typeof message === 'object' && message !== null) {
-        const msg = message as Record<string, unknown>;
+    const listener = (msgRaw: unknown) => {
+      if (typeof msgRaw === 'object' && msgRaw !== null) {
+        const msg = msgRaw as Record<string, unknown>;
         if (msg.type === 'PROVIDER_ERROR' && typeof msg.payload === 'object' && msg.payload !== null) {
           const payload = msg.payload as Record<string, unknown>;
           const code = typeof payload.code === 'string' ? payload.code : undefined;
           const message = typeof payload.message === 'string' ? payload.message : undefined;
           const shouldOpenSettings = typeof payload.showSettings === 'boolean' ? payload.showSettings : false;
           
-          // Gate: ignore stale errors that arrive shortly after settings save
-          // This prevents delayed error messages from reopening settings immediately after user saves
-          if (Date.now() - lastSettingsSaveAtRef.current < 1500) {
+          // Gate: suppress only stale duplicate errors shortly after settings save.
+          // This prevents delayed *old* error messages from reopening settings,
+          // but allows genuine new errors caused by the just-saved settings to show.
+          const timeSinceSave = Date.now() - lastSettingsSaveAtRef.current;
+          const isStaleDuplicate = timeSinceSave < 1500 && lastProviderErrorRef.current?.code === code && lastProviderErrorRef.current?.message === message;
+          if (isStaleDuplicate) {
             return;
           }
           
           setLastProviderError({ code, message });
           
-          // Auto-open settings when error signals it's needed (AUTH, QUOTA, INVALID_KEY)
-          // This is the unified behavior across all error paths
-          if (shouldOpenSettings || code === 'AUTH_ERROR' || code === 'QUOTA_EXHAUSTED' || code === 'INVALID_API_KEY') {
+          // Auto-open settings only for BYOK (user-entered key) flows.
+          // Managed-key auth/quota errors should not yank users out of the live view.
+          const isUserKeyError = hasCustomKeyRef.current && (code === 'AUTH_ERROR' || code === 'QUOTA_EXHAUSTED' || code === 'INVALID_API_KEY');
+          if (shouldOpenSettings || isUserKeyError) {
             setShowSettings(true);
           }
         }
@@ -285,6 +314,7 @@ export const App = () => {
           setLastProviderError(null);
         }} 
         lastError={lastProviderError}
+        effectiveModel={runtimeState.selectedModel}
       />
     );
   }
@@ -374,7 +404,7 @@ export const App = () => {
         <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col" onScroll={handleFeedScroll}>
           {SHOW_DEBUG && (
             <>
-              <DebugStatusPanel runtimeState={runtimeState} analysisStatus={analysisStatus} />
+              <DebugStatusPanel runtimeState={runtimeState} analysisStatus={displayAnalysisStatus} />
               <EventTimeline runtimeState={runtimeState} />
               <TranscriptFetchLogPanel runtimeState={runtimeState} />
             </>
@@ -390,6 +420,7 @@ export const App = () => {
           />
           <CardFeed
             cards={runtimeState.sourceCards}
+            allCards={runtimeState.allSourceCards}
             pendingClaims={runtimeState.pendingClaims}
             status={displayAnalysisStatus}
             isPinned={isFeedPinned}
@@ -423,3 +454,44 @@ export const App = () => {
     </div>
   );
 };
+
+// Error Boundary to prevent white-screen crashes
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[SourceCheck] App crashed:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <PanelShell
+          label="Something went wrong"
+          subcopy="Refresh the YouTube tab to try again."
+          error
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Export wrapped App with Error Boundary
+export const AppWithBoundary = () => (
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
+
+export default AppWithBoundary;

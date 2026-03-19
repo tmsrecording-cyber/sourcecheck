@@ -185,7 +185,19 @@ git checkout baseline-2026-03-17-recovery
 
 ---
 
-## 9. Pre-Commit Checklist
+## 9. Pre-Debugging Checklist (Before Any Bug Investigation)
+
+**Run `.agents/workflows/preflight-check.md` gates:**
+- [ ] Backend/host reachable and responsive (HTTP 403 from `/api/session/init`)
+- [ ] Runtime healthy (no stuck processes, no LevelDB corruption)
+- [ ] Build folder fresh (`dist/` timestamp matches latest source)
+- [ ] No stale artifacts (rebuild if behavior doesn't match source)
+
+**If any gate fails**: Fix infrastructure first. Do not proceed to code-level debugging.
+
+---
+
+## 10. Pre-Commit Checklist
 
 Before every commit, verify:
 - [ ] Change is scoped to one pass type
@@ -197,7 +209,7 @@ Before every commit, verify:
 
 ---
 
-## 10. Tagging Baselines
+## 11. Tagging Baselines
 
 **Create a baseline tag when:**
 - Major feature is complete and green
@@ -219,6 +231,7 @@ git push origin baseline-YYYY-MM-DD-[description]
 
 | Rule | Violation Cost |
 |------|----------------|
+| Pre-debugging gates | Hours wasted on stale builds |
 | Commit before multi-file | 2-4 hours recovery |
 | One scoped pass at a time | 1-3 days recovery |
 | Savepoint after green | 30 min recovery |

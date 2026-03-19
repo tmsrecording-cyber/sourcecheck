@@ -180,6 +180,7 @@ export interface TranscriptFetchDebugEntry {
     | 'track_selected'
     | 'fetch_started'
     | 'fetch_completed'
+    | 'fetch_aborted'
     | 'response_text_length'
     | 'parse_started'
     | 'parse_success'
@@ -263,6 +264,13 @@ export interface AnalyzeChunkResponse {
   chunkRange: {
     startIndex: number;
     endIndex: number;
+  };
+  /** Backend extraction metrics for pipeline analysis */
+  _metrics?: {
+    rawCandidates: number;
+    anchorFiltered: number;
+    verifiabilityFiltered: number;
+    finalCandidates: number;
   };
 }
 
@@ -412,6 +420,8 @@ export interface WorkerRuntimeState {
   pendingTranscriptBufferSummary: PendingTranscriptBufferSummary;
   transcriptMessageStats: TranscriptMessageStats;
   sourceCards: SourceCard[];
+  /** Complete card history (unfiltered by leash) for HISTORY tab */
+  allSourceCards: SourceCard[];
   pendingClaims: PendingClaimPreview[];
   chunksScanned: number;
   lastScannedTimestamp: number | null;
