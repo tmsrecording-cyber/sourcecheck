@@ -1697,6 +1697,8 @@ const persistPanelState = (options: {
     // PHASE 1D.12 FIX: Persist full card history for proper restoration
     // (sourceCards is filtered by leash, allSourceCards is complete history)
     allSourceCards: allSourceCards.slice(0, MAX_SOURCE_CARDS),
+    // TC5 FIX: Also persist allPendingClaims so "checking" items survive refresh
+    allPendingClaims: allPendingClaims.slice(0, MAX_PENDING_CLAIMS),
     // PHASE 1D.11 FIX: Write live preview at top level for sidepanel to read
     // (persistableRuntimeState may have stale values, these are current)
     currentScanPreview,
@@ -2661,13 +2663,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ...(message.payload as ActiveVideoContext),
         sourceTabId: sender.tab?.id ?? (message.payload as ActiveVideoContext).sourceTabId,
       } satisfies ActiveVideoContext;
-      if (
-        currentVideoInfo?.videoId === nextVideo.videoId &&
-        currentVideoInfo.pageSessionId === nextVideo.pageSessionId
-      ) {
+      
+      // TC5 REFRESH FIX: Check if this is the same video with a new pageSessionId (refresh)
+      // vs an actual new video. If same videoId and we have restored state, merge instead of reset.
+      const isSameVideo = currentVideoInfo?.videoId === nextVideo.videoId;
+      const isSameSession = currentVideoInfo?.pageSessionId === nextVideo.pageSessionId;
+      const hasRestoredState = hasHydratedState && (allSourceCards.length > 0 || allPendingClaims.length > 0);
+      
+      if (isSameVideo && isSameSession && currentVideoInfo) {
+        // Same video, same session - just metadata update
         logWorkerMessage('VIDEO_CHANGED', nextVideo.videoId, { mergedMetadataOnly: true });
         currentVideoInfo = mergeVideoMetadata(currentVideoInfo, nextVideo);
         persistPanelState();
+        sendResponse({ status: 'ok' });
+        return;
+      }
+      
+      if (isSameVideo && hasRestoredState && currentVideoInfo) {
+        // TC5 REFRESH: Same video but new session (page refresh) with restored state
+        // Merge metadata instead of wiping state
+        logWorkerMessage('VIDEO_CHANGED', nextVideo.videoId, { mergedMetadataOnly: true, isRefresh: true });
+        currentVideoInfo = mergeVideoMetadata(currentVideoInfo, nextVideo);
+        // Restore visible state now that we have currentTime context
+        syncVisibleTimelineState();
+        persistPanelState({ includeTranscript: true, includeCards: true, includeQueue: true });
         sendResponse({ status: 'ok' });
         return;
       }
