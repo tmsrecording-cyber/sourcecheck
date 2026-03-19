@@ -1109,7 +1109,10 @@ const isRepositioningReason = (reason: string | null) =>
   typeof reason === 'string' && reason.startsWith('Repositioning cognitive scan');
 
 const syncVisibleTimelineState = (currentTime: number | null = currentPlaybackState?.currentTime ?? null) => {
-  if (!currentTranscript.length) {
+  // HYDRATION FIX: Don't clear cards if transcript is temporarily unavailable
+  // but we have restored cards from session storage. This prevents "checking"
+  // items from disappearing during worker restart/refresh.
+  if (!currentTranscript.length && allSourceCards.length === 0 && allPendingClaims.length === 0) {
     sourceCards = [];
     pendingClaims = [];
     lastScannedTimestamp = null;
