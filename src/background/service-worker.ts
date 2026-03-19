@@ -159,6 +159,7 @@ let verificationQueue: VerificationQueueItem[] = [];
 let activeVerificationKeys = new Set<string>();
 let hasHydratedState = false;
 let hydrationPromise: Promise<void> | null = null;
+let hydratedAt: number | null = null; // TC5: Timestamp of last hydration for grace period
 let lastAnalyzedAt = 0;
 let processingGeneration = 0;
 let verificationGeneration = 0;
@@ -1128,6 +1129,11 @@ const syncVisibleTimelineState = (currentTime: number | null = currentPlaybackSt
     return;
   }
 
+  // TC5 GRACE PERIOD: After refresh/hydration, skip leash filtering for 5 seconds
+  // to prevent restored cards from being hidden when player reports currentTime=0
+  const HYDRATION_GRACE_PERIOD_MS = 5000;
+  const isInGracePeriod = hydratedAt && (Date.now() - hydratedAt) < HYDRATION_GRACE_PERIOD_MS;
+  
   const leashCutoff = getLeashCutoff(currentTime);
   const preFilterCount = allSourceCards.length;
   // PHASE 1D.12 FIX: Sort by video timeline position (timestampSeconds desc) so the
@@ -1139,10 +1145,11 @@ const syncVisibleTimelineState = (currentTime: number | null = currentPlaybackSt
   const sortedPendingClaims = [...allPendingClaims].sort(
     (a, b) => b.timestampSeconds - a.timestampSeconds
   );
-  sourceCards = leashCutoff === null
+  // TC5: Skip leash filtering during grace period after refresh
+  sourceCards = (leashCutoff === null || isInGracePeriod)
     ? sortedSourceCards
     : sortedSourceCards.filter((card) => card.timestampSeconds <= leashCutoff);
-  pendingClaims = leashCutoff === null
+  pendingClaims = (leashCutoff === null || isInGracePeriod)
     ? sortedPendingClaims
     : sortedPendingClaims.filter((claim) => claim.timestampSeconds <= leashCutoff);
 
@@ -1959,6 +1966,7 @@ const hydrateState = async () => {
       }
 
       hasHydratedState = true;
+      hydratedAt = Date.now(); // TC5: Track hydration time for grace period
       persistPanelState({ includeCards: true });
 
       if (verificationQueue.length > 0) {
