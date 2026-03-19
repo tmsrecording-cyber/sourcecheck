@@ -161,6 +161,11 @@ let hasHydratedState = false;
 let hydrationPromise: Promise<void> | null = null;
 let hydratedAt: number | null = null; // TC5: Timestamp of last hydration for grace period
 let lastAnalyzedAt = 0;
+
+// PERFORMANCE FIX: Debounce persistence to reduce storage writes
+let persistDebounceTimer: number | null = null;
+let pendingPersistOptions: { includeTranscript?: boolean; includeCards?: boolean; includeQueue?: boolean } = {};
+const PERSIST_DEBOUNCE_MS = 250; // Batch rapid state changes into single write
 let processingGeneration = 0;
 let verificationGeneration = 0;
 let transcriptLoadDeadlineAt: number | null = null;
@@ -1675,7 +1680,8 @@ const buildPersistableRuntimeState = (): WorkerRuntimeState => ({
   eventLog: [],
 });
 
-const persistPanelState = (options: {
+// PERFORMANCE FIX: Debounced persistence to reduce storage writes
+const flushPersistPanelState = (options: {
   includeTranscript?: boolean;
   includeCards?: boolean;
   includeQueue?: boolean;
@@ -1802,6 +1808,32 @@ const persistPanelState = (options: {
       });
     }
   });
+};
+
+// PERFORMANCE FIX: Debounced wrapper for persistPanelState
+// Batches rapid state changes into single storage write
+const persistPanelState = (options: {
+  includeTranscript?: boolean;
+  includeCards?: boolean;
+  includeQueue?: boolean;
+} = {}) => {
+  // Merge options (if any call needs full persist, keep it)
+  pendingPersistOptions = {
+    includeTranscript: pendingPersistOptions.includeTranscript || options.includeTranscript,
+    includeCards: pendingPersistOptions.includeCards || options.includeCards,
+    includeQueue: pendingPersistOptions.includeQueue || options.includeQueue,
+  };
+  
+  // Clear existing timer and schedule new one
+  if (persistDebounceTimer) {
+    clearTimeout(persistDebounceTimer);
+  }
+  
+  persistDebounceTimer = window.setTimeout(() => {
+    flushPersistPanelState(pendingPersistOptions);
+    pendingPersistOptions = {}; // Reset after flush
+    persistDebounceTimer = null;
+  }, PERSIST_DEBOUNCE_MS);
 };
 
 const persistPanelDiagnostics = () => {

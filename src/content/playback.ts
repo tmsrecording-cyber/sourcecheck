@@ -10,17 +10,28 @@ export const setPlaybackVideoId = (videoId: string | null) => {
 };
 
 // Watch for YouTube swapping the <video> element under the same video ID.
-// YouTube sometimes replaces the player DOM without triggering a route change,
-// which would otherwise leave us listening on a disconnected element.
+// PERFORMANCE FIX: Observe only the player container, not full body.
 const startVideoElementObserver = () => {
   if (videoElementObserver) return;
-  videoElementObserver = new MutationObserver(() => {
+  
+  // Find the player container (more specific than body)
+  const playerContainer = document.querySelector('#movie_player') || 
+                          document.querySelector('#player') || 
+                          document.body;
+  
+  videoElementObserver = new MutationObserver((mutations) => {
+    // PERFORMANCE: Only check if video element changed, not on every mutation
     const current = document.querySelector('video');
     if (current && current !== trackedVideo) {
       initPlaybackTracking();
     }
   });
-  videoElementObserver.observe(document.body, { childList: true, subtree: true });
+  
+  // PERFORMANCE: Reduced observation scope - only player container, not full subtree
+  videoElementObserver.observe(playerContainer, { 
+    childList: true, 
+    subtree: playerContainer === document.body // Only use subtree if fallback to body
+  });
 };
 
 export const stopVideoElementObserver = () => {
