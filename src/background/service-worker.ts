@@ -40,6 +40,10 @@ import {
   shouldShowSettings,
   type ClassifiedError,
 } from './utils/api';
+import {
+  isMetadataOnlyVideoChange,
+  shouldPreserveStateOnRefresh,
+} from './utils/session-transition';
 import { logTranscriptFailure, logProviderError, logRetryExhausted } from './telemetry';
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
@@ -1726,6 +1730,7 @@ const persistPanelState = (options: {
       payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 10);
       payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 20);
       payload.allSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 10);
+      payload.allPendingClaims = (payload.allPendingClaims as PendingClaimPreview[]).slice(0, 20);
       // Update the runtimeState in payload to match
       (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = payload.sourceCards as SourceCard[];
       (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = payload.pendingClaims as PendingClaimPreview[];
@@ -1739,6 +1744,7 @@ const persistPanelState = (options: {
       const emergencySourceCards = (payload.sourceCards as SourceCard[]).slice(0, 5);
       const emergencyPendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 10);
       const emergencyAllSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 5);
+      const emergencyAllPendingClaims = (payload.allPendingClaims as PendingClaimPreview[]).slice(0, 10);
       
       const emergencyPayload = {
         [WORKER_RUNTIME_STATE_KEY]: {
@@ -1750,6 +1756,7 @@ const persistPanelState = (options: {
         sourceCards: emergencySourceCards,
         pendingClaims: emergencyPendingClaims,
         allSourceCards: emergencyAllSourceCards,
+        allPendingClaims: emergencyAllPendingClaims,
         currentScanPreview,
         currentScanEntities,
         currentScanActionState,
@@ -1764,6 +1771,7 @@ const persistPanelState = (options: {
             sourceCardsCount: emergencySourceCards.length,
             allSourceCardsCount: emergencyAllSourceCards.length,
             pendingClaimsCount: emergencyPendingClaims.length,
+            allPendingClaimsCount: emergencyAllPendingClaims.length,
           });
         }
       });
@@ -2663,14 +2671,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ...(message.payload as ActiveVideoContext),
         sourceTabId: sender.tab?.id ?? (message.payload as ActiveVideoContext).sourceTabId,
       } satisfies ActiveVideoContext;
-      
-      // TC5 REFRESH FIX: Check if this is the same video with a new pageSessionId (refresh)
-      // vs an actual new video. If same videoId and we have restored state, merge instead of reset.
-      const isSameVideo = currentVideoInfo?.videoId === nextVideo.videoId;
-      const isSameSession = currentVideoInfo?.pageSessionId === nextVideo.pageSessionId;
       const hasRestoredState = hasHydratedState && (allSourceCards.length > 0 || allPendingClaims.length > 0);
-      
-      if (isSameVideo && isSameSession && currentVideoInfo) {
+
+      if (isMetadataOnlyVideoChange(currentVideoInfo, nextVideo) && currentVideoInfo) {
         // Same video, same session - just metadata update
         logWorkerMessage('VIDEO_CHANGED', nextVideo.videoId, { mergedMetadataOnly: true });
         currentVideoInfo = mergeVideoMetadata(currentVideoInfo, nextVideo);
@@ -2678,8 +2681,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'ok' });
         return;
       }
-      
-      if (isSameVideo && hasRestoredState && currentVideoInfo) {
+
+      if (
+        shouldPreserveStateOnRefresh({
+          currentVideo: currentVideoInfo,
+          nextVideo,
+          hasRestoredState,
+        }) &&
+        currentVideoInfo
+      ) {
         // TC5 REFRESH: Same video but new session (page refresh) with restored state
         // Merge metadata instead of wiping state
         logWorkerMessage('VIDEO_CHANGED', nextVideo.videoId, { mergedMetadataOnly: true, isRefresh: true });
