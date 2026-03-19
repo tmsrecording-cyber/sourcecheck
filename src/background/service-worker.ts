@@ -2880,11 +2880,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      const rawTranscript = hasMatchingBuffer && transcriptBuffer
+      // FIX: Support both batched transcripts (from timedtext API) and direct transcripts
+      // (from panel fallback which bypasses the batching system)
+      const directTranscript = Array.isArray(message.payload.transcript) ? message.payload.transcript : [];
+      const rawTranscript = (hasMatchingBuffer && transcriptBuffer)
         ? Array.from({ length: Math.max(0, transcriptBuffer.totalBatches) })
             .flatMap((_, index) => transcriptBuffer.chunksByBatch[index] || [])
-        : [];
-      const expectedChunkCount = hasMatchingBuffer && transcriptBuffer ? transcriptBuffer.totalChunks : 0;
+        : directTranscript; // Use direct transcript if no buffer (panel fallback)
+      
+      const expectedChunkCount = hasMatchingBuffer && transcriptBuffer ? transcriptBuffer.totalChunks : directTranscript.length;
       pendingTranscriptBuffer = null;
       persistPendingTranscriptBufferNow();
 
@@ -2896,10 +2900,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      currentTranscript = rawTranscript.map((chunk, index) => ({
+      // Normalize transcript format (batched chunks have startMs/durationMs, direct has startTime/duration)
+      currentTranscript = rawTranscript.map((chunk: { text: string; startMs?: number; startTime?: number; durationMs?: number; duration?: number }, index: number) => ({
         text: chunk.text,
-        startTime: Math.floor(chunk.startMs / 1000),
-        duration: Math.max(1, Math.floor(chunk.durationMs / 1000)),
+        startTime: typeof chunk.startMs === 'number' ? Math.floor(chunk.startMs / 1000) : (chunk.startTime || 0),
+        duration: typeof chunk.durationMs === 'number' 
+          ? Math.max(1, Math.floor(chunk.durationMs / 1000)) 
+          : Math.max(1, chunk.duration || 1),
         index,
       }));
       clearTranscriptLoadTimeout();

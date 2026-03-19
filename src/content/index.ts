@@ -347,11 +347,14 @@ const deliverTranscriptLoaded = async (
     }
   }
 
+  // FIX: Include transcript directly for panel fallback compatibility
+  // (bypasses pendingTranscriptBuffer which is only populated by batching)
   const loadedResult = await sendMessageWithRetry({
     type: 'TRANSCRIPT_LOADED',
     payload: {
       videoId,
       debug,
+      transcript: transcript.length > 0 ? transcript : undefined,
     },
   });
   logContentTranscript('TRANSCRIPT_LOADED_ACK', {
