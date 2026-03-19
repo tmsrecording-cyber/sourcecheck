@@ -128,6 +128,7 @@ export const SourceCard = ({
       className={`feed-card result-card card-enter relative ml-1 px-4 py-4 hover-lift ${isLatest ? 'result-card-active' : ''}`}
       style={cardStyle}
       data-verdict={status}
+      data-testid="source-card"
     >
       <span
         className="result-card-tab"
