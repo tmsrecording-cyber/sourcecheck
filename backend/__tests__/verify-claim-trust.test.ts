@@ -1,8 +1,9 @@
 /**
  * Trust boundary tests for verify-claim route.
  *
- * When Gemini returns no grounding sources, the card must:
- *   1. Status = 'unverifiable' regardless of model verdict
+ * When Gemini returns no usable grounding source, the card must:
+ *   1. Stay 'partial' if grounding sources exist but source matching is weak
+ *   2. Fall back to 'unverifiable' only when grounding is genuinely absent
  *   2. sourceTitle replaced with trust-preserving fallback language
  *   3. sourceType forced to 'other'
  *   4. sourceUrl is empty
@@ -17,10 +18,17 @@ import { setupSessionAuthEnv, createAuthHeaders, createUnauthHeaders, TEST_EXTEN
 // whether grounding sources are present.
 // ---------------------------------------------------------------------------
 const mockAskGemini = vi.fn();
+const mockGenerateEmbedding = vi.fn();
+const mockFindSimilarClaim = vi.fn();
+const mockUpsertClaimVector = vi.fn();
 vi.mock('../src/lib/gemini', () => ({
   askGeminiJSONWithSearch: (...args: unknown[]) => mockAskGemini(...args),
   isGeminiError: () => false,
-  generateEmbedding: () => Promise.resolve([]), // Embeddings disabled in tests
+  generateEmbedding: (...args: unknown[]) => mockGenerateEmbedding(...args),
+}));
+vi.mock('../src/lib/vector-store', () => ({
+  findSimilarClaim: (...args: unknown[]) => mockFindSimilarClaim(...args),
+  upsertClaimVector: (...args: unknown[]) => mockUpsertClaimVector(...args),
 }));
 
 // crypto will be stubbed in beforeEach with proper subtle mock
@@ -60,6 +68,9 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     vi.clearAllMocks();
     setupSessionAuthEnv();
     mockCryptoSubtle();
+    mockGenerateEmbedding.mockResolvedValue([]);
+    mockFindSimilarClaim.mockResolvedValue(null);
+    mockUpsertClaimVector.mockResolvedValue(undefined);
   });
   
   afterEach(() => {
@@ -87,6 +98,37 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     expect(json.sourceCard.sourceType).toBe('other');
     expect(json.sourceCard.sourceUrl).toBe('');
     expect(json.sourceCard.nuance).toBe('This type of claim requires access to papers, filings, or official records.');
+  });
+
+  it('downgrades matched-source failure to partial when grounding sources exist', async () => {
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'supported',
+        sourceTitle: 'Planck Collaboration 2020',
+        sourceType: 'official_source',
+        nuance: 'Confirmed by cosmology consensus.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [
+        { title: 'WMAP cosmology overview', url: 'https://example.com/wmap' },
+      ],
+    });
+
+    const res = await POST(await makeVerifyRequest({
+      claim: {
+        claimText: 'The universe is 13.8 billion years old.',
+        claimType: 'canonical',
+        timestampSeconds: 42,
+      },
+    }));
+    const json = await res.json();
+
+    expect(json.sourceCard.status).toBe('partial');
+    expect(json.sourceCard.sourceTitle).toBe('Planck Collaboration 2020');
+    expect(json.sourceCard.sourceType).toBe('official_source');
+    expect(json.sourceCard.sourceUrl).toBe('');
+    expect(json.sourceCard.nuance).toBe('Sources mention the topic, but the exact claim match is unclear.');
   });
 
   it('downgrades disputed verdict to unverifiable when no grounding sources', async () => {
@@ -168,6 +210,33 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     expect(json.sourceCard.nuance).toBe('This type of claim requires access to papers, filings, or official records.');
   });
 
+  it('does not treat canonical claims as needing a primary source when truly unresolved', async () => {
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'unverifiable',
+        sourceTitle: '',
+        sourceType: 'other',
+        nuance: 'No relevant data found for this specific claim.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [],
+    });
+
+    const res = await POST(await makeVerifyRequest({
+      claim: {
+        claimText: 'The universe is 13.8 billion years old.',
+        claimType: 'canonical',
+        timestampSeconds: 42,
+      },
+    }));
+    const json = await res.json();
+
+    expect(json.sourceCard.status).toBe('unverifiable');
+    expect(json.sourceCard.sourceTitle).toBe('Not found');
+    expect(json.sourceCard.nuance).toBe('No reliable source confirms this specific claim.');
+  });
+
   it('uses missing-context language when the unresolved outcome lacks specifics', async () => {
     mockAskGemini.mockResolvedValue({
       data: {
@@ -189,11 +258,11 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     expect(json.sourceCard.nuance).toBe('The claim is too vague—needs dates, names, or specifics to verify.');
   });
 
-  it('keeps grounded response intact when sources are present', async () => {
+  it('keeps supported response intact when the cited source matches grounding metadata', async () => {
     mockAskGemini.mockResolvedValue({
       data: {
         status: 'supported',
-        sourceTitle: 'WHO Report 2024',
+        sourceTitle: 'Reuters Fact Check',
         sourceType: 'official_source',
         nuance: 'Confirmed by WHO guidelines published in 2024.',
       },
@@ -208,10 +277,10 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     const res = await POST(await makeVerifyRequest());
     const json = await res.json();
 
-    expect(json.sourceCard.status).toBe('unverifiable');
-    expect(json.sourceCard.sourceTitle).toBe('Source not available');
-    expect(json.sourceCard.sourceType).toBe('other');
-    expect(json.sourceCard.sourceUrl).toBe('');
+    expect(json.sourceCard.status).toBe('supported');
+    expect(json.sourceCard.sourceTitle).toBe('Reuters Fact Check');
+    expect(json.sourceCard.sourceType).toBe('official_source');
+    expect(json.sourceCard.sourceUrl).toBe('https://example.com/reuters');
   });
 
   it('preserves grounded disputed behavior', async () => {
@@ -322,5 +391,50 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     
     // The response should have scrubbed the old wording (guardUnverifiableNuance)
     expect(json.sourceCard.nuance).not.toContain('[From memory]');
+  });
+
+  it('does not short-circuit on cached unverifiable claims', async () => {
+    mockGenerateEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
+    mockFindSimilarClaim.mockResolvedValue({
+      id: 'cached-1',
+      score: 0.97,
+      metadata: {
+        claimText: 'The universe is 13.8 billion years old.',
+        status: 'unverifiable',
+        nuance: 'Old unresolved cache entry.',
+        sourceTitle: 'Needs primary source',
+        sourceUrl: '',
+        sourceType: 'other',
+        videoId: 'older-video',
+        videoTitle: 'Older video',
+        timestampSeconds: 21,
+        verifiedAt: new Date().toISOString(),
+        wordingVersion: 1,
+      },
+    });
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'partial',
+        sourceTitle: 'NASA Universe 101',
+        sourceType: 'official_source',
+        nuance: 'Widely cited estimate; exact source match unclear.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [{ title: 'ESA Planck results', url: 'https://example.com/planck' }],
+    });
+
+    const res = await POST(await makeVerifyRequest({
+      claim: {
+        claimText: 'The universe is 13.8 billion years old.',
+        claimType: 'canonical',
+        timestampSeconds: 42,
+      },
+    }));
+    const json = await res.json();
+
+    expect(mockAskGemini).toHaveBeenCalledTimes(1);
+    expect(json.sourceCard.status).toBe('partial');
+    expect(json.sourceCard.sourceTitle).not.toBe('Needs primary source');
   });
 });

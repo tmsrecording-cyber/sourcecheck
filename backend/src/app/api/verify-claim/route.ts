@@ -31,6 +31,8 @@ const MAX_CLAIM_TEXT_LENGTH = 700;
 const MAX_METADATA_FIELD_LENGTH = 300;
 const MAX_NUANCE_LENGTH = 600;
 const FALLBACK_NO_SOURCE_COPY = 'No grounded source attached.';
+const PARTIAL_WITHOUT_SOURCE_MATCH_COPY =
+  'Sources mention the topic, but the exact claim match is unclear.';
 const VALID_SOURCE_TYPES: readonly SourceType[] = [
   'academic_paper',
   'news_article',
@@ -84,7 +86,6 @@ const inferUnverifiableCategory = (params: {
 
   if (
     params.claimType === 'study' ||
-    params.claimType === 'canonical' ||
     params.sourceType === 'academic_paper' ||
     params.sourceType === 'official_source' ||
     PRIMARY_SOURCE_RE.test(sourceCombined)
@@ -124,6 +125,35 @@ const normalizeSourceType = (value: string | null | undefined): SourceType =>
   (VALID_SOURCE_TYPES as readonly string[]).includes(value ?? '')
     ? (value as SourceType)
     : 'other';
+
+const resolveStatusWithoutMatchedSource = (params: {
+  parsedStatus: VerificationStatus;
+  hasGroundingSources: boolean;
+  hasQualityGrounding: boolean;
+}): VerificationStatus => {
+  if (params.hasQualityGrounding) {
+    return params.parsedStatus;
+  }
+
+  if (params.parsedStatus === 'unverifiable') {
+    return 'unverifiable';
+  }
+
+  return params.hasGroundingSources ? 'partial' : 'unverifiable';
+};
+
+const resolvePartialNuanceWithoutMatchedSource = (nuance: string): string => {
+  const trimmed = nuance.trim();
+  if (!trimmed) {
+    return PARTIAL_WITHOUT_SOURCE_MATCH_COPY;
+  }
+
+  if (NEGATIVE_CERTAINTY_RE.test(trimmed) || POSITIVE_CERTAINTY_RE.test(trimmed)) {
+    return PARTIAL_WITHOUT_SOURCE_MATCH_COPY;
+  }
+
+  return trimmed;
+};
 
 const VERIFICATION_SCHEMA = {
   type: 'object',
@@ -182,8 +212,8 @@ const validateVerifyClaimRequest = (body: VerifyClaimRequest) => {
     return `claimText exceeds ${MAX_CLAIM_TEXT_LENGTH} characters.`;
   }
   
-  if (!body.videoId || typeof body.videoId !== 'string') {
-    return 'videoId is required.';
+  if (body.videoId && typeof body.videoId !== 'string') {
+    return 'videoId must be a string.';
   }
 
   if ((body.videoTitle || '').length > MAX_METADATA_FIELD_LENGTH) {
@@ -364,8 +394,10 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // If we found a very similar claim, return it immediately (skip Gemini API call)
-    if (similarClaim && similarClaim.score > 0.92) {
+    // If we found a very similar resolved claim, return it immediately.
+    // Do not short-circuit on cached "unverifiable" results because they may
+    // represent stale grounding failures or outdated wording.
+    if (similarClaim && similarClaim.score > 0.92 && similarClaim.metadata.status !== 'unverifiable') {
       // Check wording version - invalidate stale cached wording
       const cachedVersion = similarClaim.metadata.wordingVersion;
       let nuance = similarClaim.metadata.nuance;
@@ -380,20 +412,6 @@ export async function POST(request: NextRequest) {
           currentVersion: WORDING_VERSION,
           status: similarClaim.metadata.status,
         });
-        
-        if (similarClaim.metadata.status === 'unverifiable') {
-          // Re-apply current unverifiable wording logic
-          const hasGrounding = !!similarClaim.metadata.sourceUrl;
-          const category = inferUnverifiableCategory({
-            claimText: claim.claimText,
-            claimType: claim.claimType,
-            sourceType: normalizeSourceType(similarClaim.metadata.sourceType),
-            nuance: similarClaim.metadata.nuance,
-            sourceTitle: similarClaim.metadata.sourceTitle,
-          });
-          const resolved = resolveUnverifiableLanguage({ category, hasGrounding });
-          nuance = resolved.nuance;
-        }
       }
       
       const cachedSourceCard: SourceCard = {
@@ -429,6 +447,14 @@ export async function POST(request: NextRequest) {
       });
       Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
       return response;
+    }
+
+    if (similarClaim && similarClaim.score > 0.92 && similarClaim.metadata.status === 'unverifiable') {
+      console.info('[verify-claim] Skipping cached unresolved result; re-verifying claim', {
+        similarClaimId: similarClaim.id,
+        score: similarClaim.score,
+        originalVideo: similarClaim.metadata.videoTitle,
+      });
     }
 
     // ---- Gemini grounded verification with retry + graceful fallback ----
@@ -576,31 +602,38 @@ export async function POST(request: NextRequest) {
       ? (rawVerification.status as VerificationStatus)
       : 'unverifiable';
 
-    // ---- Get source URL from grounding metadata ----
-    // Gemini returns the actual URLs it used in groundingChunks.
-    // Fall back to empty string if none available or no quality match.
-    const bestSourceUrl = selectBestSourceUrl(rawVerification.sourceTitle || '', sources);
-
-    // ---- Trust guard: no quality grounding source = no evidence-backed verdict ----
-    // If Gemini returned no grounding chunks or we couldn't match its cited
-    // source to a URL, the card must show as unverifiable.
-    const hasQualityGrounding = bestSourceUrl !== '';
-    const status: VerificationStatus = hasQualityGrounding ? parsedStatus : 'unverifiable';
-
-    // ---- Validate source type ----
-    const sourceType = normalizeSourceType(rawVerification.sourceType);
-
-    // ---- Resolve source title, type, URL, and nuance ----
     const rawSourceTitle = typeof rawVerification.sourceTitle === 'string'
       ? rawVerification.sourceTitle.trim()
       : '';
     const rawNuanceData = typeof rawVerification.nuance === 'string'
       ? rawVerification.nuance
       : 'No additional context available.';
-    
+
     // Strip markdown-style citations [1], [2] etc injected by Gemini during search grounding
     const fullNuance = rawNuanceData.replace(/\[\d+\]/g, '').trim();
     const rawNuance = fullNuance.slice(0, MAX_NUANCE_LENGTH);
+
+    // ---- Get source URL from grounding metadata ----
+    // Gemini returns the actual URLs it used in groundingChunks.
+    // Fall back to empty string if none available or no quality match.
+    const bestSourceUrl = selectBestSourceUrl(rawSourceTitle, sources);
+
+    // ---- Trust guard: preserve partial when grounding exists but source matching is weak ----
+    // If grounding sources exist but we cannot confidently attach the model's chosen
+    // citation to a URL, keep the result at "partial" rather than collapsing it to
+    // "unverifiable". Only fully unresolved claims should remain "unverifiable".
+    const hasGroundingSources = sources.length > 0;
+    const hasQualityGrounding = bestSourceUrl !== '';
+    const status: VerificationStatus = resolveStatusWithoutMatchedSource({
+      parsedStatus,
+      hasGroundingSources,
+      hasQualityGrounding,
+    });
+
+    // ---- Validate source type ----
+    const sourceType = normalizeSourceType(rawVerification.sourceType);
+    const downgradedToPartialWithoutSourceMatch =
+      !hasQualityGrounding && hasGroundingSources && status === 'partial';
 
     // When unverifiable, infer a more specific category and use trust-preserving copy.
     const unresolvedCategory = status === 'unverifiable'
@@ -623,12 +656,16 @@ export async function POST(request: NextRequest) {
       ? unresolvedLanguage.sourceTitle
       : hasQualityGrounding
         ? (rawSourceTitle || 'Unknown source')
-        : FALLBACK_NO_SOURCE_COPY;
-    const resolvedSourceType = unresolvedLanguage ? 'other' : hasQualityGrounding ? sourceType : 'other';
+        : downgradedToPartialWithoutSourceMatch
+          ? (rawSourceTitle || sources[0]?.title?.trim() || 'Evidence unclear')
+          : FALLBACK_NO_SOURCE_COPY;
+    const resolvedSourceType = unresolvedLanguage ? 'other' : sourceType;
     const resolvedSourceUrl = unresolvedLanguage ? '' : bestSourceUrl;
     const resolvedNuance = (
       unresolvedLanguage
         ? unresolvedLanguage.nuance
+        : downgradedToPartialWithoutSourceMatch
+          ? resolvePartialNuanceWithoutMatchedSource(rawNuance)
         : guardUnverifiableNuance(rawNuance, hasQualityGrounding)
     ).slice(0, MAX_NUANCE_LENGTH);
 
@@ -687,11 +724,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Explicit downgrade logging for auditability
-    const wasDowngraded = parsedStatus !== 'unverifiable' && status === 'unverifiable';
+    const wasDowngraded = parsedStatus !== status;
     const downgradeInfo = wasDowngraded
       ? {
-          downgradedToUnverifiable: true,
-          downgradeReason: hasQualityGrounding ? 'trust_guard_unknown' : 'no_quality_grounding',
+          downgradedFrom: parsedStatus,
+          downgradedTo: status,
+          downgradeReason: downgradedToPartialWithoutSourceMatch
+            ? 'grounding_present_but_source_unmatched'
+            : hasQualityGrounding
+              ? 'trust_guard_unknown'
+              : 'no_quality_grounding',
           parsedStatus,
           finalStatus: status,
           sourceCount: Array.isArray(sources) ? sources.length : 0,

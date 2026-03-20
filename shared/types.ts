@@ -338,6 +338,11 @@ export interface PendingClaimPreview {
   normalizedClaimText?: string;
 }
 
+export interface ProviderErrorState {
+  code?: string;
+  message?: string;
+}
+
 export interface PanelSessionState {
   currentVideo?: ActiveVideoContext | null;
   transcript?: TranscriptChunk[];
@@ -359,6 +364,7 @@ export interface PanelSessionState {
   debugStage?: DebugStage;
   pendingTranscriptBufferSummary?: PendingTranscriptBufferSummary;
   transcriptMessageStats?: TranscriptMessageStats;
+  lastProviderError?: ProviderErrorState | null;
   /** User's preferred Gemini model (normalized to allowed values) */
   selectedModel?: GeminiModelOption;
 }
@@ -430,6 +436,7 @@ export interface WorkerRuntimeState {
   currentScanEntities: string[];
   currentScanActionState: ExtractionActionState | null;
   currentScanReason: string | null;
+  lastProviderError: ProviderErrorState | null;
   lastProcessedIndex: number;
   transcriptLoadDeadlineAt: number | null;
   debugStage: DebugStage;
