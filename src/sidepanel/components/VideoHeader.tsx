@@ -217,7 +217,14 @@ export const VideoHeader = ({
             <span className="truth-score-label text-[9px] font-bold tracking-[0.12em] uppercase text-sc-muted/60 pb-0.5 font-sc">
               Accuracy Score
             </span>
-            <span className={`truth-score-value ${scoreClass}`}>{truthScore}%</span>
+            <span className={`truth-score-value ${scoreClass}`}>
+              {truthScore}%
+              {scoreSummary && (
+                <span className="text-[11px] text-sc-muted/60 ml-1.5 font-normal">
+                  · {scoreSummary.resolved} of {scoreSummary.total} resolved
+                </span>
+              )}
+            </span>
           </div>
           <div className="truth-score-bar mt-2 w-full border border-sc-border-soft/50">
             <div
