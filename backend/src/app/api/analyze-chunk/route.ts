@@ -117,6 +117,7 @@ type NormalizedClaimResult = {
   metrics: {
     rawCandidates: number;
     anchorFiltered: number;
+    qualityFiltered: number;
     verifiabilityFiltered: number;
     finalCandidates: number;
   };
@@ -238,6 +239,61 @@ const inferClaimType = (claimText: string): ClaimType => {
 };
 
 // ============================================================================
+// CLAIM QUALITY FILTER (Backend Safety Net)
+// ============================================================================
+
+/**
+ * Strict quality filter to catch garbage claims that slip through the prompt.
+ * This is the backstop for the extraction pipeline — if the AI hallucinates
+ * fragments or low-quality claims, we reject them here.
+ */
+function passesQualityFilter(candidate: RawCandidate): { passes: boolean; reason: string } {
+  const claimText = typeof candidate.claim_text === 'string' ? candidate.claim_text.trim() : '';
+  const exactQuote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
+  
+  // 1. Minimum length check (8 words - allowing shorter factual claims)
+  const wordCount = claimText.split(/\s+/).filter(w => w.length > 0).length;
+  if (wordCount < 8) {
+    return { passes: false, reason: `Claim too short (${wordCount} words, min 8)` };
+  }
+  
+  // 2. Must contain substance: proper noun, date, year, OR number
+  const hasProperNoun = /\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/.test(claimText) || // Full names
+                       /\b(Google|Microsoft|Apple|Amazon|Tesla|Biden|Trump|China|Russia|Europe|NASA|WHO|FDA|CDC|UN|EU|MIT|Stanford|Harvard)\b/.test(claimText);
+  const hasDate = /\b(19|20)\d{2}\b/.test(claimText) || // Years 1900-2099
+                 /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}/.test(claimText);
+  const hasNumber = /\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?\s*(?:million|billion|trillion)?|\b\d+\s*(?:million|billion|trillion|percent|%)\b/i.test(claimText) ||
+                    /\b(one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|million|billion)\s+(percent|people|years|dollars|times)\b/i.test(claimText);
+  
+  if (!hasProperNoun && !hasDate && !hasNumber) {
+    return { passes: false, reason: 'Claim lacks substance (no proper noun, date, or number)' };
+  }
+  
+  // 3. Reject questions
+  if (/^(what|why|how|when|where|who|is|are|does|did|will|would|could|should)\s/i.test(claimText.toLowerCase()) ||
+      claimText.endsWith('?')) {
+    return { passes: false, reason: 'Claim is a question' };
+  }
+  
+  // 4. Reject obvious fragments (ellipsis at start or end, mid-sentence truncation)
+  if (exactQuote.startsWith('...') || exactQuote.endsWith('...') ||
+      /^\[?\.\.\./.test(exactQuote) || // Starts with [From... or ...
+      exactQuote.endsWith('...]') ||
+      /^(from|we|they|he|she|it|but|and|or|so|if|then|when|where|what|why|how)\s+\w{0,5}\.\.\./i.test(exactQuote) || // [From..., We could...
+      /\b(from|we|they|he|she|it|but|and|or|so|if|then)\s+\w{0,5}$/i.test(exactQuote)) { // Ends mid-thought
+    return { passes: false, reason: 'Claim is a sentence fragment' };
+  }
+  
+  // 5. Verifiability check
+  const verifiability = typeof candidate.verifiability === 'number' ? candidate.verifiability : 0;
+  if (verifiability < 0.65) {
+    return { passes: false, reason: `Verifiability too low (${verifiability.toFixed(2)} < 0.65)` };
+  }
+  
+  return { passes: true, reason: 'Quality checks passed' };
+}
+
+// ============================================================================
 // CLAIM NORMALIZATION
 // ============================================================================
 
@@ -262,6 +318,7 @@ async function normalizeClaimResult(
 
   // METRICS: Track candidate filtering
   let candidatesFilteredByAnchor = 0;
+  let candidatesFilteredByQuality = 0;
   let candidatesFilteredByVerifiability = 0;
   let finalCandidateCount = 0;
   
@@ -275,6 +332,9 @@ async function normalizeClaimResult(
     });
 
     // Score and rank candidates by quality (verifiability × value × speaker_confidence)
+    // Apply strict quality filter as backend safety net
+    let candidatesFilteredByQuality = 0;
+    
     const scoredBeforeVerifiability = validCandidates.map((candidate) => {
       const verifiability = typeof candidate.verifiability === 'number' 
         ? Math.max(0, Math.min(1, candidate.verifiability)) 
@@ -291,6 +351,17 @@ async function normalizeClaimResult(
     });
     
     const scoredCandidates = scoredBeforeVerifiability
+      // Apply quality filter (backend safety net for garbage claims)
+      .filter((scored) => {
+        const qualityCheck = passesQualityFilter(scored.candidate);
+        if (!qualityCheck.passes) {
+          candidatesFilteredByQuality++;
+          console.log('[analyze-chunk:quality-filter] Rejected:', qualityCheck.reason, 
+            '| Claim:', scored.candidate.claim_text?.slice(0, 50));
+          return false;
+        }
+        return true;
+      })
       // Filter out low-verifiability candidates (< 0.65) - not concrete enough to check
       .filter((scored) => {
         const passes = scored.verifiability >= 0.65;
@@ -306,6 +377,7 @@ async function normalizeClaimResult(
     console.log('[analyze-chunk:metrics]', {
       rawCandidates: rawCandidates.length,
       anchorFiltered: candidatesFilteredByAnchor,
+      qualityFiltered: candidatesFilteredByQuality,
       verifiabilityFiltered: candidatesFilteredByVerifiability,
       finalCandidates: scoredCandidates.length,
       selected: scoredCandidates.length > 0 ? scoredCandidates[0].candidate.claim_text?.slice(0, 60) : null,
@@ -397,6 +469,7 @@ async function normalizeClaimResult(
     metrics: {
       rawCandidates: rawCandidates?.length || 0,
       anchorFiltered: candidatesFilteredByAnchor,
+      qualityFiltered: candidatesFilteredByQuality,
       verifiabilityFiltered: candidatesFilteredByVerifiability,
       finalCandidates: finalCandidateCount,
     },

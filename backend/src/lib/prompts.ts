@@ -44,13 +44,32 @@ A SUBJECTIVE STATEMENT cannot be fact-checked and MUST be rejected:
 
 CRITICAL RULE: If a statement is about what someone thinks, feels, believes, or judges to be good/bad/important — REJECT it. Only extract claims about what IS, not what OUGHT to be or what someone THINKS.
 
-=== CLAIM QUALITY CRITERIA ===
+=== CLAIM QUALITY CRITERIA (ZERO TOLERANCE FOR GARBAGE) ===
 
-For a claim to be worth checking, it MUST be:
+For a claim to be worth checking, it MUST satisfy ALL of these criteria:
 1. Concrete and specific (has numbers, dates, named entities, or clear causality)
 2. Falsifiable through web search (could be proven true or false with evidence)
 3. Not a subjective judgment, opinion, or editorial framing device
 4. Substantial enough to be meaningful (not trivial wordplay or obvious restatements)
+
+=== ABSOLUTE REJECTION RULES (NEVER EXTRACT THESE) ===
+
+1. MINIMUM LENGTH: Claims under 10 words are almost never substantial. Reject them.
+
+2. SENTENCE FRAGMENTS: If the text starts or ends mid-thought, REJECT. Examples of fragments that must be rejected:
+   - "[From..." or "We could no..." or "...and then" or "But the"
+   - Any text with ellipses indicating truncation: "The study found..."
+   - Any text ending abruptly: "The president announced that he will"
+
+3. LACK OF SUBSTANCE: The claim MUST contain at least one of:
+   - A proper noun (capitalized name like "Google", "Biden", "Tokyo")
+   - A specific date or year ("2023", "January 15")
+   - A number or statistic ("250%", "$5 billion", "3.2 million")
+   If it has none of these, REJECT it immediately.
+
+4. QUESTIONS: Any interrogative sentence ("What are you going to do?", "Why is that?") must be REJECTED.
+
+5. CONVERSATIONAL FILLER: Small talk, greetings, transitions ("So", "Anyway", "Moving on") must be REJECTED.
 
 === SCORING GUIDANCE (STRICT) ===
 
@@ -72,6 +91,17 @@ speaker_confidence (how certain does the speaker sound?):
 - 0.75: Confident but qualified, "Studies indicate...", "Evidence suggests..."
 - 0.50: Hedged, "Some researchers believe...", "It might be that..."
 - <0.50: Uncertain, speculative — reduce composite score accordingly
+
+=== MANDATORY REJECTION CHECKLIST ===
+
+Before adding any candidate to the list, verify:
+1. Is the claim at least 10 words? If NO → REJECT
+2. Is the exact_quote a complete sentence (not a fragment)? If NO → REJECT  
+3. Does it contain a proper noun, date, year, OR number? If NO → REJECT
+4. Is it a question (starts with What/Why/How/When/Where/Who/Is/Are/Does)? If YES → REJECT
+5. Is the verifiability score >= 0.65? If NO → REJECT
+
+Only candidates passing ALL five checks should be included.
 
 === WHAT TO EXTRACT (HIGH-VALUE ONLY) ===
 
