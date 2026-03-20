@@ -354,11 +354,12 @@ export const App = () => {
       <div className="hud-grid" aria-hidden="true" />
       <div className="hud-circuit" aria-hidden="true" />
       <div className="flex h-full min-h-0 w-full flex-col bg-sc-bg-0 relative">
-        <div className="tactile-header flex-shrink-0 flex justify-between items-center h-[52px] px-5 hud-header z-20">
-          <div className="flex gap-4 items-center h-full min-w-0">
-            <SourceCheckLogo size={18} className="flex-shrink-0" />
-            <div className="w-px h-4 bg-sc-border-soft/60" aria-hidden="true" />
-            <nav className="flex gap-1 h-full items-center" role="tablist">
+        <div className="tactile-header flex-shrink-0 flex items-center h-[52px] px-4 hud-header z-20 gap-2">
+          {/* Left: Logo + Nav - can shrink */}
+          <div className="flex gap-2 items-center h-full min-w-0 flex-1">
+            <SourceCheckLogo size={16} className="flex-shrink-0" />
+            <div className="w-px h-3.5 bg-sc-border-soft/60 flex-shrink-0" aria-hidden="true" />
+            <nav className="flex gap-0.5 h-full items-center min-w-0" role="tablist">
               <button
                 onClick={() => setActiveTab('live')}
                 className={`tab-btn transition-all duration-300 ease-out ${activeTab === 'live' ? 'active' : ''}`}
@@ -379,10 +380,13 @@ export const App = () => {
               </button>
             </nav>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          
+          {/* Right: Picker + Settings - fixed width, no shrink */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             <ModelPicker 
               selectedModel={runtimeState.selectedModel} 
               hasCustomKey={hasCustomKey}
+              compact
               onModelChange={async (model) => {
                 try {
                   await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
@@ -393,11 +397,11 @@ export const App = () => {
             />
             <button
               onClick={() => setShowSettings(true)}
-              className="h-[32px] w-[32px] flex items-center justify-center text-sc-muted hover:text-sc-text hover:bg-sc-surface-1 rounded-md transition-all duration-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-sc-accent/30"
+              className="h-7 w-7 flex items-center justify-center text-sc-muted hover:text-sc-text hover:bg-sc-surface-1 rounded-md transition-all duration-200 focus:outline-none"
               aria-label="API key settings"
               title="API key settings"
             >
-              <KeyRound size={15} strokeWidth={1.75} />
+              <KeyRound size={14} strokeWidth={1.75} />
             </button>
           </div>
         </div>

@@ -7,6 +7,7 @@ interface ModelPickerProps {
   selectedModel: GeminiModelOption;
   onModelChange: (model: GeminiModelOption) => void;
   hasCustomKey?: boolean;
+  compact?: boolean;
 }
 
 const MODEL_ICONS: Record<GeminiModelOption, React.ReactNode> = {
@@ -15,11 +16,18 @@ const MODEL_ICONS: Record<GeminiModelOption, React.ReactNode> = {
   'gemini-3-flash-preview': <Brain size={12} />,
 };
 
-/** Simple display labels - just name */
+/** Full display labels */
 const MODEL_LABELS: Record<GeminiModelOption, string> = {
   'gemini-3.1-flash-lite-preview': 'Flash 3.1 Lite',
   'gemini-2.5-flash': 'Flash 2.5',
   'gemini-3-flash-preview': 'Flash 3 Preview',
+};
+
+/** Compact labels for header - just version number */
+const COMPACT_LABELS: Record<GeminiModelOption, string> = {
+  'gemini-3.1-flash-lite-preview': '3.1',
+  'gemini-2.5-flash': '2.5',
+  'gemini-3-flash-preview': '3',
 };
 
 /** Simple speed tags */
@@ -29,7 +37,7 @@ const SPEED_TAGS: Record<'fast' | 'standard' | 'deep', string> = {
   deep: 'Thorough',
 };
 
-export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false }: ModelPickerProps) => {
+export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false, compact = false }: ModelPickerProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -72,22 +80,24 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
 
   return (
     <div ref={containerRef} className="relative">
-      {/* Compact Trigger - Name + Tag */}
+      {/* Trigger - Compact for header, full for elsewhere */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="group flex h-7 items-center gap-1.5 rounded-md bg-sc-surface-1/50 px-2 text-sc-text-soft hover:bg-sc-surface-1 focus:outline-none"
+        className={`group flex items-center gap-1 rounded-md bg-sc-surface-1/50 text-sc-text-soft hover:bg-sc-surface-1 focus:outline-none ${compact ? 'h-6 px-1.5' : 'h-7 px-2'}`}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
         aria-label="Select AI model"
       >
-        <span className="text-[11px] text-sc-text">
-          {MODEL_LABELS[selectedModel]}
+        <span className={`text-sc-text ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+          {compact ? COMPACT_LABELS[selectedModel] : MODEL_LABELS[selectedModel]}
         </span>
-        <span className="text-[9px] uppercase tracking-wider text-sc-muted">
-          {currentModel?.speed ? SPEED_TAGS[currentModel.speed] : 'Balanced'}
-        </span>
-        <ChevronDown size={10} className={`text-sc-muted/60 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        {!compact && (
+          <span className="text-[9px] uppercase tracking-wider text-sc-muted">
+            {currentModel?.speed ? SPEED_TAGS[currentModel.speed] : 'Balanced'}
+          </span>
+        )}
+        <ChevronDown size={compact ? 9 : 10} className={`text-sc-muted/60 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {/* Simple Dropdown - Name + Tag only */}
