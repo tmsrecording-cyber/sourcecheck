@@ -1,8 +1,8 @@
 # Audit Reconciliation — March 19, 2026
 
-## Status: ✅ STABLE FOR TESTING
+## Status: ✅ STABLE FOR TESTING, ⚠️ NOT YET REPO-CLEAN
 
-All gates passing. Audit findings are **known technical debt**, not blockers.
+Core build/test gates are green, but repo/docs hygiene is still behind and local smoke E2E can fail from Playwright Chromium instability.
 
 ---
 
@@ -80,17 +80,19 @@ All gates passing. Audit findings are **known technical debt**, not blockers.
 
 ---
 
-## ✅ Pre-Flight Gates (ALL PASS)
+## ✅ Pre-Flight Gates
 
 | Gate | Status | Evidence |
 |------|--------|----------|
 | Backend reachable | ✅ | `curl` returned 403 (authenticated) |
 | Build fresh | ✅ | `dist/manifest.json` timestamp current |
 | Build passes | ✅ | `npm run build` success |
-| Tests pass | ✅ | 99/99 backend tests |
+| Tests pass | ✅ | 101/101 backend tests |
 | No localhost URLs | ✅ | Release dist check passed |
 | No conflict markers | ✅ | `grep` clean |
-| Git clean | ✅ | Working tree clean |
+| Git clean | ❌ | Working tree still has uncommitted changes |
+| `/health` endpoint | ✅ | `GET /health` implemented and tested |
+| Smoke E2E | ⚠️ | App logic is healthy, but local Playwright Chromium can `SIGABRT` on launch |
 
 ---
 
@@ -103,7 +105,7 @@ All audit findings are:
 2. Already fixed (TC5), OR
 3. Acceptable for launch with monitoring
 
-The codebase is stable for 8-case manual testing.
+The codebase is stable for manual testing, but it should not be described as repo-clean or fully release-gated until the local smoke runtime issue and doc drift are resolved.
 
 ---
 
@@ -117,4 +119,4 @@ The codebase is stable for 8-case manual testing.
 
 ---
 
-*Reconciliation complete. No blockers for test matrix execution.*
+*Reconciliation updated. Functional blockers are down; repo hygiene and smoke-test runtime stability remain.*

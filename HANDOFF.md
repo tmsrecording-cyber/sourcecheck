@@ -2,7 +2,7 @@
 
 **Date:** March 19, 2026  
 **Current Tag:** `v0.1.0-beta`  
-**Status:** Feature-complete, needs verification & hardening
+**Status:** Functionally working, needs profiling, repo cleanup, and release hardening
 
 ---
 
@@ -24,9 +24,9 @@ SourceCheck is a Chrome extension that provides real-time fact-checking for YouT
 | LIVE/HISTORY tabs | ✅ | Switching works, empty states added |
 | TC5 page refresh | ✅ | Grace period + refresh detection implemented |
 | Model selection | ✅ | Labels fixed (2.5=Standard, 3.1=Fast, 3=Deep) |
-| Accuracy score | ✅ | Shows "78% · 3 of 5 resolved" with context |
+| Verification summary | ✅ | Shows resolved/unresolved counts without a synthetic truth score |
 | Build | ✅ | `npm run build` passes |
-| Backend tests | ✅ | 99/99 passing |
+| Backend tests | ✅ | 101/101 passing |
 
 ---
 
@@ -44,18 +44,19 @@ SourceCheck is a Chrome extension that provides real-time fact-checking for YouT
 **Action:** Run Chrome Performance profile (see "Next Steps")
 
 ### 2. E2E Test Status
-**Status:** Test written, not run  
-**Location:** `tests/e2e/tc5-refresh.spec.ts`  
-**Purpose:** Verify cards survive page refresh in real browser  
-**Action:** Run and verify (see "Next Steps")
+**Status:** TC5 refresh E2E passes; smoke E2E is locally flaky due Chromium launch instability  
+**Location:** `tests/e2e/tc5-refresh.spec.ts`, `tests/e2e/extension-smoke.spec.ts`  
+**Purpose:** Verify cards survive page refresh in real browser and extension initializes on a watch page  
+**Action:** Re-run smoke outside the unstable local runtime if needed
 
-### 3. Performance Unverified
-**Status:** Optimizations applied, impact unknown  
+### 3. Performance
+**Status:** Startup/layout cost measured; live feed churn reduced but should be monitored  
 **Changes Made:**
 - MutationObserver scoped to `#movie_player` (was `document.body`)
 - `persistPanelState` debounced 250ms (was immediate)
+- Live feed layout animation churn reduced in `CardFeed.tsx`
 
-**Action:** Profile in Chrome DevTools (see "Next Steps")
+**Action:** Validate on a few real videos with Chrome Performance if residual jank remains
 
 ---
 
@@ -122,7 +123,7 @@ TRANSCRIPT_LOADED payload now includes:
 ### Unit Tests
 ```bash
 cd /Users/mj/Desktop/SourceCheck/backend
-npm test  # 99/99 passing
+npm test  # 101/101 passing
 ```
 
 ### E2E Test (Not Run)
@@ -139,7 +140,7 @@ npx playwright test tests/e2e/tc5-refresh.spec.ts --headed
 - [ ] Press F5 (refresh)
 - [ ] Cards restore within 3 seconds
 - [ ] Switch to HISTORY tab — shows "Checked so far"
-- [ ] Accuracy score shows "X% · Y of Z resolved"
+- [ ] Verification summary shows resolved/unresolved counts correctly
 
 ---
 
@@ -172,7 +173,7 @@ npm run test:e2e
 # or specifically:
 npx playwright test tests/e2e/tc5-refresh.spec.ts --headed
 ```
-**Expected:** Test passes, cards survive refresh
+**Expected:** TC5 passes. If smoke crashes at browser launch, treat it as local Playwright/runtime instability and retry outside the failing environment.
 
 ### Step 3: Add Transition Animations (Optional)
 **Priority:** LOW  
