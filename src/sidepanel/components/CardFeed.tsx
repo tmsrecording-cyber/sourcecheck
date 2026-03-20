@@ -1099,7 +1099,7 @@ const StatusIcon = ({ status }: { status: VerificationStatus }) => {
   );
 };
 
-/* ── Checked claim row with 3D fold ── */
+/* ── Mechanical hinged card ── */
 
 const CheckedClaimRow = ({
   card,
@@ -1124,28 +1124,60 @@ const CheckedClaimRow = ({
     : 'No web source found.';
   const nuanceLine = card.nuance?.trim();
 
-  // 3D fold content variants
+  // MECHANICAL FOLD: Spring-based with staged compression
   const foldVariants = {
     hidden: {
-      rotateX: -90,
+      rotateX: -95,
       opacity: 0,
+      scaleY: 0.3,
       transformOrigin: 'top center' as const,
-      transformPerspective: 1200,
+      transformPerspective: 1400,
       height: 0,
+      y: -10,
       transition: {
-        duration: prefersReducedMotion ? 0 : 0.35,
-        ease: [0.16, 1, 0.3, 1] as [number, number, number, number],
+        type: 'spring' as const,
+        stiffness: 400,
+        damping: 30,
+        mass: 0.9,
+        opacity: { duration: 0.15 },
       },
     },
     visible: {
       rotateX: 0,
       opacity: 1,
+      scaleY: 1,
       transformOrigin: 'top center' as const,
-      transformPerspective: 1200,
+      transformPerspective: 1400,
       height: 'auto',
+      y: 0,
       transition: {
-        duration: prefersReducedMotion ? 0 : 0.4,
-        ease: [0.16, 1, 0.3, 1] as [number, number, number, number],
+        type: 'spring' as const,
+        stiffness: 320,
+        damping: 26,
+        mass: 0.8,
+        opacity: { duration: 0.2, delay: 0.05 },
+      },
+    },
+  };
+
+  // Card compression when collapsed - feels like panels stacking
+  const cardVariants = {
+    collapsed: {
+      scaleY: 1,
+      y: 0,
+      transition: {
+        type: 'spring' as const,
+        stiffness: 500,
+        damping: 35,
+      },
+    },
+    expanded: {
+      scaleY: 1,
+      y: 0,
+      transition: {
+        type: 'spring' as const,
+        stiffness: 400,
+        damping: 30,
       },
     },
   };
@@ -1158,15 +1190,23 @@ const CheckedClaimRow = ({
   return (
     <motion.div
       layout={enableLayoutAnimation}
-      className="relative transformer-card"
+      className="relative mechanical-card"
+      variants={cardVariants}
+      animate={isExpanded ? 'expanded' : 'collapsed'}
       initial={prefersReducedMotion ? false : { opacity: 0, rotateX: 45, scale: 0.96, transformPerspective: 1000 }}
-      animate={{ opacity: 1, rotateX: 0, scale: 1 }}
-      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      whileHover={{ scale: 1.005, transition: { duration: 0.15 } }}
+      style={{ transformStyle: 'preserve-3d' }}
     >
+      {/* Hinge line - visible mechanical joint */}
+      <div className="mechanical-hinge" aria-hidden="true">
+        <div className="hinge-pin" />
+        <div className="hinge-socket" />
+      </div>
+      
       <RailEntry timestampSeconds={card.timestampSeconds} style={verdictMeta.railStyle} isHistoryMode={isHistoryMode}>
-        <div className={`history-entry ml-1${isExpanded ? ' history-entry-expanded' : ''}${isHistoryMode ? ' history-entry-history' : ''}${isLast && isHistoryMode ? ' history-entry-last' : ''}`}>
+        <div className={`mechanical-entry ml-1${isExpanded ? ' mechanical-entry-expanded' : ''}${isHistoryMode ? ' mechanical-entry-history' : ''}${isLast && isHistoryMode ? ' mechanical-entry-last' : ''}`}>
           <span
-            className={`history-entry-accent ${verdictMeta.railStyle.node.split(' ')[0]}`}
+            className={`mechanical-entry-accent ${verdictMeta.railStyle.node.split(' ')[0]}`}
             aria-hidden="true"
           />
 
@@ -1205,21 +1245,28 @@ const CheckedClaimRow = ({
             </motion.div>
           </button>
 
-          <AnimatePresence initial={false}>
+          {/* MECHANICAL FOLD: Layered compression with 3D hinge */}
+          <AnimatePresence initial={false} mode="wait">
             {isExpanded && (
               <motion.div
                 id={detailId}
-                className="history-detail fold-container"
+                className="mechanical-fold"
                 variants={foldVariants}
                 initial="hidden"
                 animate="visible"
                 exit="hidden"
-                style={{ transformStyle: 'preserve-3d', overflow: 'hidden' }}
+                style={{ 
+                  transformStyle: 'preserve-3d',
+                  overflow: 'hidden',
+                }}
               >
-                <div className="history-detail-inner pb-2 pt-1">
-                  <div className="history-detail-panel">
-                    <div className="history-detail-line">
-                      <span className="history-detail-label font-mono">Best source found</span>
+                {/* Compression shadow - visual depth cue */}
+                <div className="fold-shadow-top" aria-hidden="true" />
+                
+                <div className="mechanical-fold-inner pb-2 pt-1">
+                  <div className="mechanical-detail-panel">
+                    <div className="mechanical-detail-line">
+                      <span className="mechanical-detail-label font-mono">Best source found</span>
                       {card.sourceUrl && card.sourceTitle?.trim() ? (
                         <a
                           href={card.sourceUrl}

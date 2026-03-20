@@ -828,6 +828,162 @@ body::before {
     transform-origin: top center;
   }
 
+  /* ── Mechanical Hinged Card System ── */
+  .mechanical-card {
+    transform-style: preserve-3d;
+    perspective: 1400px;
+    transform-origin: top center;
+    position: relative;
+  }
+
+  /* Physical hinge joint */
+  .mechanical-hinge {
+    position: absolute;
+    left: 50%;
+    top: -3px;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  .hinge-pin {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #3a3f4a 0%, #1e2128 100%);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+
+  .hinge-socket {
+    position: absolute;
+    width: 20px;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #2a2f3a 0%, #1a1f28 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* Mechanical fold container */
+  .mechanical-fold {
+    transform-style: preserve-3d;
+    transform-origin: top center;
+    position: relative;
+    margin-top: 2px;
+  }
+
+  /* Compression shadow for depth */
+  .fold-shadow-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 8px;
+    background: linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.2) 0%,
+      rgba(0, 0, 0, 0.05) 50%,
+      transparent 100%
+    );
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  /* Layered panel stacking effect */
+  .mechanical-fold-inner {
+    transform-style: preserve-3d;
+    background: linear-gradient(
+      180deg,
+      rgba(30, 35, 45, 0.4) 0%,
+      rgba(20, 24, 32, 0.6) 100%
+    );
+    border-top: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  /* Mechanical entry base */
+  .mechanical-entry {
+    position: relative;
+    background: linear-gradient(
+      180deg,
+      rgba(25, 28, 35, 0.95) 0%,
+      rgba(18, 21, 28, 0.98) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.15s ease;
+  }
+
+  .mechanical-entry:hover {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .mechanical-entry-expanded {
+    border-radius: 10px 10px 8px 8px;
+  }
+
+  .mechanical-entry-accent {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+  }
+
+  .mechanical-entry:hover .mechanical-entry-accent {
+    opacity: 1;
+  }
+
+  /* Detail panel with depth */
+  .mechanical-detail-panel {
+    padding: 0 12px 8px;
+    background: linear-gradient(
+      180deg,
+      rgba(35, 40, 50, 0.3) 0%,
+      rgba(25, 30, 40, 0.5) 100%
+    );
+    border-radius: 0 0 6px 6px;
+    margin: 0 4px;
+  }
+
+  .mechanical-detail-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .mechanical-detail-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--sc-muted);
+    flex-shrink: 0;
+  }
+
+  /* Spring snap animation helper */
+  @keyframes mechanicalSnap {
+    0% { transform: scaleY(0.95); }
+    40% { transform: scaleY(1.02); }
+    70% { transform: scaleY(0.995); }
+    100% { transform: scaleY(1); }
+  }
+
+  .mechanical-snap {
+    animation: mechanicalSnap 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
   /* ── Investigation sweep ── */
   .investigation-sweep {
     position: absolute;
