@@ -137,9 +137,13 @@ function getClientIp(request: NextRequest): string {
 /**
  * Create a 401 Unauthorized response with proper CORS headers.
  */
-function createUnauthorizedResponse(request: NextRequest): NextResponse {
+function createUnauthorizedResponse(request: NextRequest, reason?: string): NextResponse {
   const response = NextResponse.json(
-    { error: 'Unauthorized', errorCode: 'AUTH_ERROR' },
+    { 
+      error: 'Unauthorized', 
+      errorCode: 'AUTH_ERROR',
+      ...(reason && { reason })
+    },
     { status: 401 }
   );
 
@@ -211,9 +215,20 @@ export function validateClientSecretAuth(request: NextRequest): ClientSecretAuth
   const expectedSecret = getExpectedClientSecret();
   const hasSecret = expectedSecret.length > 0;
   
-  // Skip secret check if not configured (fail open for backward compatibility)
-  // The real authentication boundary is session-token verification
+  // PRODUCTION SAFETY: Fail closed if CLIENT_SECRET is not configured in production
+  // This prevents the auth spoofing vulnerability where anyone can mint tokens
+  // with just the public extension ID when the secret gate is open.
+  // In development/test, we warn but allow through for local testing.
   if (!hasSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('[client-secret-auth] CLIENT_SECRET not configured - rejecting request');
+      return { 
+        authorized: false, 
+        response: createUnauthorizedResponse(request, 'CLIENT_SECRET not configured') 
+      };
+    }
+    // Development/test: warn but allow
+    console.warn('[client-secret-auth] CLIENT_SECRET not configured - allowing in dev mode');
     return { authorized: true };
   }
 

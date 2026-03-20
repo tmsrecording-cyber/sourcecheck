@@ -251,22 +251,26 @@ function passesQualityFilter(candidate: RawCandidate): { passes: boolean; reason
   const claimText = typeof candidate.claim_text === 'string' ? candidate.claim_text.trim() : '';
   const exactQuote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
   
-  // 1. Minimum length check (8 words - allowing shorter factual claims)
+  // 1. Minimum length check (6 words - allowing concise factual claims)
   const wordCount = claimText.split(/\s+/).filter(w => w.length > 0).length;
-  if (wordCount < 8) {
-    return { passes: false, reason: `Claim too short (${wordCount} words, min 8)` };
+  if (wordCount < 6) {
+    return { passes: false, reason: `Claim too short (${wordCount} words, min 6)` };
   }
   
   // 2. Must contain substance: proper noun, date, year, OR number
+  // RELAXED: Also allows clear factual statements with causal/mechanistic language
   const hasProperNoun = /\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/.test(claimText) || // Full names
                        /\b(Google|Microsoft|Apple|Amazon|Tesla|Biden|Trump|China|Russia|Europe|NASA|WHO|FDA|CDC|UN|EU|MIT|Stanford|Harvard)\b/.test(claimText);
   const hasDate = /\b(19|20)\d{2}\b/.test(claimText) || // Years 1900-2099
                  /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}/.test(claimText);
   const hasNumber = /\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?\s*(?:million|billion|trillion)?|\b\d+\s*(?:million|billion|trillion|percent|%)\b/i.test(claimText) ||
                     /\b(one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|million|billion)\s+(percent|people|years|dollars|times)\b/i.test(claimText);
+  // Factual indicators: causal claims, scientific mechanisms, definitive statements
+  const hasFactualIndicator = /\b(causes?|caused|increases?|decreases?|reduces?|prevents?|triggers?|leads?\s+to|results?\s+in|linked\s+to|associated\s+with)\b/i.test(claimText) ||
+                              /\b(is|are|was|were)\s+(a|an|the)?\s*(known|proven|shown|established|documented|scientific)\b/i.test(claimText);
   
-  if (!hasProperNoun && !hasDate && !hasNumber) {
-    return { passes: false, reason: 'Claim lacks substance (no proper noun, date, or number)' };
+  if (!hasProperNoun && !hasDate && !hasNumber && !hasFactualIndicator) {
+    return { passes: false, reason: 'Claim lacks substance (no proper noun, date, number, or clear factual indicator)' };
   }
   
   // 3. Reject questions
