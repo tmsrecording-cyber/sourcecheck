@@ -720,6 +720,16 @@ export async function POST(request: NextRequest) {
 
     // AUTH_ERROR: Return 500 with generic message
     if (isGeminiError(error) && error.code === 'AUTH_ERROR') {
+      if (customApiKey) {
+        return jsonWithCors(
+          request,
+          {
+            error: 'The supplied Google AI Studio key was rejected. Update it in settings and try again.',
+            errorCode: 'INVALID_API_KEY',
+          },
+          { status: 401 }
+        );
+      }
       return jsonWithCors(
         request,
         { error: 'Server configuration error. Contact support.' },

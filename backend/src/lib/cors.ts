@@ -57,6 +57,7 @@ export function getCorsHeaders(request: NextRequest): Record<string, string> {
       'X-Extension-Id',
       'X-Custom-Api-Key',
       'X-Custom-Model',
+      'X-SourceCheck-Client-Secret',
     ].join(', '),
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',

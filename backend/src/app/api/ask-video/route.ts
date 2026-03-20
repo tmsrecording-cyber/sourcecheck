@@ -343,6 +343,17 @@ export async function POST(request: NextRequest) {
     }
 
     if (isGeminiError(error) && error.code === 'AUTH_ERROR') {
+      if (customApiKey) {
+        const response = NextResponse.json(
+          {
+            error: 'The supplied Google AI Studio key was rejected. Update it in settings and try again.',
+            errorCode: 'INVALID_API_KEY',
+          },
+          { status: 401 }
+        );
+        Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
+        return response;
+      }
       const response = NextResponse.json(
         { error: 'Server configuration error. Contact support.' },
         { status: 500 }

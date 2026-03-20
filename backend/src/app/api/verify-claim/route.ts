@@ -17,6 +17,8 @@ import type {
   VerificationStatus,
 } from '@/types/shared';
 
+type SourceType = SourceCard['sourceType'];
+
 interface RawVerification {
   status: string;
   sourceTitle: string;
@@ -29,6 +31,13 @@ const MAX_CLAIM_TEXT_LENGTH = 700;
 const MAX_METADATA_FIELD_LENGTH = 300;
 const MAX_NUANCE_LENGTH = 600;
 const FALLBACK_NO_SOURCE_COPY = 'No grounded source attached.';
+const VALID_SOURCE_TYPES: readonly SourceType[] = [
+  'academic_paper',
+  'news_article',
+  'official_source',
+  'wikipedia',
+  'other',
+] as const;
 
 // Wording format version - bump when changing user-facing unresolved wording
 // This invalidates cached nuance text that may contain old product language
@@ -110,6 +119,11 @@ const resolveUnverifiableLanguage = (params: {
       };
   }
 };
+
+const normalizeSourceType = (value: string | null | undefined): SourceType =>
+  (VALID_SOURCE_TYPES as readonly string[]).includes(value ?? '')
+    ? (value as SourceType)
+    : 'other';
 
 const VERIFICATION_SCHEMA = {
   type: 'object',
@@ -373,7 +387,7 @@ export async function POST(request: NextRequest) {
           const category = inferUnverifiableCategory({
             claimText: claim.claimText,
             claimType: claim.claimType,
-            sourceType: similarClaim.metadata.sourceType || 'other',
+            sourceType: normalizeSourceType(similarClaim.metadata.sourceType),
             nuance: similarClaim.metadata.nuance,
             sourceTitle: similarClaim.metadata.sourceTitle,
           });
@@ -388,7 +402,7 @@ export async function POST(request: NextRequest) {
         status: similarClaim.metadata.status,
         sourceTitle: similarClaim.metadata.sourceTitle,
         sourceUrl: similarClaim.metadata.sourceUrl,
-        sourceType: 'other',
+        sourceType: normalizeSourceType(similarClaim.metadata.sourceType),
         nuance,
         timestampSeconds: claim.timestampSeconds,
         verifiedAt: new Date().toISOString(),
@@ -574,10 +588,7 @@ export async function POST(request: NextRequest) {
     const status: VerificationStatus = hasQualityGrounding ? parsedStatus : 'unverifiable';
 
     // ---- Validate source type ----
-    const validSourceTypes = ['academic_paper', 'news_article', 'official_source', 'wikipedia', 'other'] as const;
-    const sourceType = (validSourceTypes as readonly string[]).includes(rawVerification.sourceType)
-      ? (rawVerification.sourceType as typeof validSourceTypes[number])
-      : 'other';
+    const sourceType = normalizeSourceType(rawVerification.sourceType);
 
     // ---- Resolve source title, type, URL, and nuance ----
     const rawSourceTitle = typeof rawVerification.sourceTitle === 'string'
@@ -760,8 +771,14 @@ export async function POST(request: NextRequest) {
           errorResponse.retryable = true;
           break;
         case 'AUTH_ERROR':
-          statusCode = 401;
-          errorResponse.retryable = false;
+          statusCode = customApiKey ? 401 : 500;
+          errorResponse = {
+            error: customApiKey
+              ? 'The supplied Google AI Studio key was rejected. Update it in settings and try again.'
+              : 'Server configuration error. Contact support.',
+            errorCode: customApiKey ? 'INVALID_API_KEY' : 'AUTH_ERROR',
+            retryable: false,
+          };
           break;
         default:
           statusCode = 502;
