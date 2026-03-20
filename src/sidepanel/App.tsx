@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
-import { AlertTriangle, Settings, KeyRound } from 'lucide-react';
+import { AlertTriangle, KeyRound } from 'lucide-react';
 import { PROVIDER_SETTINGS_KEY } from '../background/providers/types';
 import { VideoHeader } from './components/VideoHeader';
 import { CardFeed } from './components/CardFeed';
@@ -8,6 +8,7 @@ import { AskBox } from './components/AskBox';
 import { ModelPicker } from './components/ModelPicker';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SourceCheckLogo } from './components/SourceCheckLogo';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useExtensionStorage } from './hooks/useExtensionStorage';
 import { lifecycleToAnalysisStatus } from './utils/state';
 import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel } from './components/DebugPanels';
@@ -455,39 +456,6 @@ export const App = () => {
   );
 };
 
-// Error Boundary to prevent white-screen crashes
-class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean; error: Error | null }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('[SourceCheck] App crashed:', error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <PanelShell
-          label="Something went wrong"
-          subcopy="Refresh the YouTube tab to try again."
-          error
-        />
-      );
-    }
-    return this.props.children;
-  }
-}
-
-// Export wrapped App with Error Boundary
 export const AppWithBoundary = () => (
   <ErrorBoundary>
     <App />

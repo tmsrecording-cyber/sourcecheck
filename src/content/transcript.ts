@@ -980,15 +980,12 @@ const lookupPlayerResponseFromScripts = (videoId: string): PlayerResponseLookupR
 
 const lookupPlayerResponseFromHtml = (videoId: string, html: string): PlayerResponseLookupResult => {
   const markerResult = parseFirstPlayerResponseFromText(html);
-  if (markerResult.playerResponse) {
-    const result = lookupPlayerResponse('html', markerResult.playerResponse, videoId);
-    if (result.hasCaptionTracks) {
-      return result;
-    }
+  const markerLookup = markerResult.playerResponse
+    ? lookupPlayerResponse('html', markerResult.playerResponse, videoId)
+    : null;
 
-    if (result.reason === 'video-mismatch') {
-      return result;
-    }
+  if (markerLookup?.hasCaptionTracks) {
+    return markerLookup;
   }
 
   const fromCaptionTracks = extractCaptionTracksFromText(html, videoId);
@@ -999,6 +996,10 @@ const lookupPlayerResponseFromHtml = (videoId: string, html: string): PlayerResp
       source: 'html',
       reason: 'caption-tracks-found',
     };
+  }
+
+  if (markerLookup?.reason === 'video-mismatch') {
+    return markerLookup;
   }
 
   if (markerResult.playerResponse && isResponseForVideo(markerResult.playerResponse, videoId)) {
@@ -2520,9 +2521,18 @@ export const extractTranscriptData = async (
         debug: createTranscriptDebug(null, 'pending'),
       });
     }
-    // Only log unexpected errors as errors
-    console.error('[SourceCheck] Unexpected error extracting transcript:', error);
-    emitTranscriptFetchDebug(onFetchDebug, 'html', 'error', getErrorMessage(error));
+    const errorMessage = getErrorMessage(error);
+    const isRecoverableFetchFailure =
+      error instanceof TypeError ||
+      /failed to fetch|networkerror|load failed/i.test(errorMessage);
+
+    if (isRecoverableFetchFailure) {
+      console.warn('[SourceCheck] Transcript extraction hit a transient fetch failure:', errorMessage);
+    } else {
+      console.error('[SourceCheck] Unexpected error extracting transcript:', error);
+    }
+
+    emitTranscriptFetchDebug(onFetchDebug, 'html', 'error', errorMessage);
     return withPanelState({
       transcript: null,
       debug: createTranscriptDebug('html', 'fetch-failed'),

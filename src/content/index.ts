@@ -4,13 +4,14 @@ import type { TranscriptDebugState, TranscriptFetchDebugEntry } from '../../shar
 import './remote-logger'; // Auto-starts remote logging if SC_LOG_ENDPOINT is set
 
 let currentVideoId: string | null = null;
-const pageSessionId = (() => {
+const createPageSessionId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
 
   return `sc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-})();
+};
+let pageSessionId = createPageSessionId();
 let metadataRetryTimer: number | null = null;
 let transcriptRetryTimer: number | null = null;
 let playbackRetryTimer: number | null = null;
@@ -880,18 +881,42 @@ if (chrome.runtime?.id) {
 
 if (chrome.runtime?.id) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== 'RETRY_TRANSCRIPT') {
+    if (message?.type === 'RETRY_TRANSCRIPT') {
+      const videoId = typeof message.payload?.videoId === 'string' ? message.payload.videoId : null;
+      if (!videoId) {
+        sendResponse({ status: 'error', error: 'Missing videoId.' });
+        return false;
+      }
+
+      const retried = retryTranscriptExtraction(videoId);
+      sendResponse({ status: retried ? 'ok' : 'ignored' });
       return false;
     }
 
-    const videoId = typeof message.payload?.videoId === 'string' ? message.payload.videoId : null;
-    if (!videoId) {
-      sendResponse({ status: 'error', error: 'Missing videoId.' });
-      return false;
+    if (message?.type === 'REANNOUNCE_VIDEO_CONTEXT') {
+      const videoId = typeof message.payload?.videoId === 'string' ? message.payload.videoId : null;
+      if (!videoId) {
+        sendResponse({ status: 'error', error: 'Missing videoId.' });
+        return false;
+      }
+
+      if (videoId !== currentVideoId) {
+        sendResponse({ status: 'ignored' });
+        return false;
+      }
+
+      pageSessionId = createPageSessionId();
+      void sendVideoChanged(videoId)
+        .then(() => sendResponse({ status: 'ok', pageSessionId }))
+        .catch((error) => {
+          sendResponse({
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Failed to reannounce video context.',
+          });
+        });
+      return true;
     }
 
-    const retried = retryTranscriptExtraction(videoId);
-    sendResponse({ status: retried ? 'ok' : 'ignored' });
     return false;
   });
 }

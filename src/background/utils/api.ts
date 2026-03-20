@@ -92,8 +92,8 @@ export async function getSessionToken(): Promise<string | null> {
           const data = await res.json();
           const token: string = typeof data.token === 'string' ? data.token : '';
           console.log('[SourceCheck/API] Got session token:', token ? 'yes (length: ' + token.length + ')' : 'no');
-          cachedSessionToken = token;
           if (token) {
+            cachedSessionToken = token;
             await chrome.storage.session.set({ apiSessionToken: token }).catch(() => {});
           }
           return token || null;
@@ -121,7 +121,6 @@ export async function getSessionToken(): Promise<string | null> {
       }
     }
 
-    cachedSessionToken = '';
     return null;
   })().finally(() => {
     pendingSessionTokenRequest = null;
@@ -540,7 +539,7 @@ export async function fetchWithBYOK(
           // Log provider errors for observability
           if (errorResponse?.errorCode) {
             const category = errorResponse.errorCode === 'QUOTA_EXHAUSTED' ? 'provider_quota_exhausted'
-              : errorResponse.errorCode === 'AUTH_ERROR' ? 'provider_auth_error'
+              : errorResponse.errorCode === 'AUTH_ERROR' || errorResponse.errorCode === 'INVALID_API_KEY' ? 'provider_auth_error'
               : errorResponse.errorCode === 'RATE_LIMITED' ? 'rate_limited'
               : 'verify_failed';
             

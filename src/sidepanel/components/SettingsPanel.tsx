@@ -269,9 +269,9 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
               </div>
               <p className="mt-2 text-[13px] leading-relaxed text-sc-text-soft">
                 {keyStatus === 'missing' 
-                  ? 'Add your Google AI Studio key to enable local analysis mode.'
+                  ? 'Add your Google AI Studio key to let SourceCheck use your own Gemini quota.'
                   : keyStatus === 'present'
-                  ? 'Your API key is saved. Local analysis is available.'
+                  ? 'Your API key is saved. SourceCheck will use it for Gemini requests when needed.'
                   : keyStatus === 'invalid'
                   ? 'Your API key appears invalid or expired. Update it below.'
                   : 'Your API quota is exhausted. Try again tomorrow or use a different key.'}

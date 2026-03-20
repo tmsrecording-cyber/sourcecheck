@@ -163,7 +163,7 @@ let hydratedAt: number | null = null; // TC5: Timestamp of last hydration for gr
 let lastAnalyzedAt = 0;
 
 // PERFORMANCE FIX: Debounce persistence to reduce storage writes
-let persistDebounceTimer: number | null = null;
+let persistDebounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 let pendingPersistOptions: { includeTranscript?: boolean; includeCards?: boolean; includeQueue?: boolean } = {};
 const PERSIST_DEBOUNCE_MS = 250; // Batch rapid state changes into single write
 let processingGeneration = 0;
@@ -669,6 +669,7 @@ const mergeVideoMetadata = (
   nextVideo: ActiveVideoContext
 ): ActiveVideoContext => ({
   ...currentVideo,
+  pageSessionId: nextVideo.pageSessionId,
   title: preferKnownMetadata(currentVideo.title, nextVideo.title),
   channel: preferKnownMetadata(currentVideo.channel, nextVideo.channel),
   sourceTabId: nextVideo.sourceTabId ?? currentVideo.sourceTabId,
@@ -1085,6 +1086,13 @@ const MAX_CHUNK_BATCH_SIZE = 24;
 const MIN_CHUNK_BATCH_SIZE = 12; // Increased from 8 to ensure sufficient context
 const getChunkBatchSize = () =>
   Math.min(MAX_CHUNK_BATCH_SIZE, Math.max(MIN_CHUNK_BATCH_SIZE, Math.ceil(getEffectivePlaybackRate() * 10)));
+
+const STARTUP_PREVIEW_LOOKAHEAD_SECONDS = 30;
+const MAX_PREVIEW_CHUNKS = 6;
+const MIN_PREVIEW_WORDS = 10;
+const MIN_ANALYZE_WORDS = 10;
+const MIN_STARTUP_ANALYZE_WORDS = 6;
+const SENTENCE_END_REGEX = /[.!?](?:["')\]]+)?$/;
 
 // Minimum cooldown between analyze-chunk requests to prevent backend hammering
 const MIN_ANALYSIS_COOLDOWN_MS = 3000;
@@ -1826,10 +1834,10 @@ const persistPanelState = (options: {
   
   // Clear existing timer and schedule new one
   if (persistDebounceTimer) {
-    clearTimeout(persistDebounceTimer);
+    globalThis.clearTimeout(persistDebounceTimer);
   }
   
-  persistDebounceTimer = window.setTimeout(() => {
+  persistDebounceTimer = globalThis.setTimeout(() => {
     flushPersistPanelState(pendingPersistOptions);
     pendingPersistOptions = {}; // Reset after flush
     persistDebounceTimer = null;
@@ -2370,17 +2378,51 @@ const trimPreviewText = (text: string, maxChars = 180) => {
   return firstSpaceIndex > 0 ? tail.slice(firstSpaceIndex + 1) : tail;
 };
 
+const countWords = (text: string) => {
+  const normalized = text.trim();
+  return normalized ? normalized.split(/\s+/).length : 0;
+};
+
 const getLivePreview = (currentTime: number | null) => {
   const currentIndex = getTranscriptIndexAtTime(currentTime);
   if (currentIndex === -1) return null;
-  const previewStart = Math.max(0, currentIndex);
-  const previewEnd = Math.min(currentTranscript.length, currentIndex + 3);
   const leashCutoff = getLeashCutoff(currentTime);
-  const previewChunks = currentTranscript
-    .slice(previewStart, previewEnd)
-    .filter((chunk, index) => (
-      currentTime === null || chunk.startTime <= (leashCutoff ?? Number.POSITIVE_INFINITY) || index === 0
-    ));
+  const previewCutoff =
+    currentTime === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(leashCutoff ?? currentTime, currentTime + STARTUP_PREVIEW_LOOKAHEAD_SECONDS);
+  const previewChunks: typeof currentTranscript = [];
+  let previewWordCount = 0;
+
+  for (let index = currentIndex; index < currentTranscript.length; index += 1) {
+    const chunk = currentTranscript[index];
+    const text = chunk.text.trim();
+    if (!text) {
+      continue;
+    }
+
+    if (previewChunks.length > 0) {
+      if (previewChunks.length >= MAX_PREVIEW_CHUNKS) {
+        break;
+      }
+
+      if (currentTime !== null && chunk.startTime > previewCutoff && previewWordCount >= MIN_PREVIEW_WORDS) {
+        break;
+      }
+    }
+
+    previewChunks.push(chunk);
+    previewWordCount += countWords(text);
+
+    const combinedPreview = previewChunks.map((previewChunk) => previewChunk.text.trim()).join(' ');
+    if (
+      previewWordCount >= MIN_PREVIEW_WORDS &&
+      (SENTENCE_END_REGEX.test(combinedPreview.trim()) || previewChunks.length >= 3)
+    ) {
+      break;
+    }
+  }
+
   const previewText = previewChunks.map((chunk) => chunk.text.trim()).filter(Boolean).join(' ');
   return trimPreviewText(previewText);
 };
@@ -2523,8 +2565,12 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
   // wait for more transcript history before calling the API, unless this is
   // the very last available chunk in the transcript.
   const combinedText = chunksToProcess.map((c) => c.text).join(' ');
-  const wordCount = combinedText.trim().split(/\s+/).length;
-  if (wordCount < 10 && currentIndex < currentTranscript.length - 1) {
+  const trimmedCombinedText = combinedText.trim();
+  const wordCount = countWords(trimmedCombinedText);
+  const isStartupBatch = startIndex === 0;
+  const minWordsRequired = isStartupBatch ? MIN_STARTUP_ANALYZE_WORDS : MIN_ANALYZE_WORDS;
+  const hasSentenceBoundary = SENTENCE_END_REGEX.test(trimmedCombinedText);
+  if (wordCount < minWordsRequired && currentIndex < currentTranscript.length - 1 && !hasSentenceBoundary) {
     console.log('[Pipeline] Skipping: insufficient words', { wordCount, currentIndex, totalChunks: currentTranscript.length });
     return;
   }
@@ -3074,6 +3120,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }).catch((error: unknown) => ({
         status: 'error',
         error: error instanceof Error ? error.message : 'Retry transcript failed.',
+      }));
+
+      sendResponse(result);
+      return;
+    }
+
+    if (message.type === 'REANNOUNCE_VIDEO_CONTEXT') {
+      const videoId = message.payload?.videoId ?? currentVideoInfo?.videoId ?? null;
+      if (!videoId) {
+        sendResponse({ status: 'ignored' });
+        return;
+      }
+
+      const targetTabId = currentVideoInfo?.sourceTabId;
+      if (!targetTabId) {
+        sendResponse({ status: 'error', error: 'No source tab is associated with the active video.' });
+        return;
+      }
+
+      const targetTab = await chrome.tabs.get(targetTabId).catch(() => null);
+      if (!targetTab?.id) {
+        sendResponse({ status: 'error', error: 'The source video tab is no longer available.' });
+        return;
+      }
+
+      const urlObj = targetTab.url ? new URL(targetTab.url) : null;
+      const urlVideoId = urlObj?.searchParams.get('v');
+      if (urlVideoId !== videoId) {
+        sendResponse({ status: 'error', error: 'The source tab no longer matches the active video.' });
+        return;
+      }
+
+      const result = await chrome.tabs.sendMessage(targetTab.id, {
+        type: 'REANNOUNCE_VIDEO_CONTEXT',
+        payload: { videoId },
+      }).catch((error: unknown) => ({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Video context refresh failed.',
       }));
 
       sendResponse(result);

@@ -7,17 +7,19 @@
  *             currentTranscript and calls chrome.storage.local.remove(TRANSCRIPT_SNAPSHOT_KEY).
  *             (Worker uses the constant; we assert against the canonical key value.)
  *
- *   Part B — sidepanel/App.tsx: the storage.onChanged listener no longer guards
- *             against null, so markTranscriptUnavailable's remove() call propagates
- *             to React state and clears the stale transcript.
+ *   Part B — sidepanel storage hook/state utils: the storage.onChanged listener
+ *             path no longer guards against null, so markTranscriptUnavailable's
+ *             remove() call propagates to React state and clears the stale transcript.
  *
  * Part A: tested by importing the real service-worker.ts with a Chrome API mock,
  *   then triggering the TRANSCRIPT_FAILED message path and asserting on the mock.
  *
- * Part B: App.tsx requires jsdom + React to mount. Because the sidepanel is a
- *   browser extension UI, we use source-level assertions as a BRITTLE regression guard:
- *   the tests fail if the null guard is re-added or the unconditional setTranscript
- *   call is removed. These are intentionally fragile to catch logic regressions.
+ * Part B: the storage listener logic now lives below App.tsx in the sidepanel
+ *   storage hook/state utilities. Because mounting the full extension UI here
+ *   would require jsdom + React Testing Library, we use source-level assertions
+ *   as a BRITTLE regression guard: the tests fail if the null guard is re-added
+ *   or the unconditional transcript propagation is removed. These are
+ *   intentionally fragile to catch logic regressions.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -81,23 +83,27 @@ type ChromeMock = ReturnType<typeof makeChromeMock>;
  * and resolves when sendResponse is called (or after a safety timeout).
  * This is more robust than a fixed delay because it waits for actual completion.
  */
+type RuntimeMessageListener = (
+  msg: unknown,
+  sender: unknown,
+  sendResponse: (response?: unknown) => void
+) => boolean | void | Promise<unknown>;
+
 async function sendMessage(
-  listener: (msg: unknown, sender: unknown, sendResponse: () => void) => void,
+  listener: RuntimeMessageListener,
   message: unknown,
   timeoutMs = 100
-): Promise<void> {
-  const sendResponse = vi.fn();
-  
-  return new Promise<void>((resolve, reject) => {
+): Promise<unknown> {
+  return new Promise<unknown>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       reject(new Error(`sendMessage timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    
-    const wrappedSendResponse = () => {
+
+    const wrappedSendResponse = (response?: unknown) => {
       clearTimeout(timeoutId);
-      resolve();
+      resolve(response);
     };
-    
+
     listener(message, { tab: null }, wrappedSendResponse);
   });
 }
@@ -208,25 +214,27 @@ describe('Fix 5 Part A: markTranscriptUnavailable removes transcript snapshot fr
       payload: { videoId: 'yt-test-003', debug: { source: null, reason: 'timeout', attemptCount: 1 } },
     });
 
-    // The worker syncs module state → runtimeState before every session.set call.
-    // After markTranscriptUnavailable(), currentTranscript is [], so
-    // runtimeState.transcriptChunkCount must be 0 in the persisted payload.
-    const sessionSetCalls = chrome.storage.session.set.mock.calls;
-    const lastPayload = sessionSetCalls[sessionSetCalls.length - 1]?.[0] as Record<string, unknown> | undefined;
-    const persistedRuntime = lastPayload?.workerRuntimeState as { transcriptChunkCount?: number } | undefined;
-    expect(persistedRuntime?.transcriptChunkCount).toBe(0);
+    // Persist is debounced in the worker, so wait for the session payload that
+    // reflects the transcript failure rather than asserting immediately after
+    // sendResponse().
+    await vi.waitFor(() => {
+      const sessionSetCalls = chrome.storage.session.set.mock.calls;
+      const lastPayload = sessionSetCalls[sessionSetCalls.length - 1]?.[0] as Record<string, unknown> | undefined;
+      const persistedRuntime = lastPayload?.workerRuntimeState as { transcriptChunkCount?: number } | undefined;
+      expect(persistedRuntime?.transcriptChunkCount).toBe(0);
+    }, { timeout: 1000, interval: 25 });
   });
 });
 
 // ---------------------------------------------------------------------------
-// Part B — App.tsx (source-level regression guard)
+// Part B — sidepanel storage hook/state utils (source-level regression guard)
 //
-// App.tsx is the sidepanel React component. Mounting it requires jsdom + React
-// Testing Library, which are not part of this backend test setup. Instead we
-// verify the null-guard removal through source inspection: if the guard were
-// re-added, these tests would fail immediately.
+// The sidepanel storage hook/state utility path would require jsdom + React
+// Testing Library to mount end-to-end. Instead we verify the null-guard
+// removal through source inspection: if the guard were re-added, these tests
+// would fail immediately.
 // ---------------------------------------------------------------------------
-describe('Fix 5 Part B: App.tsx storage listener propagates null transcript to React state', () => {
+describe('Fix 5 Part B: storage listener path propagates null transcript to React state', () => {
   const storageHookSource = readFileSync(
     resolve(__dirname, '../../src/sidepanel/hooks/useExtensionStorage.ts'),
     'utf-8'

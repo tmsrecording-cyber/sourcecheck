@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { AnalysisStatus, PlaybackState, SourceCard, VerificationStatus } from '../../../shared/types';
+import type { AnalysisStatus, PlaybackState, SourceCard } from '../../../shared/types';
 import { formatTime } from '../utils/formatTime';
 
 interface VideoHeaderProps {
@@ -57,20 +57,6 @@ const STATUS_META: Record<
   },
 };
 
-const VERDICT_TICK: Record<VerificationStatus, string> = {
-  supported: 'bg-sc-supported',
-  partial: 'bg-sc-partial',
-  disputed: 'bg-sc-disputed',
-  unverifiable: 'bg-white/20',
-};
-
-const TRUTH_WEIGHTS: Record<VerificationStatus, number> = {
-  supported: 1,
-  partial: 0.68,
-  disputed: 0.22,
-  unverifiable: -1, // sentinel: excluded from score
-};
-
 export const VideoHeader = ({
   title,
   channel,
@@ -90,7 +76,9 @@ export const VideoHeader = ({
   const scanProgress = playbackState?.duration && lastScannedTimestamp !== null
     ? Math.min(100, Math.max(0, (lastScannedTimestamp / safeDuration) * 100))
     : progress;
-  const statusMeta = STATUS_META[status];
+  const isPlaybackActive = Boolean(playbackState && !playbackState.paused);
+  const displayStatus = status === 'ready' && isPlaybackActive ? 'monitoring' : status;
+  const statusMeta = STATUS_META[displayStatus];
   const timelineCards = useMemo(() => {
     if (!cards.length) return [];
 
@@ -100,20 +88,7 @@ export const VideoHeader = ({
       ? cards.filter((_card, index) => index % timelineStep === 0)
       : cards;
   }, [cards]);
-  const truthScore = useMemo(() => {
-    if (!cards.length) return null;
-
-    const scorable = cards.filter((card) => card.status !== 'unverifiable');
-    if (!scorable.length) return null;
-
-    const sample = scorable.slice(0, 6);
-    const average = sample.reduce((sum, card) => sum + TRUTH_WEIGHTS[card.status], 0) / sample.length;
-
-    return Math.round(average * 100);
-  }, [cards]);
-
-  // Score summary: show resolved counts by status for semantic clarity
-  const scoreSummary = useMemo(() => {
+  const verificationSummary = useMemo(() => {
     if (!cards.length) return null;
     
     const supported = cards.filter(c => c.status === 'supported').length;
@@ -124,7 +99,6 @@ export const VideoHeader = ({
     
     if (resolved === 0 && unresolved === 0) return null;
     
-    // Build compact summary string
     const parts: string[] = [];
     if (supported > 0) parts.push(`${supported} supported`);
     if (partial > 0) parts.push(`${partial} mixed`);
@@ -134,40 +108,13 @@ export const VideoHeader = ({
     return { text: parts.join(' • '), resolved, total: cards.length };
   }, [cards]);
 
-  // Truth Score color coding per design spec:
-  // 75% - 100%: sc-supported (Google Green)
-  // 45% - 74%: sc-accent (Gold/Orange)
-  // 0% - 44%: sc-disputed (Google Red)
-  const scoreClass = truthScore === null
-    ? ''
-    : truthScore >= 75
-      ? 'text-sc-supported'
-      : truthScore >= 45
-        ? 'text-sc-accent'
-        : 'text-sc-disputed';
-
-  const scoreBgClass = truthScore === null
-    ? ''
-    : truthScore >= 75
-      ? 'bg-sc-supported'
-      : truthScore >= 45
-        ? 'bg-sc-accent'
-        : 'bg-sc-disputed';
-
-  const isActive = status === 'monitoring' || status === 'verifying';
-  const syncLabel = status === 'ready'
-    ? 'Fully synced'
-    : status === 'verifying'
-      ? 'Checking'
-      : status === 'monitoring'
-        ? 'Live'
-        : 'Standby';
+  const isActive = displayStatus === 'monitoring' || displayStatus === 'verifying';
   const anchorTime = isActive
     ? playbackState?.currentTime ?? lastScannedTimestamp ?? null
     : lastScannedTimestamp ?? playbackState?.currentTime ?? null;
-  const anchorCopy = status === 'no-transcript'
+  const anchorCopy = displayStatus === 'no-transcript'
     ? 'Transcript unavailable'
-    : status === 'verifying' && anchorTime !== null
+    : displayStatus === 'verifying' && anchorTime !== null
       ? `Checking at ${formatTime(anchorTime)}`
       : anchorTime !== null
         ? `At ${formatTime(anchorTime)}`
@@ -176,8 +123,8 @@ export const VideoHeader = ({
   // PHASE 1D.11 FIX: Show different status when transcript exists vs waiting for transcript
   const hasTranscriptContent = (chunksScanned ?? 0) > 0 || (lastScannedTimestamp ?? 0) > 0;
   const statusLineCopy =
-    status === 'monitoring' ? (hasTranscriptContent ? 'Scanning transcript for claims…' : 'Listening for a checkable claim.') :
-    status === 'verifying' ? 'Verifying a claim…' :
+    displayStatus === 'monitoring' ? (hasTranscriptContent ? 'Scanning transcript for claims…' : 'Listening for a checkable claim.') :
+    displayStatus === 'verifying' ? 'Verifying a claim…' :
     null;
 
   return (
@@ -210,34 +157,19 @@ export const VideoHeader = ({
         </p>
       </div>
 
-      {/* Truth Score - Enhanced per design spec */}
-      {truthScore !== null && (
-        <div className="mt-4">
-          <div className="flex items-end justify-between">
-            <span className="truth-score-label text-[9px] font-bold tracking-[0.12em] uppercase text-sc-muted/60 pb-0.5 font-sc">
-              Accuracy Score
+      {verificationSummary && (
+        <div className="mt-4 rounded-md border border-sc-border-soft/70 bg-sc-surface-1/60 px-3 py-2.5">
+          <div className="flex items-end justify-between gap-3">
+            <span className="text-[9px] font-bold tracking-[0.12em] uppercase text-sc-muted/60">
+              Checked claims
             </span>
-            <span className={`truth-score-value ${scoreClass}`}>
-              {truthScore}%
-              {scoreSummary && (
-                <span className="text-[11px] text-sc-muted/60 ml-1.5 font-normal">
-                  · {scoreSummary.resolved} of {scoreSummary.total} resolved
-                </span>
-              )}
+            <span className="text-[11px] text-sc-muted/70">
+              {verificationSummary.resolved} resolved of {verificationSummary.total}
             </span>
           </div>
-          <div className="truth-score-bar mt-2 w-full border border-sc-border-soft/50">
-            <div
-              className={`truth-score-fill ${scoreBgClass}`}
-              style={{ width: `${truthScore}%` }}
-            />
-          </div>
-          {/* Score summary: resolved breakdown for semantic clarity */}
-          {scoreSummary && (
-            <p className="mt-1.5 text-[10px] font-mono text-sc-muted/75 tracking-wide">
-              {scoreSummary.text}
-            </p>
-          )}
+          <p className="mt-1.5 text-[10px] font-mono text-sc-muted/80 tracking-wide">
+            {verificationSummary.text}
+          </p>
         </div>
       )}
 

@@ -532,7 +532,7 @@ const getThoughtReadout = (
   if (wordCount < 5) {
     return {
       state: 'rejected',
-      message: 'Incomplete phrase.',
+      message: 'Captions detected. Waiting for a complete line.',
     };
   }
 
@@ -787,8 +787,11 @@ const LiveReadingStrip = ({
   const cleaned = previewText ? cleanPreview(previewText) : '';
   // PHASE 1D.11 FIX: Only show placeholder when no real preview exists
   const hasRealPreview = Boolean(previewText?.trim());
-  const transcriptLine = cleaned || (hasRealPreview ? '' : 'Listening…');
   const wordCount = cleaned ? cleaned.split(/\s+/).filter(Boolean).length : 0;
+  const isFragmentaryPreview = !secondary && wordCount > 0 && wordCount < 5;
+  const transcriptLine = isFragmentaryPreview
+    ? 'Capturing a complete line…'
+    : (cleaned || (hasRealPreview ? '' : 'Listening…'));
   const [hudFrame, setHudFrame] = useState(0);
   const [selectedContextId, setSelectedContextId] = useState<string | null>(null);
   const thoughtEntities = useMemo(
@@ -1057,12 +1060,14 @@ const CheckedClaimRow = ({
   onToggle,
   isHistoryMode = false,
   isLast = false,
+  enableLayoutAnimation = false,
 }: {
   card: SourceCard;
   isExpanded: boolean;
   onToggle: () => void;
   isHistoryMode?: boolean;
   isLast?: boolean;
+  enableLayoutAnimation?: boolean;
 }) => {
   const prefersReducedMotion = useReducedMotion();
   const verdictMeta = VERDICT_META[card.status];
@@ -1105,7 +1110,7 @@ const CheckedClaimRow = ({
 
   return (
     <motion.div
-      layout
+      layout={enableLayoutAnimation}
       className="relative transformer-card"
       initial={prefersReducedMotion ? false : { opacity: 0, rotateX: 45, scale: 0.96, transformPerspective: 1000 }}
       animate={{ opacity: 1, rotateX: 0, scale: 1 }}
@@ -1220,6 +1225,7 @@ export const CardFeed = ({
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
+  const enableListLayoutAnimations = activeTab === 'history' && !prefersReducedMotion;
   const isInitialLoading =
     status === 'loading' &&
     cards.length === 0 &&
@@ -1242,11 +1248,17 @@ export const CardFeed = ({
   const showTypingCursor = status !== 'idle' && status !== 'error' && status !== 'no-transcript';
 
   // FIX: Always show reading state when monitoring/verifying/loading with no cards
-  const showReadingState =
+  const showPrimaryReadingState =
     !latestCheckedCard &&
     !latestPendingClaim &&
     isAnalyzing &&
     (chunksScanned > 0 || lastScannedTimestamp !== null || Boolean(currentScanPreview) || status === 'monitoring' || status === 'verifying');
+  const showSecondaryReadingState =
+    activeTab === 'live' &&
+    !!latestCheckedCard &&
+    !latestPendingClaim &&
+    isLiveReading &&
+    (activeReadingTimestamp !== null || Boolean(activePreview));
 
   const showResumeLive =
     !isPinned &&
@@ -1283,7 +1295,7 @@ export const CardFeed = ({
         ) : (
           <>
             {/* Primary: reading strip when nothing else to show */}
-            {activeTab === 'live' && showReadingState && !latestCheckedCard && !latestPendingClaim && (
+            {activeTab === 'live' && showPrimaryReadingState && !latestCheckedCard && !latestPendingClaim && (
               <LiveReadingStrip
                 timestampSeconds={activeReadingTimestamp}
                 previewText={activePreview}
@@ -1301,7 +1313,6 @@ export const CardFeed = ({
                 {latestCheckedCard && (
                   <motion.div
                     key={latestCheckedCard.id}
-                    layout
                     className="transformer-card"
                     initial={prefersReducedMotion ? false : transformerVariants.initial}
                     animate={transformerVariants.animate}
@@ -1316,12 +1327,26 @@ export const CardFeed = ({
               </AnimatePresence>
             )}
 
+            {/* Continue showing active reading after the first checked card so the feed
+                does not appear frozen between verification events. */}
+            {showSecondaryReadingState && (
+              <LiveReadingStrip
+                timestampSeconds={activeReadingTimestamp}
+                previewText={currentScanPreview || activePreview || 'Scanning for claims…'}
+                secondary
+                showCursor={showTypingCursor}
+                extractedEntities={scanEntities}
+                actionState={scanActionState}
+                reason={scanReason}
+                onEntitySelect={onEntitySelect}
+              />
+            )}
+
             {/* Pending check */}
             <AnimatePresence mode="popLayout">
               {activeTab === 'live' && latestPendingClaim && (
                 <motion.div
                   key={latestPendingClaim.id}
-                  layout
                   className="transformer-card"
                   initial={prefersReducedMotion ? false : transformerVariants.initial}
                   animate={transformerVariants.animate}
@@ -1337,7 +1362,7 @@ export const CardFeed = ({
             </AnimatePresence>
 
             {/* No-transcript / error / idle states */}
-            {!latestCheckedCard && !latestPendingClaim && !showReadingState && (
+            {!latestCheckedCard && !latestPendingClaim && !showPrimaryReadingState && (
               status === 'no-transcript' ? (
                 <StateCard
                   badgeLabel="Transcript unavailable"
@@ -1387,14 +1412,14 @@ export const CardFeed = ({
 
             {/* Checked claims list */}
             {olderCards.length > 0 && (
-              <motion.div layout className="flex flex-col">
-                <motion.div layout className={activeTab === 'history' ? 'pl-[24px]' : 'pl-[72px]'}>
+              <div className="flex flex-col">
+                <div className={activeTab === 'history' ? 'pl-[24px]' : 'pl-[72px]'}>
                   <div className="ml-1">
                     <p className="feed-section-label">
                       {activeTab === 'history' ? 'All checked claims' : 'Checked so far'}
                     </p>
                   </div>
-                </motion.div>
+                </div>
                 {olderCards.map((card, index) => (
                   <CheckedClaimRow
                     key={`h-${card.id}`}
@@ -1405,9 +1430,10 @@ export const CardFeed = ({
                     }}
                     isHistoryMode={activeTab === 'history'}
                     isLast={index === olderCards.length - 1}
+                    enableLayoutAnimation={enableListLayoutAnimations}
                   />
                 ))}
-              </motion.div>
+              </div>
             )}
 
             {/* Empty history state */}
@@ -1424,12 +1450,12 @@ export const CardFeed = ({
 
             {/* Q&A History (HISTORY tab only) */}
             {activeTab === 'history' && askHistory.length > 0 && (
-              <motion.div layout className="flex flex-col gap-2">
-                <motion.div layout className="pl-[72px]">
+              <div className="flex flex-col gap-2">
+                <div className="pl-[72px]">
                   <div className="ml-1">
                     <p className="feed-section-label feed-section-label-qa">Q&A History</p>
                   </div>
-                </motion.div>
+                </div>
                 {askHistory.map((entry, index) => (
                   <AskResponseCard
                     key={`${entry.query}-${entry.timestampSeconds}-${index}`}
@@ -1439,7 +1465,7 @@ export const CardFeed = ({
                     sources={entry.sources}
                   />
                 ))}
-              </motion.div>
+              </div>
             )}
 
           </>
