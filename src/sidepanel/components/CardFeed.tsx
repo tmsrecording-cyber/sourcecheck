@@ -15,7 +15,9 @@ import type {
 import { SourceCard as LiveResultCard } from './SourceCard';
 import { AskResponseCard } from './AskResponseCard';
 import { getContextForEntity, type ContextSnippet } from './thoughtContext';
+import { buildModelCssVars } from '../styles/modelTheme';
 import { formatTime } from '../utils/formatTime';
+import { stripLegacyCachePrefix } from '../utils/trustCopy';
 
 interface CardFeedProps {
   askHistory?: Array<{
@@ -45,29 +47,35 @@ interface CardFeedProps {
 }
 
 const RAIL_STYLE = {
-  accent: { 
-    from: 'from-sc-accent', 
-    node: 'bg-sc-accent shadow-[0_0_0_4px_rgba(200,163,106,0.18)]' 
+  accent: {
+    accentClass: 'bg-sc-accent',
+    solid: 'var(--model-accent-solid)',
+    rgb: 'var(--model-accent-rgb, 138, 180, 248)',
   },
-  soft: { 
-    from: 'from-sc-accent-soft', 
-    node: 'bg-sc-accent-soft shadow-[0_0_0_4px_rgba(231,210,173,0.18)]' 
+  soft: {
+    accentClass: 'bg-sc-accent',
+    solid: 'var(--model-accent-solid)',
+    rgb: 'var(--model-accent-rgb, 138, 180, 248)',
   },
-  supported: { 
-    from: 'from-sc-supported', 
-    node: 'bg-sc-supported shadow-[0_0_0_4px_rgba(137,176,134,0.18)]' 
+  supported: {
+    accentClass: 'bg-sc-supported',
+    solid: 'var(--sc-supported)',
+    rgb: 'var(--sc-supported-rgb)',
   },
-  partial: { 
-    from: 'from-sc-partial', 
-    node: 'bg-sc-partial shadow-[0_0_0_4px_rgba(196,143,83,0.18)]' 
+  partial: {
+    accentClass: 'bg-sc-partial',
+    solid: 'var(--sc-partial)',
+    rgb: 'var(--sc-partial-rgb)',
   },
-  disputed: { 
-    from: 'from-sc-disputed', 
-    node: 'bg-sc-disputed shadow-[0_0_0_4px_rgba(198,111,93,0.18)]' 
+  disputed: {
+    accentClass: 'bg-sc-disputed',
+    solid: 'var(--sc-disputed)',
+    rgb: 'var(--sc-disputed-rgb)',
   },
-  muted: { 
-    from: 'from-sc-neutral', 
-    node: 'bg-sc-neutral shadow-[0_0_0_4px_rgba(122,109,95,0.18)]' 
+  muted: {
+    accentClass: 'bg-sc-neutral',
+    solid: 'var(--sc-neutral)',
+    rgb: 'var(--sc-neutral-rgb)',
   },
 } as const;
 
@@ -76,7 +84,7 @@ const VERDICT_META: Record<
   {
     label: string;
     tone: string;
-    railStyle: { from: string; node: string };
+    railStyle: { accentClass: string; solid: string; rgb: string };
   }
 > = {
   supported: {
@@ -206,6 +214,92 @@ const MAX_HISTORY_ROWS = 20;
 const HISTORY_ROW_TRANSITION = {
   duration: 0.3,
   ease: [0.16, 1, 0.3, 1] as const,
+};
+
+export type LiveStripMode = 'primary' | 'forming' | 'watching';
+
+export type PromotedLiveHeroMode = 'none' | 'pending' | 'checked';
+
+export const resolvePromotedLiveLayout = ({
+  activeTab,
+  hasCheckedCard,
+  hasPendingClaim,
+}: {
+  activeTab: 'live' | 'history';
+  hasCheckedCard: boolean;
+  hasPendingClaim: boolean;
+}): {
+  heroMode: PromotedLiveHeroMode;
+  olderCardsStartIndex: number;
+} => {
+  if (activeTab !== 'live') {
+    return {
+      heroMode: 'none',
+      olderCardsStartIndex: 0,
+    };
+  }
+
+  if (hasPendingClaim) {
+    return {
+      heroMode: 'pending',
+      olderCardsStartIndex: 0,
+    };
+  }
+
+  if (hasCheckedCard) {
+    return {
+      heroMode: 'checked',
+      olderCardsStartIndex: 1,
+    };
+  }
+
+  return {
+    heroMode: 'none',
+    olderCardsStartIndex: 0,
+  };
+};
+
+const buildPromotedClaimKey = ({
+  claimText,
+  timestampSeconds,
+}: {
+  claimText: string;
+  timestampSeconds: number;
+}) => `${timestampSeconds}:${claimText.trim().toLowerCase()}`;
+
+export const getLiveStripMode = ({
+  activeTab,
+  status,
+  hasCheckedCard,
+  hasPendingClaim,
+  hasScanSignal,
+}: {
+  activeTab: 'live' | 'history';
+  status: AnalysisStatus;
+  hasCheckedCard: boolean;
+  hasPendingClaim: boolean;
+  hasScanSignal: boolean;
+}): LiveStripMode | null => {
+  if (activeTab !== 'live' || hasPendingClaim) {
+    return null;
+  }
+
+  if (status === 'ready') {
+    return 'watching';
+  }
+
+  if (status === 'monitoring' || status === 'verifying') {
+    if (!hasScanSignal && !hasCheckedCard) {
+      return null;
+    }
+    return hasCheckedCard ? 'forming' : 'primary';
+  }
+
+  if (status === 'loading' && !hasCheckedCard && hasScanSignal) {
+    return 'primary';
+  }
+
+  return null;
 };
 
 // TRUE Transformer hinge animation - cards fold down from top like a hinge
@@ -619,7 +713,7 @@ const RailEntry = ({
   children,
 }: {
   timestampSeconds: number | null;
-  style: { from: string; node: string };
+  style: { accentClass: string; solid: string; rgb: string };
   glow?: boolean;
   isHistoryMode?: boolean;
   children: ReactNode;
@@ -631,7 +725,7 @@ const RailEntry = ({
         <span 
           className="absolute left-[53px] top-0 bottom-0 w-[1px] opacity-30"
           style={{
-            background: `linear-gradient(180deg, transparent 0%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.4) 8%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 50%, rgba(var(--model-accent-rgb, 168, 199, 250), 0.1) 92%, transparent 100%)`,
+            background: `linear-gradient(180deg, transparent 0%, rgba(${style.rgb}, 0.38) 8%, rgba(${style.rgb}, 0.22) 50%, rgba(${style.rgb}, 0.08) 92%, transparent 100%)`,
           }}
         />
         {timestampSeconds !== null && (
@@ -643,11 +737,14 @@ const RailEntry = ({
         )}
         {/* Phase 3: Diamond Node - Centered alignment for 1:42 position */}
         <span
-          className={`rail-node absolute h-[7px] w-[7px] left-[50px] rotate-45 z-10 transition-all duration-300 border bg-sc-bg-0 ${style.node} ${glow ? 'animate-rail-node-pulse' : ''}`}
+          className={`rail-node absolute h-[7px] w-[7px] left-[50px] rotate-45 z-10 transition-all duration-300 border ${glow ? 'animate-rail-node-pulse' : ''}`}
           style={{ 
             top: '11px',
-            borderColor: `rgba(var(--model-accent-rgb, 168, 199, 250), 0.5)`,
-            boxShadow: '0 0 8px rgba(var(--model-accent-rgb, 168, 199, 250), 0.35), inset 0 0 2px rgba(255, 255, 255, 0.5)'
+            backgroundColor: style.solid,
+            borderColor: `rgba(${style.rgb}, ${glow ? '0.50' : '0.34'})`,
+            boxShadow: glow
+              ? `0 0 10px rgba(${style.rgb}, 0.30), inset 0 0 2px rgba(255, 255, 255, 0.45)`
+              : `0 0 6px rgba(${style.rgb}, 0.18), inset 0 0 2px rgba(255, 255, 255, 0.30)`,
           }}
         />
         {/* Phase 2: Razor-thin Fiber Optic Connector - fades before card */}
@@ -655,7 +752,7 @@ const RailEntry = ({
           className="rail-connector absolute h-[1px] w-[15px] left-[57px] opacity-80 transition-all duration-300"
           style={{ 
             top: '14px',
-            background: `linear-gradient(to right, rgba(var(--model-accent-rgb, 168, 199, 250), 0.85), rgba(var(--model-accent-rgb, 168, 199, 250), 0.25) 80%, transparent)`
+            background: `linear-gradient(to right, rgba(${style.rgb}, 0.82), rgba(${style.rgb}, 0.22) 80%, transparent)`
           }}
         />
       </>
@@ -768,7 +865,7 @@ const cleanPreview = (raw: string): string => {
 const LiveReadingStrip = ({
   timestampSeconds,
   previewText,
-  secondary = false,
+  mode,
   showCursor = false,
   extractedEntities = [],
   actionState = null,
@@ -777,21 +874,27 @@ const LiveReadingStrip = ({
 }: {
   timestampSeconds: number | null;
   previewText: string;
-  secondary?: boolean;
+  mode: LiveStripMode;
   showCursor?: boolean;
   extractedEntities?: string[];
   actionState?: ExtractionActionState | null;
   reason?: string | null;
   onEntitySelect?: (entityLabel: string) => void;
 }) => {
+  const isPrimary = mode === 'primary';
+  const isWatching = mode === 'watching';
+  const isForming = mode === 'forming';
+  const isCompact = !isPrimary;
   const cleaned = previewText ? cleanPreview(previewText) : '';
   // PHASE 1D.11 FIX: Only show placeholder when no real preview exists
   const hasRealPreview = Boolean(previewText?.trim());
   const wordCount = cleaned ? cleaned.split(/\s+/).filter(Boolean).length : 0;
-  const isFragmentaryPreview = !secondary && wordCount > 0 && wordCount < 5;
-  const transcriptLine = isFragmentaryPreview
-    ? 'Capturing a complete line…'
-    : (cleaned || (hasRealPreview ? '' : 'Listening…'));
+  const isFragmentaryPreview = isPrimary && wordCount > 0 && wordCount < 5;
+  const transcriptLine = isWatching
+    ? (cleaned || 'Watching for the next checkable claim.')
+    : isFragmentaryPreview
+      ? 'Capturing a complete line…'
+      : (cleaned || (hasRealPreview ? '' : 'Listening…'));
   const [hudFrame, setHudFrame] = useState(0);
   const [selectedContextId, setSelectedContextId] = useState<string | null>(null);
   const thoughtEntities = useMemo(
@@ -843,7 +946,7 @@ const LiveReadingStrip = ({
     }, 1400);
 
     return () => window.clearInterval(intervalId);
-  }, [cleaned, secondary]);
+  }, [cleaned, mode]);
 
   useEffect(() => {
     if (!availableContextSnippets.length) {
@@ -859,8 +962,8 @@ const LiveReadingStrip = ({
   }, [availableContextSnippets]);
 
   const hudState = useMemo(
-    () => getReadingHudState(cleaned.length, wordCount, hudFrame, secondary, thoughtSignal),
-    [cleaned.length, wordCount, hudFrame, secondary, thoughtSignal]
+    () => getReadingHudState(cleaned.length, wordCount, hudFrame, isCompact, thoughtSignal),
+    [cleaned.length, wordCount, hudFrame, isCompact, thoughtSignal]
   );
   const transcriptNodes = useMemo(
     () => (
@@ -876,19 +979,40 @@ const LiveReadingStrip = ({
     ),
     [cleaned, transcriptLine, thoughtEntities, onEntitySelect]
   );
-  const showTranscriptCursor = showCursor && secondary;
-  const showFooterCursor = showCursor;
+  const showTranscriptCursor = showCursor && isForming;
+  const showFooterCursor = showCursor && !isWatching;
+  const compactThoughtMessage = useMemo(() => {
+    if (isPrimary || isWatching) {
+      return thoughtReadout.message;
+    }
+
+    const firstSentence = thoughtReadout.message.split('. ')[0]?.trim();
+    if (firstSentence && firstSentence.length <= 84) {
+      return firstSentence.endsWith('.') ? firstSentence : `${firstSentence}.`;
+    }
+
+    if (thoughtReadout.message.length <= 88) {
+      return thoughtReadout.message;
+    }
+
+    return `${thoughtReadout.message.slice(0, 84).trim()}…`;
+  }, [isPrimary, isWatching, thoughtReadout.message]);
 
   return (
     <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE.accent}>
-      <div className={`reading-strip relative ml-2${secondary ? ' reading-strip-secondary' : ' reading-strip-primary'}`}>
+      <div className={[
+        'reading-strip relative ml-2',
+        isPrimary ? 'reading-strip-primary' : '',
+        isForming ? 'reading-strip-forming' : '',
+        isWatching ? 'reading-strip-watching' : '',
+      ].join(' ').trim()}>
         {/* HUD Active Scan Overlay */}
-        {!secondary && <div className="active-scan-overlay" />}
+        {isPrimary && <div className="active-scan-overlay" />}
         <div className="reading-strip-header">
           <div className="reading-kicker">
             <span className="reading-kicker-mark" aria-hidden="true" />
             <span className="font-mono text-[9px] font-bold tracking-[0.12em] uppercase opacity-70">
-              {secondary ? 'Reading now' : 'Live Transcript'}
+              {isPrimary ? 'Live transcript' : isWatching ? 'Watching now' : 'Forming note'}
             </span>
           </div>
           <div className="reading-meta" aria-hidden="true">
@@ -903,25 +1027,57 @@ const LiveReadingStrip = ({
         </p>
 
         {activeContextSnippet && (
-          <div className="reading-context mt-4">
-            <div className="reading-context-meta">
-              <span className="font-mono text-[8px] font-bold tracking-widest uppercase opacity-40">{activeContextSnippet.category} detected</span>
-              <span className="px-1.5 py-0.5 rounded-sm bg-accent/10 text-accent font-mono text-[7px] font-bold tracking-tighter uppercase">{activeContextSnippet.category}</span>
+          isForming ? (
+            <div className="reading-context reading-context-compact mt-3">
+              <div className="reading-context-compact-row">
+                <span
+                  className="rounded-sm px-1.5 py-0.5 font-mono text-[7px] font-bold uppercase tracking-tighter"
+                  style={{
+                    backgroundColor: 'var(--model-accent-10)',
+                    color: 'var(--model-accent-solid)',
+                  }}
+                >
+                  {activeContextSnippet.category}
+                </span>
+                <p className="reading-context-compact-copy">
+                  {activeContextSnippet.title}
+                </p>
+              </div>
             </div>
-            <p className="reading-context-title mt-2 leading-snug">{activeContextSnippet.title}</p>
-            <p className="reading-context-copy mt-1.5 leading-relaxed opacity-80">{activeContextSnippet.description}</p>
-          </div>
+          ) : isPrimary ? (
+            <div className="reading-context mt-4">
+              <div className="reading-context-meta">
+                <span className="font-mono text-[8px] font-bold tracking-widest uppercase opacity-40">{activeContextSnippet.category} detected</span>
+                <span
+                  className="rounded-sm px-1.5 py-0.5 font-mono text-[7px] font-bold uppercase tracking-tighter"
+                  style={{
+                    backgroundColor: 'var(--model-accent-10)',
+                    color: 'var(--model-accent-solid)',
+                  }}
+                >
+                  {activeContextSnippet.category}
+                </span>
+              </div>
+              <p className="reading-context-title mt-2 leading-snug">{activeContextSnippet.title}</p>
+              <p className="reading-context-copy mt-1.5 leading-relaxed opacity-80">{activeContextSnippet.description}</p>
+            </div>
+          ) : null
         )}
 
-        <div className="reading-footer-shell mt-4">
-          <p className="reading-footer-line font-mono text-[9px] font-medium tracking-wide" data-state={thoughtReadout.state}>
-            <span className="reading-terminal-prefix opacity-50" aria-hidden="true">
-              &gt;
-            </span>
-            <span className="ml-1.5">{thoughtReadout.message}</span>
-            {showFooterCursor && <span className="typing-cursor ml-1" aria-hidden="true" />}
-          </p>
-        </div>
+        {!isWatching && (
+          <div className="reading-footer-shell mt-4">
+            <p
+              className={`reading-footer-line font-mono text-[9px] font-medium tracking-wide${isCompact ? ' reading-footer-line-secondary' : ''}`}
+              data-state={thoughtReadout.state}
+            >
+              <span className="reading-terminal-prefix opacity-50" aria-hidden="true">
+                &gt;
+              </span>
+              <span className={`ml-1.5${isCompact ? ' reading-footer-message-secondary' : ''}`}>{compactThoughtMessage}</span>
+              {showFooterCursor && <span className="typing-cursor ml-1" aria-hidden="true" />}
+            </p>
+          </div>
+        )}
       </div>
     </RailEntry>
   );
@@ -951,16 +1107,18 @@ const LiveCheckingCard = ({
     'cross-referencing data...',
     'synthesizing findings...'
   ];
+  const scanProgressStops = [18, 42, 68, 88];
+  const scanProgress = scanProgressStops[thoughtIndex] ?? 18;
 
   return (
     <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE.soft} glow>
       <div className="feed-card feed-card-checking relative ml-1 px-4 py-4 card-enter">
-        <div className="investigation-sweep" />
+        <div className="checking-scan-ribbon" aria-hidden="true" />
 
         {/* Status with pulse */}
         <div className="flex items-center gap-2">
           <span className="thinking-pulse-dot" />
-          <span className="status-badge text-accentSoft status-badge-live">Verifying</span>
+          <span className="status-badge status-badge-live">Verifying</span>
         </div>
 
         {/* Claim text */}
@@ -970,41 +1128,26 @@ const LiveCheckingCard = ({
 
         {/* ── CODEX-STYLE THINKING STREAM ── */}
         <div className="thinking-stream mt-3">
-          {/* Terminal line with typing effect */}
           <div className="thinking-terminal">
             <span className="thinking-prompt">›</span>
             <span className="thinking-text">
               {thoughts[thoughtIndex]}
-              <span className="thinking-cursor">_</span>
             </span>
           </div>
-          
-          {/* Animated data bars */}
-          <div className="thinking-bars">
-            {[0, 1, 2].map((i) => (
-              <div 
-                key={i}
-                className="thinking-bar"
-                style={{ animationDelay: `${i * 200}ms` }}
-              />
-            ))}
+          <div className="thinking-scan-lane" aria-hidden="true">
+            <div className="thinking-scan-track" />
+            <div
+              className="thinking-scan-fill"
+              style={{ width: `${scanProgress}%` }}
+            />
+            <div
+              className="thinking-scan-head"
+              style={{ left: `${scanProgress}%` }}
+            />
           </div>
-        </div>
-
-        {/* Signal indicators */}
-        <div className="mt-3 flex items-center gap-2">
-          <span className="flex items-center gap-[3px]">
-            {[0, 160, 320].map((delay) => (
-              <span
-                key={delay}
-                className="block h-[3px] w-[3px] rounded-full bg-accentSoft animate-dotBounce"
-                style={{ animationDelay: `${delay}ms` }}
-              />
-            ))}
-          </span>
-          <span className="text-[11.5px] text-accentSoft/80 font-mono">
-            {['SIG:SRC', 'TOK:42', 'NET:OK'][thoughtIndex]}
-          </span>
+          <p className="thinking-status-copy">
+            Cross-checking public sources before surfacing a result.
+          </p>
         </div>
       </div>
     </RailEntry>
@@ -1033,13 +1176,22 @@ const StateCard = ({
   onAction?: () => void;
 }) => (
   <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE[tone as keyof typeof RAIL_STYLE] || RAIL_STYLE.muted}>
-    <div className="feed-card state-card ml-1 px-4 py-4 relative overflow-hidden">
+    <div className="feed-card state-card relative ml-1 overflow-hidden px-4 py-4">
       <div
         className="absolute top-4 right-4 h-12 w-12 opacity-[0.03] pointer-events-none"
         style={{
           background: 'currentColor',
           clipPath: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
-          color: 'var(--sc-accent)',
+          color:
+            tone === 'partial'
+              ? 'var(--sc-partial)'
+              : tone === 'disputed'
+                ? 'var(--sc-disputed)'
+                : tone === 'supported'
+                  ? 'var(--sc-supported)'
+                  : tone === 'soft'
+                    ? 'var(--model-accent-solid)'
+                    : 'var(--sc-neutral)',
         }}
       />
       <div className={`status-badge ${badgeTone}`}>{badgeLabel}</div>
@@ -1051,7 +1203,7 @@ const StateCard = ({
         <button
           type="button"
           onClick={onAction}
-          className="state-card-action mt-4 rounded border border-accentSoft/40 px-3 py-2 text-[11px] font-medium text-accentSoft transition-colors hover:border-accentSoft/70 hover:text-textMain"
+          className="state-card-action mt-4 rounded border border-sc-border-soft px-3 py-2 text-[11px] font-medium text-sc-text-soft transition-colors hover:border-sc-border hover:text-sc-text"
         >
           {actionLabel}
         </button>
@@ -1122,7 +1274,8 @@ const CheckedClaimRow = ({
   const supportLine = card.sourceTitle?.trim()
     ? card.sourceTitle.trim()
     : 'No web source found.';
-  const nuanceLine = card.nuance?.trim();
+  const sanitizedNuance = stripLegacyCachePrefix(card.nuance);
+  const nuanceLine = sanitizedNuance;
 
   // MECHANICAL FOLD: Spring-based with staged compression
   const foldVariants = {
@@ -1206,7 +1359,7 @@ const CheckedClaimRow = ({
       <RailEntry timestampSeconds={card.timestampSeconds} style={verdictMeta.railStyle} isHistoryMode={isHistoryMode}>
         <div className={`mechanical-entry ml-1${isExpanded ? ' mechanical-entry-expanded' : ''}${isHistoryMode ? ' mechanical-entry-history' : ''}${isLast && isHistoryMode ? ' mechanical-entry-last' : ''}`}>
           <span
-            className={`mechanical-entry-accent ${verdictMeta.railStyle.node.split(' ')[0]}`}
+            className={`mechanical-entry-accent ${verdictMeta.railStyle.accentClass}`}
             aria-hidden="true"
           />
 
@@ -1230,7 +1383,7 @@ const CheckedClaimRow = ({
                 overflow: 'hidden',
               }}
             >
-              {card.nuance?.trim() || card.claim.claimText}
+              {sanitizedNuance || card.claim.claimText}
             </p>
             <motion.div
               className="shrink-0 text-sc-muted/50"
@@ -1329,36 +1482,60 @@ export const CardFeed = ({
   // FIX: Use allCards (unfiltered) for HISTORY tab, cards (leash-filtered) for LIVE tab
   const displayCards = activeTab === 'history' && allCards ? allCards : cards;
   const latestCheckedCard = activeTab === 'live' ? (cards[0] ?? null) : null;
-  // FIX: LIVE tab limits to MAX_HISTORY_ROWS, HISTORY tab shows ALL cards
-  const olderCards = activeTab === 'live' 
-    ? (cards.length > 1 ? cards.slice(1, MAX_HISTORY_ROWS + 1) : [])
-    : displayCards;
   const latestPendingClaim = pendingClaims[0] ?? null;
+  const promotedLayout = resolvePromotedLiveLayout({
+    activeTab,
+    hasCheckedCard: Boolean(latestCheckedCard),
+    hasPendingClaim: Boolean(latestPendingClaim),
+  });
+  // FIX: LIVE tab limits to MAX_HISTORY_ROWS, HISTORY tab shows ALL cards.
+  // When a pending claim is active, it owns the hero slot and the latest checked
+  // card stays below it instead of teleporting upward after resolution.
+  const olderCards = activeTab === 'live'
+    ? cards.slice(
+        promotedLayout.olderCardsStartIndex,
+        promotedLayout.olderCardsStartIndex + MAX_HISTORY_ROWS,
+      )
+    : displayCards;
   const checkingTimestamp = latestPendingClaim?.timestampSeconds ?? lastScannedTimestamp;
   const activePreview = latestPendingClaim?.claimText?.trim() || currentScanPreview?.trim() || '';
   const activeReadingTimestamp = lastScannedTimestamp ?? liveTimestampSeconds;
-  const isLiveReading = status === 'monitoring' || status === 'ready' || status === 'verifying';
-  const isAnalyzing = status === 'monitoring' || status === 'verifying' || status === 'loading';
+  const hasScanSignal =
+    chunksScanned > 0 ||
+    lastScannedTimestamp !== null ||
+    Boolean(currentScanPreview);
+  const liveStripMode = getLiveStripMode({
+    activeTab,
+    status,
+    hasCheckedCard: Boolean(latestCheckedCard),
+    hasPendingClaim: Boolean(latestPendingClaim),
+    hasScanSignal,
+  });
+  const isLiveReading = liveStripMode !== null || status === 'verifying';
   const showTypingCursor = status !== 'idle' && status !== 'error' && status !== 'no-transcript';
 
-  // FIX: Always show reading state when monitoring/verifying/loading with no cards
-  const showPrimaryReadingState =
-    !latestCheckedCard &&
-    !latestPendingClaim &&
-    isAnalyzing &&
-    (chunksScanned > 0 || lastScannedTimestamp !== null || Boolean(currentScanPreview) || status === 'monitoring' || status === 'verifying');
-  const showSecondaryReadingState =
-    activeTab === 'live' &&
-    !!latestCheckedCard &&
-    !latestPendingClaim &&
-    isLiveReading &&
-    (activeReadingTimestamp !== null || Boolean(activePreview));
+  const primaryStripMode =
+    !latestCheckedCard && !latestPendingClaim && liveStripMode
+      ? liveStripMode
+      : null;
+  const secondaryStripMode =
+    latestCheckedCard && !latestPendingClaim && liveStripMode && liveStripMode !== 'primary'
+      ? liveStripMode
+      : null;
 
   const showResumeLive =
     !isPinned &&
     isLiveReading &&
     activeTab === 'live' &&
     (cards.length > 0 || pendingClaims.length > 0 || Boolean(currentScanPreview));
+  const promotedHeroKey = promotedLayout.heroMode === 'pending'
+    ? latestPendingClaim?.id ?? null
+    : promotedLayout.heroMode === 'checked' && latestCheckedCard
+      ? buildPromotedClaimKey({
+          claimText: latestCheckedCard.claim.claimText,
+          timestampSeconds: latestCheckedCard.claim.timestampSeconds,
+        })
+      : null;
 
   useEffect(() => {
     if (!expandedClaimId) {
@@ -1370,17 +1547,13 @@ export const CardFeed = ({
     }
   }, [expandedClaimId, olderCards]);
 
-  // Dynamic model accent color for HUD lighting
-  // Blue for standard/freemium models, Purple for preview/experimental
-  const modelAccentRgb = selectedModel === 'gemini-3-flash-preview' 
-    ? '215, 174, 251' // Gemini Purple (preview/experimental)
-    : '168, 199, 250'; // Gemini Blue (default for 2.5-flash and 3.1-flash-lite)
+  const modelCssVars = buildModelCssVars(selectedModel);
 
   return (
-    <div className="relative" style={{ '--model-accent-rgb': modelAccentRgb } as CSSProperties}>
+    <div className="relative" style={modelCssVars}>
       <div
         className="relative flex flex-col gap-2.5 px-3 pb-3 pt-2"
-        style={{ ...FEED_RAIL_LAYOUT, '--model-accent-rgb': modelAccentRgb } as CSSProperties}
+        style={{ ...FEED_RAIL_LAYOUT, ...modelCssVars } as CSSProperties}
       >
         <div className="signal-rail" />
 
@@ -1389,10 +1562,11 @@ export const CardFeed = ({
         ) : (
           <>
             {/* Primary: reading strip when nothing else to show */}
-            {activeTab === 'live' && showPrimaryReadingState && !latestCheckedCard && !latestPendingClaim && (
+            {activeTab === 'live' && primaryStripMode && (
               <LiveReadingStrip
                 timestampSeconds={activeReadingTimestamp}
                 previewText={activePreview}
+                mode={primaryStripMode}
                 showCursor={showTypingCursor}
                 extractedEntities={scanEntities}
                 actionState={scanActionState}
@@ -1401,21 +1575,37 @@ export const CardFeed = ({
               />
             )}
 
-            {/* Hero: latest checked result (LIVE tab only) */}
+            {/* Hero slot: the currently promoted claim always lives at the top.
+                A verifying claim owns this slot first, then resolves in-place
+                into the finished card instead of jumping between lanes. */}
             {activeTab === 'live' && (
               <AnimatePresence mode="popLayout">
-                {latestCheckedCard && (
+                {promotedLayout.heroMode !== 'none' && (
                   <motion.div
-                    key={latestCheckedCard.id}
+                    key={promotedHeroKey ?? promotedLayout.heroMode}
                     className="transformer-card"
+                    layoutId={promotedHeroKey ? `promoted-claim-${promotedHeroKey}` : undefined}
                     initial={prefersReducedMotion ? false : transformerVariants.initial}
                     animate={transformerVariants.animate}
                     exit={prefersReducedMotion ? undefined : transformerVariants.exit}
-                    transition={TRANSFORMER_TRANSITION}
+                    transition={{
+                      ...TRANSFORMER_TRANSITION,
+                      duration: promotedLayout.heroMode === 'pending' ? 0.45 : undefined,
+                    }}
                   >
-                    <RailEntry timestampSeconds={latestCheckedCard.timestampSeconds} style={VERDICT_META[latestCheckedCard.status].railStyle}>
-                      <LiveResultCard {...latestCheckedCard} isLatest />
-                    </RailEntry>
+                    {promotedLayout.heroMode === 'pending' && latestPendingClaim ? (
+                      <LiveCheckingCard
+                        timestampSeconds={checkingTimestamp}
+                        claimText={latestPendingClaim.claimText || 'Checking that claim…'}
+                      />
+                    ) : latestCheckedCard ? (
+                      <RailEntry
+                        timestampSeconds={latestCheckedCard.timestampSeconds}
+                        style={VERDICT_META[latestCheckedCard.status].railStyle}
+                      >
+                        <LiveResultCard {...latestCheckedCard} isLatest />
+                      </RailEntry>
+                    ) : null}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1423,12 +1613,12 @@ export const CardFeed = ({
 
             {/* Continue showing active reading after the first checked card so the feed
                 does not appear frozen between verification events. */}
-            {showSecondaryReadingState && (
+            {secondaryStripMode && (
               <LiveReadingStrip
                 timestampSeconds={activeReadingTimestamp}
                 previewText={currentScanPreview || activePreview || 'Scanning for claims…'}
-                secondary
-                showCursor={showTypingCursor}
+                mode={secondaryStripMode}
+                showCursor={secondaryStripMode === 'forming' && showTypingCursor}
                 extractedEntities={scanEntities}
                 actionState={scanActionState}
                 reason={scanReason}
@@ -1436,27 +1626,8 @@ export const CardFeed = ({
               />
             )}
 
-            {/* Pending check */}
-            <AnimatePresence mode="popLayout">
-              {activeTab === 'live' && latestPendingClaim && (
-                <motion.div
-                  key={latestPendingClaim.id}
-                  className="transformer-card"
-                  initial={prefersReducedMotion ? false : transformerVariants.initial}
-                  animate={transformerVariants.animate}
-                  exit={prefersReducedMotion ? undefined : transformerVariants.exit}
-                  transition={{ ...TRANSFORMER_TRANSITION, duration: 0.45 }}
-                >
-                  <LiveCheckingCard
-                    timestampSeconds={checkingTimestamp}
-                    claimText={latestPendingClaim.claimText || 'Checking that claim…'}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             {/* No-transcript / error / idle states */}
-            {!latestCheckedCard && !latestPendingClaim && !showPrimaryReadingState && (
+            {activeTab === 'live' && !latestCheckedCard && !latestPendingClaim && !primaryStripMode && (
               status === 'no-transcript' ? (
                 <StateCard
                   badgeLabel="Transcript unavailable"
@@ -1477,11 +1648,12 @@ export const CardFeed = ({
                   headline="Something went wrong."
                   supportLine="Refresh the YouTube tab to try again."
                 />
-              ) : status === 'monitoring' || status === 'verifying' || status === 'ready' ? (
+              ) : status === 'monitoring' || status === 'verifying' ? (
                 // FIX: Never show Idle when monitoring/verifying/ready - show scanning state instead
                 <LiveReadingStrip
                   timestampSeconds={activeReadingTimestamp}
                   previewText={currentScanPreview || 'Scanning for claims…'}
+                  mode="primary"
                   showCursor={true}
                   extractedEntities={scanEntities}
                   actionState={scanActionState}
@@ -1491,7 +1663,7 @@ export const CardFeed = ({
               ) : (
                 <StateCard
                   badgeLabel={status === 'loading' ? 'Loading' : 'Idle'}
-                  badgeTone={status === 'loading' ? 'text-accentSoft' : 'text-textMuted'}
+                  badgeTone={status === 'loading' ? 'text-sc-accent' : 'text-textMuted'}
                   timestampSeconds={null}
                   tone={status === 'loading' ? 'soft' : 'muted'}
                   headline={status === 'loading' ? 'Loading transcript…' : 'Waiting for video.'}
@@ -1573,7 +1745,10 @@ export const CardFeed = ({
             onClick={() => pinToTop?.()}
             className="resume-live-btn pointer-events-auto"
           >
-            <span className="block h-[7px] w-[7px] rotate-45 bg-accentSoft/80" />
+            <span
+              className="block h-[7px] w-[7px] rotate-45"
+              style={{ backgroundColor: 'var(--model-accent-solid)' }}
+            />
             <span>Resume Live</span>
           </button>
         </div>
