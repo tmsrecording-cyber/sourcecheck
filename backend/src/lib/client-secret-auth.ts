@@ -211,14 +211,20 @@ export function validateClientSecretAuth(request: NextRequest): ClientSecretAuth
     return { authorized: true };
   }
 
+  // LOCAL DEVELOPMENT: Skip secret check on localhost
+  const origin = request.headers.get('origin') || '';
+  const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+  
   // Check if CLIENT_SECRET is set in environment
   const expectedSecret = getExpectedClientSecret();
   const hasSecret = expectedSecret.length > 0;
   
+  // LOCAL DEV BYPASS: On localhost, skip secret requirement entirely
+  if (isLocalhost) {
+    return { authorized: true };
+  }
+  
   // PRODUCTION SAFETY: Fail closed if CLIENT_SECRET is not configured in production
-  // This prevents the auth spoofing vulnerability where anyone can mint tokens
-  // with just the public extension ID when the secret gate is open.
-  // In development/test, we warn but allow through for local testing.
   if (!hasSecret) {
     if (process.env.NODE_ENV === 'production') {
       console.error('[client-secret-auth] CLIENT_SECRET not configured - rejecting request');
@@ -227,7 +233,7 @@ export function validateClientSecretAuth(request: NextRequest): ClientSecretAuth
         response: createUnauthorizedResponse(request, 'CLIENT_SECRET not configured') 
       };
     }
-    // Development/test: warn but allow
+    // Development/test (non-localhost): warn but allow
     console.warn('[client-secret-auth] CLIENT_SECRET not configured - allowing in dev mode');
     return { authorized: true };
   }
