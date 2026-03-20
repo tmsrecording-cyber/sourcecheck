@@ -72,22 +72,22 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
 
   return (
     <div ref={containerRef} className="relative">
-      {/* Simple Trigger - Name + Tag */}
+      {/* Compact Trigger - Name + Tag */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="group flex h-9 items-center gap-2 rounded-lg border border-sc-border/60 bg-sc-surface-0 px-3 text-sc-text-soft transition-colors hover:border-sc-border hover:bg-sc-surface-1 focus:outline-none"
+        className="group flex h-7 items-center gap-1.5 rounded-md bg-sc-surface-1/50 px-2 text-sc-text-soft hover:bg-sc-surface-1 focus:outline-none"
         aria-expanded={isOpen}
         aria-haspopup="listbox"
         aria-label="Select AI model"
       >
-        <span className="text-[11px] font-medium text-sc-text">
+        <span className="text-[11px] text-sc-text">
           {MODEL_LABELS[selectedModel]}
         </span>
-        <span className="rounded border border-sc-border-soft/60 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-sc-muted">
+        <span className="text-[9px] uppercase tracking-wider text-sc-muted">
           {currentModel?.speed ? SPEED_TAGS[currentModel.speed] : 'Balanced'}
         </span>
-        <ChevronDown size={12} className={`text-sc-muted transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown size={10} className={`text-sc-muted/60 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {/* Simple Dropdown - Name + Tag only */}
