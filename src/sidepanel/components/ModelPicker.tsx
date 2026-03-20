@@ -11,21 +11,21 @@ interface ModelPickerProps {
 
 const MODEL_ICONS: Record<GeminiModelOption, React.ReactNode> = {
   'gemini-3.1-flash-lite-preview': <Zap size={12} />,
-  'gemini-3-flash-preview': <Brain size={12} />,
   'gemini-2.5-flash': <Cpu size={12} />,
+  'gemini-3-flash-preview': <Brain size={12} />,
 };
 
-const SPEED_LABELS: Record<'fast' | 'balanced' | 'deep', string> = {
+const SPEED_LABELS: Record<'fast' | 'standard' | 'deep', string> = {
   fast: 'Fastest',
-  balanced: 'Balanced',
-  deep: 'Deep',
+  standard: 'Standard',
+  deep: 'Most capable',
 };
 
 /** Compact display labels for header - canonical model IDs unchanged */
 const COMPACT_LABELS: Record<GeminiModelOption, string> = {
   'gemini-3.1-flash-lite-preview': '3.1 Lite',
+  'gemini-2.5-flash': '2.5 Flash',
   'gemini-3-flash-preview': '3 Preview',
-  'gemini-2.5-flash': '2.5 Lite',
 };
 
 export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false }: ModelPickerProps) => {

@@ -168,9 +168,9 @@ export const VideoHeader = ({
   const anchorCopy = status === 'no-transcript'
     ? 'Transcript unavailable'
     : status === 'verifying' && anchorTime !== null
-      ? `Checking near ${formatTime(anchorTime)}`
+      ? `Checking at ${formatTime(anchorTime)}`
       : anchorTime !== null
-        ? `Reading near ${formatTime(anchorTime)}`
+        ? `At ${formatTime(anchorTime)}`
         : 'Waiting for video';
 
   // PHASE 1D.11 FIX: Show different status when transcript exists vs waiting for transcript
@@ -201,16 +201,13 @@ export const VideoHeader = ({
         </div>
       </div>
 
-      {/* Meta row: channel · anchor - HUD Monospace */}
-      <div className="mt-1.5 flex items-center justify-between gap-2">
+      {/* Meta row: channel · timestamp */}
+      <div className="mt-1.5 flex items-center gap-2">
         <p className="truncate text-[11px] font-mono text-sc-muted uppercase tracking-[0.12em] opacity-75">
           {channel}
           <span className="mx-1.5 opacity-25">·</span>
           {anchorCopy}
         </p>
-        {truthScore === null && syncLabel && (
-          <span className="shrink-0 font-mono text-[9px] font-semibold tracking-wider uppercase text-sc-muted opacity-40">{syncLabel}</span>
-        )}
       </div>
 
       {/* Truth Score - Enhanced per design spec */}

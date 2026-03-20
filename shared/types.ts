@@ -76,12 +76,13 @@ export interface ModelConfig {
   id: GeminiModelOption;
   label: string;
   description: string;
-  speed: 'fast' | 'balanced' | 'deep';
+  speed: 'fast' | 'standard' | 'deep';
 }
 
 /** 
  * Models available in the UI model picker.
  * All entries MUST be in ALLOWED_MODELS.
+ * Ordered: fastest → standard → most capable
  */
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
@@ -91,15 +92,15 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     speed: 'fast',
   },
   {
-    id: 'gemini-3-flash-preview',
-    label: 'Flash 3 Preview',
-    description: 'Balanced quality',
-    speed: 'balanced',
+    id: 'gemini-2.5-flash',
+    label: 'Flash 2.5',
+    description: 'Reliable standard',
+    speed: 'standard',
   },
   {
-    id: 'gemini-2.5-flash',
-    label: 'Flash 2.5 Lite',
-    description: 'Reliable standard',
+    id: 'gemini-3-flash-preview',
+    label: 'Flash 3 Preview',
+    description: 'Most capable',
     speed: 'deep',
   },
 ];

@@ -1412,9 +1412,14 @@ export const CardFeed = ({
 
             {/* Empty history state */}
             {activeTab === 'history' && displayCards.length === 0 && askHistory.length === 0 && (
-              <div className="pl-6 py-8">
-                <p className="text-[12px] text-sc-muted/60 font-sc italic">No checked claims yet. Results will appear here as claims are verified.</p>
-              </div>
+              <StateCard
+                badgeLabel="No results yet"
+                badgeTone="text-sc-muted"
+                timestampSeconds={null}
+                tone="muted"
+                headline="Nothing checked yet."
+                supportLine="Verified claims will appear here as the video plays. Switch to LIVE to see active scanning."
+              />
             )}
 
             {/* Q&A History (HISTORY tab only) */}
