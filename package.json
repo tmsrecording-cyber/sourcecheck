@@ -8,6 +8,7 @@
     "build": "rm -rf dist && tsc && vite build && node scripts/check-release-dist.mjs",
     "check:dist-release": "node scripts/check-release-dist.mjs",
     "check:release-secrets": "node scripts/check-release-secrets.mjs",
+    "test:e2e": "npm run test:e2e:smoke",
     "test:e2e:smoke": "playwright test tests/e2e/extension-smoke.spec.ts",
     "test:unit": "vitest run tests/unit",
     "release:gate": "npm run build && npm --prefix backend run build && npm --prefix backend test && npm run check:dist-release && npm run check:release-secrets && npm run test:unit && npm run test:e2e:smoke"

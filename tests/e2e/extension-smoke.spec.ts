@@ -1,6 +1,8 @@
-import { expect, test, chromium, type BrowserContext, type Page, type Route } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { launchExtensionContext } from './launchExtensionContext';
 
 const EXTENSION_PATH = join(process.cwd(), 'dist');
 const VIDEO_ID = 'smoke-video-id';
@@ -89,14 +91,7 @@ test('extension smoke: initializes on a YouTube watch page and enters transcript
   expect(existsSync(EXTENSION_PATH)).toBeTruthy();
 
   const userDataDir = testInfo.outputPath('chromium-user-data');
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    channel: 'chromium',
-    headless: true,
-    args: [
-      `--disable-extensions-except=${EXTENSION_PATH}`,
-      `--load-extension=${EXTENSION_PATH}`,
-    ],
-  });
+  const context = await launchExtensionContext(userDataDir, EXTENSION_PATH);
 
   try {
     const extensionId = await getExtensionId(context);
