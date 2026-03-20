@@ -237,6 +237,34 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     expect(json.sourceCard.nuance).toBe('No reliable source confirms this specific claim.');
   });
 
+  it('does not treat broad science facts as needing a primary source when the model guesses academic_paper without grounding', async () => {
+    mockAskGemini.mockResolvedValue({
+      data: {
+        status: 'unverifiable',
+        sourceTitle: 'Hawking 1975',
+        sourceType: 'academic_paper',
+        nuance: 'No exact source match found for this formulation.',
+      },
+      inputTokens: 10,
+      outputTokens: 20,
+      sources: [],
+    });
+
+    const res = await POST(await makeVerifyRequest({
+      claim: {
+        claimText: 'When a star collapses to form a black hole, space and time are strongly warped.',
+        claimType: 'canonical',
+        timestampSeconds: 42,
+      },
+    }));
+    const json = await res.json();
+
+    expect(json.sourceCard.status).toBe('unverifiable');
+    expect(json.sourceCard.sourceTitle).toBe('Not found');
+    expect(json.sourceCard.sourceType).toBe('other');
+    expect(json.sourceCard.nuance).toBe('No reliable source confirms this specific claim.');
+  });
+
   it('uses missing-context language when the unresolved outcome lacks specifics', async () => {
     mockAskGemini.mockResolvedValue({
       data: {

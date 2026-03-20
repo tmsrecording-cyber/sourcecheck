@@ -274,6 +274,12 @@ Determine:
 
 3. sourceType — one of: academic_paper, news_article, official_source, wikipedia, other
 
+   Rules:
+   - Use "academic_paper" only when the verification truly depends on a specific paper or journal source.
+   - Use "official_source" only when the verification truly depends on a government, institutional, or primary record source.
+   - For broad scientific, historical, or canonical facts that are widely discussed, do NOT default to "academic_paper" just because the topic is scientific.
+   - When the topic is broadly reported but no single paper or record is the key source, prefer "other", "wikipedia", or "news_article".
+
 4. nuance — Under 15 words. This is a reading aid — the viewer glances at it mid-video.
 
    Rules:

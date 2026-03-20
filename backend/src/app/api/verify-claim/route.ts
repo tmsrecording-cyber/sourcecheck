@@ -76,6 +76,7 @@ const inferUnverifiableCategory = (params: {
   sourceType: string;
   nuance: string;
   sourceTitle: string;
+  hasGrounding: boolean;
 }): UnverifiableCategory => {
   const contextCombined = `${params.claimText} ${params.nuance} ${params.sourceTitle}`.trim();
   const sourceCombined = `${params.claimText} ${params.sourceTitle}`.trim();
@@ -84,11 +85,16 @@ const inferUnverifiableCategory = (params: {
     return 'missing_context';
   }
 
-  if (
+  const explicitlyPrimarySourceBound =
     params.claimType === 'study' ||
-    params.sourceType === 'academic_paper' ||
-    params.sourceType === 'official_source' ||
-    PRIMARY_SOURCE_RE.test(sourceCombined)
+    PRIMARY_SOURCE_RE.test(sourceCombined);
+  const groundedPrimarySourceSignal =
+    params.hasGrounding &&
+    (params.sourceType === 'academic_paper' || params.sourceType === 'official_source');
+
+  if (
+    explicitlyPrimarySourceBound ||
+    groundedPrimarySourceSignal
   ) {
     return 'needs_primary_source';
   }
@@ -643,6 +649,7 @@ export async function POST(request: NextRequest) {
           sourceType: rawVerification.sourceType,
           nuance: fullNuance, // Use full nuance for inference (before truncation)
           sourceTitle: rawSourceTitle,
+          hasGrounding: hasQualityGrounding,
         })
       : null;
     const unresolvedLanguage = unresolvedCategory
