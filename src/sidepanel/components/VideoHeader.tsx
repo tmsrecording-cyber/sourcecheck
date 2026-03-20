@@ -26,22 +26,22 @@ const STATUS_META: Record<
     accentClass: 'text-sc-neutral',
   },
   loading: {
-    label: 'Loading',
+    label: 'Preparing',
     tone: 'text-sc-accent-soft',
     accentClass: 'text-sc-accent-soft',
   },
   monitoring: {
-    label: 'Monitoring',
+    label: 'Building notes',
     tone: 'text-sc-accent',
     accentClass: 'text-sc-accent',
   },
   verifying: {
-    label: 'Checking',
+    label: 'Verifying',
     tone: 'text-sc-partial',
     accentClass: 'text-sc-partial',
   },
   ready: {
-    label: 'Ready',
+    label: 'Caught up',
     tone: 'text-sc-muted',
     accentClass: 'text-sc-supported',
   },
@@ -115,7 +115,7 @@ export const VideoHeader = ({
   const anchorCopy = displayStatus === 'no-transcript'
     ? 'Transcript unavailable'
     : displayStatus === 'verifying' && anchorTime !== null
-      ? `Checking at ${formatTime(anchorTime)}`
+      ? `Latest note at ${formatTime(anchorTime)}`
       : anchorTime !== null
         ? `At ${formatTime(anchorTime)}`
         : 'Waiting for video';
@@ -123,9 +123,13 @@ export const VideoHeader = ({
   // PHASE 1D.11 FIX: Show different status when transcript exists vs waiting for transcript
   const hasTranscriptContent = (chunksScanned ?? 0) > 0 || (lastScannedTimestamp ?? 0) > 0;
   const statusLineCopy =
-    displayStatus === 'monitoring' ? (hasTranscriptContent ? 'Scanning transcript for claims…' : 'Listening for a checkable claim.') :
-    displayStatus === 'verifying' ? 'Verifying a claim…' :
-    null;
+    displayStatus === 'monitoring'
+      ? (hasTranscriptContent ? 'Turning the transcript into verifiable notes.' : 'Waiting for a concrete claim worth checking.')
+      : displayStatus === 'verifying'
+        ? 'Checking the latest note against web sources.'
+        : displayStatus === 'ready'
+          ? 'Recent notes are up to date.'
+          : null;
 
   return (
     <header className="glass-deep mx-3 mt-3 px-4 pb-3.5 pt-3.5 rounded-lg">
@@ -161,7 +165,7 @@ export const VideoHeader = ({
         <div className="mt-4 rounded-md border border-sc-border-soft/70 bg-sc-surface-1/60 px-3 py-2.5">
           <div className="flex items-end justify-between gap-3">
             <span className="text-[9px] font-bold tracking-[0.12em] uppercase text-sc-muted/60">
-              Checked claims
+              Verified notes
             </span>
             <span className="text-[11px] text-sc-muted/70">
               {verificationSummary.resolved} resolved of {verificationSummary.total}

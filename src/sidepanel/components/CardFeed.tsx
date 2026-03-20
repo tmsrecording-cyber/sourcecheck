@@ -525,14 +525,14 @@ const getThoughtReadout = (
   if (wordCount === 0) {
     return {
       state: 'tracking',
-      message: 'Listening for a checkable claim.',
+      message: 'Listening for a claim worth turning into a note.',
     };
   }
 
   if (wordCount < 5) {
     return {
       state: 'rejected',
-      message: 'Captions detected. Waiting for a complete line.',
+      message: 'Captions are arriving. Waiting for a complete line.',
     };
   }
 
@@ -540,22 +540,22 @@ const getThoughtReadout = (
     return {
       state: signal.declarative ? 'tracking' : 'rejected',
       message: signal.declarative
-        ? 'Source detected. Watching this line.'
-        : 'Source detected. No claim yet.',
+        ? 'Source-like language detected. Holding this line.'
+        : 'Source-like language detected. No concrete claim yet.',
     };
   }
 
   if (signal.numeric && signal.timeline) {
     return {
       state: 'queued',
-      message: 'Timeline detected. Queuing check…',
+      message: 'A concrete timeline claim is forming. Queuing a note…',
     };
   }
 
   if (signal.numeric) {
     return {
       state: 'tracking',
-      message: 'Numeric data. Waiting for context.',
+      message: 'Numeric detail detected. Waiting for context.',
     };
   }
 
@@ -563,8 +563,8 @@ const getThoughtReadout = (
     return {
       state: signal.declarative ? 'tracking' : 'rejected',
       message: signal.declarative
-        ? 'Timeline detected. Watching this line.'
-        : 'Timeline fragment. No outcome yet.',
+        ? 'A timeline detail is worth watching here.'
+        : 'Timeline fragment detected. No outcome yet.',
     };
   }
 
@@ -578,34 +578,34 @@ const getThoughtReadout = (
   if (signal.broadConcept && !signal.declarative) {
     return {
       state: 'rejected',
-      message: 'General commentary. No checkable claim yet.',
+      message: 'General commentary. No concrete note yet.',
     };
   }
 
   if (hasContextSnippet) {
     return {
       state: 'context',
-      message: 'Entity detected. Context available.',
+      message: 'Relevant context is available for this line.',
     };
   }
 
   if (entities.length > 0) {
     return {
       state: 'tracking',
-      message: 'Named terms detected. Waiting for a concrete claim.',
+      message: 'Named entities detected. Waiting for a concrete claim.',
     };
   }
 
   if (!signal.declarative) {
     return {
       state: 'rejected',
-      message: 'No checkable claim yet.',
+      message: 'No verifiable note yet.',
     };
   }
 
   return {
     state: 'tracking',
-    message: 'Scanning for a checkable claim.',
+    message: 'Shaping the next verifiable note.',
   };
 };
 
@@ -819,7 +819,7 @@ const LiveReadingStrip = ({
     () => {
       // PHASE 1D.11 FIX: Don't show placeholder reason when we have real transcript
       const hasContent = wordCount > 0;
-      const isPlaceholderReason = reason === 'Listening for checkable claims.';
+      const isPlaceholderReason = reason === 'Listening for checkable claims.' || reason === 'Listening for a checkable claim.';
       if (reason && !(hasContent && isPlaceholderReason)) {
         return {
           state:
@@ -927,7 +927,7 @@ const LiveReadingStrip = ({
   );
 };
 
-/* ── Checking card ── */
+/* ── Checking card with Codex-style thinking visuals ── */
 
 const LiveCheckingCard = ({
   timestampSeconds,
@@ -935,34 +935,81 @@ const LiveCheckingCard = ({
 }: {
   timestampSeconds: number | null;
   claimText: string;
-}) => (
-  <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE.soft} glow>
-    <div className="feed-card feed-card-checking relative ml-1 px-4 py-4 card-enter">
-      <div className="investigation-sweep" />
+}) => {
+  const [thoughtIndex, setThoughtIndex] = useState(0);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setThoughtIndex(i => (i + 1) % 4);
+    }, 900);
+    return () => clearInterval(interval);
+  }, []);
+  
+  const thoughts = [
+    'analyzing claim structure...',
+    'searching web sources...', 
+    'cross-referencing data...',
+    'synthesizing findings...'
+  ];
 
-      <div className="status-badge text-accentSoft status-badge-live">Checking</div>
+  return (
+    <RailEntry timestampSeconds={timestampSeconds} style={RAIL_STYLE.soft} glow>
+      <div className="feed-card feed-card-checking relative ml-1 px-4 py-4 card-enter">
+        <div className="investigation-sweep" />
 
-      <p className="mt-3 text-[17px] font-semibold leading-[1.42] tracking-[-0.016em] text-textMain">
-        {claimText}
-      </p>
+        {/* Status with pulse */}
+        <div className="flex items-center gap-2">
+          <span className="thinking-pulse-dot" />
+          <span className="status-badge text-accentSoft status-badge-live">Verifying</span>
+        </div>
 
-      <div className="mt-3 flex items-center gap-2">
-        <span className="flex items-center gap-[3px]">
-          {[0, 160, 320].map((delay) => (
-            <span
-              key={delay}
-              className="block h-[3px] w-[3px] rounded-full bg-accentSoft animate-dotBounce"
-              style={{ animationDelay: `${delay}ms` }}
-            />
-          ))}
-        </span>
-        <span className="text-[11.5px] text-accentSoft/80">
-          Checking that claim
-        </span>
+        {/* Claim text */}
+        <p className="mt-3 text-[17px] font-semibold leading-[1.42] tracking-[-0.016em] text-textMain">
+          {claimText}
+        </p>
+
+        {/* ── CODEX-STYLE THINKING STREAM ── */}
+        <div className="thinking-stream mt-3">
+          {/* Terminal line with typing effect */}
+          <div className="thinking-terminal">
+            <span className="thinking-prompt">›</span>
+            <span className="thinking-text">
+              {thoughts[thoughtIndex]}
+              <span className="thinking-cursor">_</span>
+            </span>
+          </div>
+          
+          {/* Animated data bars */}
+          <div className="thinking-bars">
+            {[0, 1, 2].map((i) => (
+              <div 
+                key={i}
+                className="thinking-bar"
+                style={{ animationDelay: `${i * 200}ms` }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Signal indicators */}
+        <div className="mt-3 flex items-center gap-2">
+          <span className="flex items-center gap-[3px]">
+            {[0, 160, 320].map((delay) => (
+              <span
+                key={delay}
+                className="block h-[3px] w-[3px] rounded-full bg-accentSoft animate-dotBounce"
+                style={{ animationDelay: `${delay}ms` }}
+              />
+            ))}
+          </span>
+          <span className="text-[11.5px] text-accentSoft/80 font-mono">
+            {['SIG:SRC', 'TOK:42', 'NET:OK'][thoughtIndex]}
+          </span>
+        </div>
       </div>
-    </div>
-  </RailEntry>
-);
+    </RailEntry>
+  );
+};
 
 /* ── Static state card ── */
 

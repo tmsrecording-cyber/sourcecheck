@@ -66,7 +66,7 @@ const getUnverifiableLabel = (sourceTitle?: string, nuance?: string): string => 
   }
   
   // Default: "Inconclusive" — couldn't verify but not due to missing context
-  return 'Inconclusive';
+  return 'Needs review';
 };
 
 const STATUS_META: Record<
@@ -93,7 +93,7 @@ const STATUS_META: Record<
     accent: panelTones.status.disputed,
   },
   unverifiable: {
-    label: 'Unresolved',
+    label: 'Needs review',
     color: 'text-textMuted',
     accent: panelTones.status.neutral,
   },
@@ -114,7 +114,7 @@ export const SourceCard = ({
     : statusMeta.label;
   const sourceLine = sourceTitle?.trim()
     ? sourceTitle.trim()
-    : 'No web source found.';
+    : 'No strong web match';
   const nuanceLine = nuance?.trim();
   const cardStyle = {
     borderLeft: `3px solid ${statusMeta.accent}`,

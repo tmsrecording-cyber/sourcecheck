@@ -1440,38 +1440,43 @@ const isElementActionable = (element: HTMLElement): boolean => {
 };
 
 const clickElement = (element: HTMLElement): boolean => {
-  // Scroll into view first — the button may exist in the DOM but be off-screen
-  // or inside a collapsed section, causing getBoundingClientRect to return zero.
-  element.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  try {
+    // Scroll into view first — the button may exist in the DOM but be off-screen
+    // or inside a collapsed section, causing getBoundingClientRect to return zero.
+    element.scrollIntoView({ block: 'nearest', behavior: 'auto' });
 
-  if (!isElementActionable(element)) {
-    console.log('[SourceCheck] Transcript button found but is not actionable (hidden or zero-size).');
-    // Last resort: try a plain .click() in case the element is just outside viewport
-    // but its event handlers are still live (e.g. collapsed description section).
+    if (!isElementActionable(element)) {
+      console.log('[SourceCheck] Transcript button found but is not actionable (hidden or zero-size).');
+      // Last resort: try a plain .click() in case the element is just outside viewport
+      // but its event handlers are still live (e.g. collapsed description section).
+      element.click();
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const clientX = rect.left + Math.min(rect.width / 2, Math.max(1, rect.width - 1));
+    const clientY = rect.top + Math.min(rect.height / 2, Math.max(1, rect.height - 1));
+    const mouseEventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      button: 0,
+      buttons: 1,
+      clientX,
+      clientY,
+    };
+
+    element.dispatchEvent(new PointerEvent('pointerdown', mouseEventInit));
+    element.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
+    element.dispatchEvent(new PointerEvent('pointerup', mouseEventInit));
+    element.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
+    element.dispatchEvent(new MouseEvent('click', mouseEventInit));
     element.click();
+    return true;
+  } catch (error) {
+    console.warn('[SourceCheck] Transcript button click helper failed:', getErrorMessage(error));
     return false;
   }
-
-  const rect = element.getBoundingClientRect();
-  const clientX = rect.left + Math.min(rect.width / 2, Math.max(1, rect.width - 1));
-  const clientY = rect.top + Math.min(rect.height / 2, Math.max(1, rect.height - 1));
-  const mouseEventInit = {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    button: 0,
-    buttons: 1,
-    clientX,
-    clientY,
-  };
-
-  element.dispatchEvent(new PointerEvent('pointerdown', mouseEventInit));
-  element.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
-  element.dispatchEvent(new PointerEvent('pointerup', mouseEventInit));
-  element.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
-  element.dispatchEvent(new MouseEvent('click', mouseEventInit));
-  element.click();
-  return true;
 };
 
 const waitForTranscriptPanel = async (attempts = 20, intervalMs = 250, signal?: AbortSignal) => {
