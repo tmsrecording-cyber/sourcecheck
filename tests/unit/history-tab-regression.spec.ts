@@ -29,11 +29,30 @@ interface CardFeedProps {
   activeTab: 'live' | 'history';
 }
 
+interface LiveStateProps {
+  activeTab: 'live' | 'history';
+  latestCheckedCard: boolean;
+  latestPendingClaim: boolean;
+  showPrimaryReadingState: boolean;
+  status: 'idle' | 'loading' | 'monitoring' | 'verifying' | 'ready' | 'no-transcript' | 'error';
+}
+
 // Exact logic from CardFeed.tsx
 function getDisplayCards(props: CardFeedProps): SourceCard[] {
   const { cards, allCards, activeTab } = props;
   // FIX: Use allCards (unfiltered) for HISTORY tab, cards (leash-filtered) for LIVE tab
   return activeTab === 'history' && allCards ? allCards : cards;
+}
+
+function shouldShowFallbackLiveState(props: LiveStateProps): boolean {
+  const { activeTab, latestCheckedCard, latestPendingClaim, showPrimaryReadingState, status } = props;
+  return (
+    activeTab === 'live' &&
+    !latestCheckedCard &&
+    !latestPendingClaim &&
+    !showPrimaryReadingState &&
+    (status === 'monitoring' || status === 'verifying' || status === 'ready')
+  );
 }
 
 describe('HISTORY Tab Regression', () => {
@@ -128,5 +147,29 @@ describe('HISTORY Tab Regression', () => {
     
     // HISTORY tab should show ALL cards, not truncated
     expect(displayCards.length).toBe(25);
+  });
+
+  it('REGRESSION: should not render fallback live transcript/scanning state in HISTORY tab', () => {
+    expect(
+      shouldShowFallbackLiveState({
+        activeTab: 'history',
+        latestCheckedCard: false,
+        latestPendingClaim: false,
+        showPrimaryReadingState: false,
+        status: 'monitoring',
+      })
+    ).toBe(false);
+  });
+
+  it('should still allow fallback live transcript/scanning state in LIVE tab', () => {
+    expect(
+      shouldShowFallbackLiveState({
+        activeTab: 'live',
+        latestCheckedCard: false,
+        latestPendingClaim: false,
+        showPrimaryReadingState: false,
+        status: 'monitoring',
+      })
+    ).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Key, Eye, EyeOff, CheckCircle2, AlertCircle, ExternalLink, ArrowLeft } from 'lucide-react';
-import { PROVIDER_SETTINGS_KEY, GEMINI_MODELS, DEFAULT_GEMINI_MODEL, normalizeModel, type GeminiModelOption } from '../../background/providers/types';
+import { PROVIDER_SETTINGS_KEY, GEMINI_MODELS, DEFAULT_GEMINI_MODEL, FREEMIUM_MODEL, getStoredProviderApiKey, normalizeModel, type GeminiModelOption } from '../../background/providers/types';
+import { getModelTone } from '../styles/modelTheme';
 
 interface SettingsPanelProps {
   onSaved: () => void;
@@ -31,25 +32,29 @@ const MODEL_LABELS: Record<GeminiModelOption, string> = {
   'gemini-3-flash-preview': 'Gemini 3 Flash Preview',
 };
 
-const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; icon: React.ReactNode }> = {
+const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; rgb: string; icon: React.ReactNode }> = {
   missing: {
     label: 'Setup required',
-    color: 'rgba(215, 174, 251, 0.9)',
-    icon: <Key size={14} className="text-sc-accent-soft" />,
+    color: 'var(--sc-model-blue)',
+    rgb: 'var(--sc-model-blue-rgb)',
+    icon: <Key size={14} className="text-sc-accent" />,
   },
   present: {
     label: 'API key configured',
-    color: 'rgba(129, 201, 149, 0.9)',
+    color: 'var(--sc-supported)',
+    rgb: 'var(--sc-supported-rgb)',
     icon: <CheckCircle2 size={14} className="text-sc-supported" />,
   },
   invalid: {
     label: 'Invalid key',
-    color: 'rgba(242, 139, 130, 0.9)',
+    color: 'var(--sc-disputed)',
+    rgb: 'var(--sc-disputed-rgb)',
     icon: <AlertCircle size={14} className="text-sc-disputed" />,
   },
   quota_exhausted: {
     label: 'Quota exhausted',
-    color: 'rgba(242, 139, 130, 0.9)',
+    color: 'var(--sc-disputed)',
+    rgb: 'var(--sc-disputed-rgb)',
     icon: <AlertCircle size={14} className="text-sc-disputed" />,
   },
 };
@@ -156,10 +161,9 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
             resolve();
             return;
           }
-          
-          // Check for stored key
-          if (typeof stored.apiKey === 'string' && stored.apiKey.trim()) {
-            const key = stored.apiKey.trim();
+
+          const key = getStoredProviderApiKey(stored);
+          if (key) {
             setStoredKeyLast4(key.slice(-4));
             setHasStoredKey(true);
           } else {
@@ -211,8 +215,10 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
   const handleClearKey = async () => {
     try {
       await chrome.storage.local.remove(PROVIDER_SETTINGS_KEY);
+      await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model: FREEMIUM_MODEL }).catch(() => {});
       setHasStoredKey(false);
       setStoredKeyLast4(null);
+      setSelectedModel(FREEMIUM_MODEL);
       setApiKey('');
     } catch (err) {
       console.error('[SourceCheck/UI] Failed to clear provider settings:', err);
@@ -225,6 +231,7 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
 
   const currentStatus = keyStatus;
   const statusConfig = STATUS_CONFIG[currentStatus];
+  const effectiveModelTone = getModelTone(effectiveModel || selectedModel);
 
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
@@ -237,14 +244,14 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
               style={{
                 top: '10px',
                 background: statusConfig.color,
-                boxShadow: `0 0 0 4px ${statusConfig.color.replace('0.9', '0.18')}`,
+                boxShadow: `0 0 0 4px rgba(${statusConfig.rgb}, 0.16), 0 0 10px rgba(${statusConfig.rgb}, 0.20)`,
               }}
             />
             <span
               className="rail-connector"
               style={{
                 top: '14px',
-                background: `linear-gradient(90deg, ${statusConfig.color}, rgba(0, 0, 0, 0))`,
+                background: `linear-gradient(90deg, rgba(${statusConfig.rgb}, 0.88), rgba(${statusConfig.rgb}, 0))`,
               }}
             />
             <div className="capture-plate ml-1 px-4 py-4 border border-sc-border-soft bg-sc-surface-0 shadow-sc-soft">
@@ -269,12 +276,12 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
               </div>
               <p className="mt-2 text-[13px] leading-relaxed text-sc-text-soft">
                 {keyStatus === 'missing' 
-                  ? 'Add your Google AI Studio key to let SourceCheck use your own Gemini quota.'
+                  ? 'Add your Google AI Studio key to use your own Gemini quota and unlock model selection.'
                   : keyStatus === 'present'
-                  ? 'Your API key is saved. SourceCheck will use it for Gemini requests when needed.'
+                  ? 'Your API key is saved. SourceCheck will use your Gemini quota for BYOK requests.'
                   : keyStatus === 'invalid'
-                  ? 'Your API key appears invalid or expired. Update it below.'
-                  : 'Your API quota is exhausted. Try again tomorrow or use a different key.'}
+                  ? 'Your saved API key was rejected. Update it below or remove it to return to the default managed model.'
+                  : 'Your saved API key has no quota available right now. Use a different key or try again later.'}
               </p>
 
               <div className="mt-4 space-y-2">
@@ -318,7 +325,14 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
 
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-sc-muted">Model</label>
-                  <div className="w-full rounded border border-sc-border bg-sc-surface-1 px-3 py-2 text-[13px] text-sc-text-soft">
+                  <div
+                    className="flex w-full items-center gap-2 rounded border bg-sc-surface-1 px-3 py-2 text-[13px] text-sc-text-soft"
+                    style={{ borderColor: `rgba(${effectiveModelTone.rgb}, 0.22)` }}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: effectiveModelTone.hex }}
+                    />
                     {/* Show effective model (what server is actually using) */}
                     {MODEL_LABELS[effectiveModel as GeminiModelOption] || MODEL_LABELS[selectedModel]}
                   </div>

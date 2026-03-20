@@ -11,7 +11,7 @@ interface AskBoxProps {
 }
 
 const TYPING_DOT_DELAYS = [0, 140, 280] as const;
-const ASK_INPUT_ID = 'sourcecheck-ask-input';
+export const ASK_INPUT_ID = 'sourcecheck-ask-input';
 
 export const AskBox = ({
   transcript,
@@ -45,10 +45,10 @@ export const AskBox = ({
       <div className="relative group">
         <div className={`
           flex items-center gap-3 px-3 py-2 rounded-xl
-          bg-gradient-to-b from-sc-surface-0 to-[#0b0807]
+          bg-gradient-to-b from-sc-surface-0 to-sc-bg-0
           border transition-all duration-200
           ${hasContext 
-            ? 'border-sc-border-strong shadow-sc-soft focus-within:border-sc-accent/60 focus-within:shadow-[0_0_24px_rgba(138,180,248,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]' 
+            ? 'border-sc-border-strong shadow-sc-soft focus-within:border-sc-accent/60 focus-within:shadow-[0_0_24px_rgba(138,180,248,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]'
             : 'border-sc-border-soft/60 opacity-75'
           }
         `}>
@@ -77,7 +77,7 @@ export const AskBox = ({
               mechanical-btn shrink-0 font-mono text-[10px] font-bold tracking-[0.15em] uppercase px-4 py-2.5 rounded-md
               flex items-center justify-center min-w-[60px] min-h-[32px] transition-all duration-200
               ${isQueryReady 
-                ? 'bg-gradient-to-b from-sc-accent/25 to-sc-accent/10 border border-sc-accent/60 text-sc-accent hover:text-sc-text hover:border-sc-accent/80 hover:shadow-[0_0_18px_rgba(96,165,250,0.35),inset_0_1px_0_rgba(255,255,255,0.12)] shadow-[0_0_12px_rgba(96,165,250,0.2)]' 
+                ? 'bg-gradient-to-b from-sc-accent/25 to-sc-accent/10 border border-sc-accent/60 text-sc-accent hover:text-sc-text hover:border-sc-accent/80 hover:shadow-[0_0_18px_rgba(138,180,248,0.30),inset_0_1px_0_rgba(255,255,255,0.12)] shadow-[0_0_12px_rgba(138,180,248,0.18)]'
                 : 'bg-sc-surface-1/50 border border-sc-border text-sc-text-faint/50 cursor-not-allowed'
               }
             `}

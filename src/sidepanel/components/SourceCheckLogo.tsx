@@ -6,10 +6,10 @@
  * 2. Small UI/icon use: simplified silhouette, no glow, no flares, maximum clarity
  *
  * Colors: Google Gemini palette
- * - Blue: #4992EA
- * - Red: #E8535D
- * - Yellow: #DBB82D
- * - Green: #84B381
+ * - Blue: #4285F4
+ * - Red: #EA4335
+ * - Yellow: #FBBC05
+ * - Green: #34A853
  */
 
 import React from 'react';
@@ -26,10 +26,10 @@ interface SourceCheckLogoProps {
 }
 
 const COLORS = {
-  blue: '#4992EA',
-  red: '#E8535D',
-  yellow: '#DBB82D',
-  green: '#84B381',
+  blue: '#4285F4',
+  red: '#EA4335',
+  yellow: '#FBBC05',
+  green: '#34A853',
 };
 
 /**

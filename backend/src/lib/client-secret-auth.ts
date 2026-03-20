@@ -213,7 +213,12 @@ export function validateClientSecretAuth(request: NextRequest): ClientSecretAuth
 
   // LOCAL DEVELOPMENT: Skip secret check on localhost
   const origin = request.headers.get('origin') || '';
-  const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+  const hostname = request.nextUrl.hostname;
+  const isLocalhost = 
+    origin.includes('localhost') || 
+    origin.includes('127.0.0.1') ||
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1';
   
   // Check if CLIENT_SECRET is set in environment
   const expectedSecret = getExpectedClientSecret();

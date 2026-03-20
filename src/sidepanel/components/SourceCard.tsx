@@ -1,10 +1,9 @@
-import type { CSSProperties } from 'react';
 import type {
   SourceCard as SourceCardRecord,
   VerificationStatus,
 } from '../../../shared/types';
 import { VerdictBadge } from './VerdictBadge';
-import { panelTones } from '../styles/panelTokens';
+import { stripLegacyCachePrefix } from '../utils/trustCopy';
 
 interface SourceCardProps extends SourceCardRecord {
   isLatest?: boolean;
@@ -74,28 +73,23 @@ const STATUS_META: Record<
   {
     label: string;
     color: string;
-    accent: string;
   }
 > = {
   supported: {
     label: 'Supported',
     color: 'text-supported',
-    accent: panelTones.status.supported,
   },
   partial: {
     label: 'Mixed',
     color: 'text-partial',
-    accent: panelTones.status.partial,
   },
   disputed: {
     label: 'Unsupported',
     color: 'text-disputed',
-    accent: panelTones.status.disputed,
   },
   unverifiable: {
     label: 'Needs review',
     color: 'text-textMuted',
-    accent: panelTones.status.neutral,
   },
 };
 
@@ -108,32 +102,26 @@ export const SourceCard = ({
   isLatest,
 }: SourceCardProps) => {
   const statusMeta = STATUS_META[status];
+  const sanitizedNuance = stripLegacyCachePrefix(nuance);
   // Use refined label for unverifiable cards based on sourceTitle/nuance
   const refinedLabel = status === 'unverifiable' 
-    ? getUnverifiableLabel(sourceTitle, nuance)
+    ? getUnverifiableLabel(sourceTitle, sanitizedNuance)
     : statusMeta.label;
   const sourceLine = sourceTitle?.trim()
     ? sourceTitle.trim()
     : 'No strong web match';
-  const nuanceLine = nuance?.trim();
-  const cardStyle = {
-    borderLeft: `3px solid ${statusMeta.accent}`,
-    '--result-accent': statusMeta.accent,
-    '--result-accent-soft': `${statusMeta.accent}28`,
-    '--result-accent-glow': `${statusMeta.accent}40`,
-  } as CSSProperties;
+  const nuanceLine = sanitizedNuance;
 
   return (
     <article
-      className={`feed-card result-card card-enter relative ml-1 px-4 py-4 hover-lift ${isLatest ? 'result-card-active' : ''}`}
-      style={cardStyle}
+      className={`feed-card result-card card-enter relative ml-1 px-4 py-4 hover-lift ${isLatest ? 'result-card-active result-card-hero' : ''}`}
       data-verdict={status}
       data-testid="source-card"
     >
       <span
         className="result-card-tab"
         aria-hidden="true"
-        style={{ background: statusMeta.accent }}
+        style={{ background: 'var(--result-accent)' }}
       />
 
       {/* Verdict — with status icon */}

@@ -27,6 +27,7 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   currentScanEntities: [],
   currentScanActionState: null,
   currentScanReason: null,
+  lastProviderError: null,
   lastProcessedIndex: -1,
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
@@ -154,6 +155,18 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
     currentScanEntities: Array.isArray(candidate.currentScanEntities) ? candidate.currentScanEntities : INITIAL_RUNTIME_STATE.currentScanEntities,
     currentScanActionState: candidate.currentScanActionState ?? null,
     currentScanReason: typeof candidate.currentScanReason === 'string' ? candidate.currentScanReason : null,
+    lastProviderError:
+      candidate.lastProviderError &&
+      typeof candidate.lastProviderError === 'object' &&
+      (
+        typeof candidate.lastProviderError.code === 'string' ||
+        typeof candidate.lastProviderError.message === 'string'
+      )
+        ? {
+            code: typeof candidate.lastProviderError.code === 'string' ? candidate.lastProviderError.code : undefined,
+            message: typeof candidate.lastProviderError.message === 'string' ? candidate.lastProviderError.message : undefined,
+          }
+        : null,
     lastProcessedIndex: Number.isFinite(candidate.lastProcessedIndex)
       ? Math.floor(candidate.lastProcessedIndex as number)
       : INITIAL_RUNTIME_STATE.lastProcessedIndex,

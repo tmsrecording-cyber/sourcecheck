@@ -303,6 +303,8 @@ export interface SourceCard {
   verifiedAt: string;                // ISO timestamp
   /** IDs of similar claims from other videos (cross-video memory) */
   relatedClaimIds?: string[];
+  /** Similar claims from other videos surfaced by cross-video memory */
+  similarClaims?: SimilarClaim[];
   /** Embedding vector for similarity search (not sent to client, stored server-side) */
   embedding?: number[];
 }

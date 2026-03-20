@@ -1,78 +1,78 @@
-# Checkpoint: transcript-pipeline-recovery-working
+# Checkpoint: sidepanel-m3-lock-in-progress
 
-## Active Transcript Fixes Now Present
+**Date:** 2026-03-20  
+**Status:** Baseline locked  
+**Tag:** baseline-2026-03-20-sidepanel-lock
 
-1. **INNERTUBE_API_KEY fallback** (`src/content/transcript.ts:619-631`)
-   - Multiple extraction paths: `ytcfg?.get`, `yt.config_`, `ytcfg.data_`
-   - Validates key starts with 'AIza' before use
+## Current Verified State
 
-2. **InnerTube API direct fetch** (`src/content/transcript.ts:642-691`)
-   - Bypasses stale ytInitialPlayerResponse on SPA navigation
-   - Uses proper X-Youtube-Client headers
+### Automated gates
+- ✅ Extension unit tests: `75/75`
+- ✅ Backend unit tests: `105/105`
+- ✅ Extension build: `npm run build`
+- ✅ Extension smoke e2e: `npm run test:e2e:smoke`
 
-3. **Unicode ampersand decode** (`src/content/transcript.ts:891-897`)
-   - Fixes `\u0026` → `&` and `\` → `"` in caption track baseUrl
+### Product state confirmed in code
+- ✅ Unified `FeedCard` system is the single live/history card primitive
+- ✅ Managed model path is hard-locked to `gemini-2.5-flash`
+- ✅ BYOK model selection is preserved only when a valid stored key exists
+- ✅ Cross-video memory UI renders in hero and compact cards
+- ✅ Global Ask focus shortcut works from the sidepanel shell
+- ✅ Sidepanel notice layer exists for settings save, model change, and transcript fallback
 
-4. **DNR/Header injection** (`src/manifest.ts`, `src/background/providers/`)
-   - Declarative Net Request rules for caption fetch headers
+## What Changed Since The 2026-03-17 Recovery Baseline
 
-5. **Anti-bot fetch headers** (`src/content/transcript.ts:656-679`)
-   - Proper Content-Type, X-Youtube-Client-Name/Version headers
+1. **Model policy hardening**
+   - Freemium/managed mode now snaps back to `gemini-2.5-flash`
+   - Stale saved BYOK models no longer leak into managed sessions
+   - UI shows effective model, not stale sync state
 
-## Model Sync/Persistence Fix Present
+2. **Sidepanel architecture cleanup**
+   - `CardFeed.tsx` reduced from the old multi-path legacy structure to the current lean feed shell
+   - Dead live-strip/checking/history-row code removed
+   - Loading, empty, hero, verifying, scanning, and compact states all render through `FeedCard`
 
-1. **Worker** (`src/background/service-worker.ts:184`)
-   - `INITIAL_RUNTIME_STATE.selectedModel = 'gemini-3.1-flash-lite'`
-   - `MODEL_CHANGED` handler persists to `chrome.storage.sync` (line 2020-2027)
-   - Hydration restores from session + sync storage (line 1186, 1232-1234)
+3. **Trust and memory improvements**
+   - Similar-claim memory is wired end-to-end from backend to UI
+   - Cached/memory wording is normalized for user-facing trust copy
+   - Legacy truth-score UI is removed from active UI and dead CSS cleaned up
 
-2. **UI** (`src/sidepanel/App.tsx:95-107`)
-   - Syncs from runtimeState.selectedModel
-   - Persists to sync storage on change
-   - Sends MODEL_CHANGED message to worker
+4. **Shell interaction hardening**
+   - Ask shortcut supports `/` and `Cmd+K` / `Ctrl+K`
+   - App listeners use safer live-ref patterns
+   - Transcript retry display state no longer relies on the older effect-driven double render pattern
 
-3. **Backend** (`backend/src/lib/gemini.ts:2,543-567`)
-   - `FREEMIUM_MODEL = 'gemini-2.5-flash'` (synced with worker via shared types)
-   - `ALLOWED_MODELS` whitelist security check
-   - Dynamic model selection from client requests
+## Manual Evidence Captured This Pass
 
-## Exact Files Recently Touched
+These are supported by current UI validation during this pass:
+- ✅ Live scan hero card
+- ✅ Verified hero card
+- ✅ Mixed / unresolved compact history rows
+- ✅ Cross-video memory surfaced as `Seen before`
+- ✅ Managed model picker showing `2.5` while managed usage stays on Flash 2.5
 
-```
-src/content/transcript.ts              # INNERTUBE_API_KEY, unicode fix
-src/background/service-worker.ts       # Model persistence, reducer, hydration
-src/sidepanel/App.tsx                  # Model picker integration
-src/sidepanel/components/ModelPicker.tsx # Model selection UI
-backend/src/lib/gemini.ts              # Model whitelist, parsing fixes
-backend/src/app/api/analyze-chunk/route.ts   # Model pass-through
-backend/src/app/api/verify-claim/route.ts    # Model pass-through
-backend/src/app/api/ask-video/route.ts       # Model pass-through
-shared/types.ts                        # Model types, WorkerRuntimeState
-src/manifest.ts                        # DNR rules
-```
+## Manual Baseline Checklist
 
-## Known Unverified Risks Still Remaining
+These were the final human baseline checks used to validate the lock:
+- [ ] Live YouTube scan from empty state through first verified card
+- [ ] Source card expansion/collapse in a real browsing session
+- [ ] Ask flow submission and answer rendering in live mode
+- [ ] Refresh continuity on an active video
+- [ ] BYOK save, reload, remove-key reset back to managed model
 
-| Risk | Location | Impact | Verification Plan |
-|------|----------|--------|-------------------|
-| Model default drift | Worker vs Backend defaults differ | Model mismatch UI vs API | Test case #7 |
-| MODEL_CHANGED persistence | service-worker.ts:2020-2027 | Model not persisting across reloads | Test case #7 |
-| Transcript snapshot logic | service-worker.ts:766-782 | Stale transcript on video switch | Test case #4, #5 |
-| Runtime state hydration | service-worker.ts:1173-1294 | State corruption on extension restart | Test case #5 |
-| Dead helpers | gemini.ts various | Code bloat | Post-test audit |
-| Duplicate constants | Multiple files | Maintenance burden | Post-test audit |
+## Known Remaining Work
 
-## Test Status
+### Product-safe next steps
+1. Add a small App-shell regression layer if a React component test harness is introduced later.
+2. Treat sidepanel visual/interaction changes as regression-sensitive from this point forward.
+3. Keep the baseline tag as the rollback point for future UI work.
 
-- [ ] Test matrix executed
-- [ ] Failures captured
-- [ ] Fixes applied
-- [ ] Cleanup completed
+### Things not to misstate
+- This is **not** “production scaling complete.”
+- Transcript extraction is still resilient-but-fragile because YouTube DOM and player-response shapes can drift.
+- A formal baseline tag should not be created until these changes are committed cleanly.
 
-## Pass/FAIL Gate
+## Current Risk Read
 
-PASS only when:
-- 8-case matrix executed with evidence
-- Model selection consistent across UI/worker/persistence/backend
-- Transcript path works on normal + auto-captioned videos
-- Seek/switch/reload do not corrupt state
+**Low** on current sidepanel regressions due to unit/build/smoke coverage.  
+**Medium** on transcript extraction durability because it depends on YouTube internals and selector fallbacks.

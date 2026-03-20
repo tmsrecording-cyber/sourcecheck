@@ -1,16 +1,129 @@
 import { useMemo } from 'react';
 import type { AnalysisStatus, PlaybackState, SourceCard } from '../../../shared/types';
+import { buildModelCssVars } from '../styles/modelTheme';
 import { formatTime } from '../utils/formatTime';
+import type { HeroSlotState } from './CardFeed';
 
 interface VideoHeaderProps {
   title: string;
   channel: string;
+  activeTab?: 'live' | 'history';
   status?: AnalysisStatus;
   playbackState?: PlaybackState | null;
   chunksScanned?: number;
   lastScannedTimestamp?: number | null;
   cards?: SourceCard[];
+  selectedModel?: string;
+  /** Hero slot state for header sync - keeps header aligned with promoted card */
+  heroState?: HeroSlotState;
 }
+
+export interface VerificationSummary {
+  supported: number;
+  mixed: number;
+  unsupported: number;
+  unresolved: number;
+  total: number;
+  text: string;
+}
+
+export const buildVerificationSummary = (cards: SourceCard[]): VerificationSummary | null => {
+  if (!cards.length) {
+    return null;
+  }
+
+  const summary = {
+    supported: 0,
+    mixed: 0,
+    unsupported: 0,
+    unresolved: 0,
+    total: cards.length,
+  };
+
+  cards.forEach((card) => {
+    switch (card.status) {
+      case 'supported':
+        summary.supported += 1;
+        break;
+      case 'partial':
+        summary.mixed += 1;
+        break;
+      case 'disputed':
+        summary.unsupported += 1;
+        break;
+      case 'unverifiable':
+        summary.unresolved += 1;
+        break;
+    }
+  });
+
+  return {
+    ...summary,
+    text: `Supported ${summary.supported} • Mixed ${summary.mixed} • Unsupported ${summary.unsupported} • Unresolved ${summary.unresolved}`,
+  };
+};
+
+export const buildHeaderAnchorCopy = (
+  status: AnalysisStatus,
+  anchorTime: number | null,
+): string => {
+  switch (status) {
+    case 'no-transcript':
+      return 'Transcript unavailable';
+    case 'loading':
+      return 'Preparing transcript';
+    case 'monitoring':
+    case 'verifying':
+      return anchorTime !== null ? `Checking at ${formatTime(anchorTime)}` : 'Checking now';
+    case 'ready':
+      return anchorTime !== null ? `Last checked at ${formatTime(anchorTime)}` : 'Caught up';
+    case 'error':
+      return 'Could not verify right now';
+    case 'idle':
+    default:
+      return 'Waiting for video';
+  }
+};
+
+export const buildStatusLineCopy = (
+  status: AnalysisStatus,
+  hasTranscriptContent: boolean,
+): string | null => {
+  switch (status) {
+    case 'monitoring':
+      return hasTranscriptContent
+        ? 'Turning captions into verifiable notes.'
+        : 'Waiting for a concrete claim worth checking.';
+    case 'verifying':
+      return 'Checking the latest claim against web sources.';
+    case 'ready':
+      return 'Recent checks are up to date.';
+    case 'loading':
+      return 'Loading transcript.';
+    case 'no-transcript':
+      return 'No usable captions were found for this video.';
+    case 'error':
+      return 'Something interrupted verification. Try refreshing the page.';
+    case 'idle':
+    default:
+      return null;
+  }
+};
+
+export const resolveVideoHeaderStatus = (
+  status: AnalysisStatus,
+  heroState?: HeroSlotState,
+): AnalysisStatus => {
+  if (heroState?.mode === 'resolved') {
+    return 'ready';
+  }
+
+  if (heroState?.mode === 'verifying') {
+    return 'verifying';
+  }
+
+  return status;
+};
 
 const STATUS_META: Record<
   AnalysisStatus,
@@ -60,115 +173,151 @@ const STATUS_META: Record<
 export const VideoHeader = ({
   title,
   channel,
+  activeTab = 'live',
   status = 'idle',
   playbackState,
   chunksScanned = 0,
   lastScannedTimestamp = null,
   cards = [],
+  selectedModel,
+  heroState,
 }: VideoHeaderProps) => {
-  const safeDuration =
-    playbackState?.duration && Number.isFinite(playbackState.duration) && playbackState.duration > 0
-      ? playbackState.duration
-      : 1;
-  const progress = playbackState?.duration
-    ? Math.min(100, Math.max(0, ((playbackState.currentTime ?? 0) / safeDuration) * 100))
-    : 0;
-  const scanProgress = playbackState?.duration && lastScannedTimestamp !== null
-    ? Math.min(100, Math.max(0, (lastScannedTimestamp / safeDuration) * 100))
-    : progress;
-  const isPlaybackActive = Boolean(playbackState && !playbackState.paused);
-  const displayStatus = status === 'ready' && isPlaybackActive ? 'monitoring' : status;
+  const modelCssVars = buildModelCssVars(selectedModel);
+  const effectiveStatus = useMemo(
+    () => resolveVideoHeaderStatus(status, heroState),
+    [status, heroState],
+  );
+  const isResolvedHero = heroState?.mode === 'resolved';
+  const isLiveTab = activeTab === 'live';
+  const displayStatus = effectiveStatus;
   const statusMeta = STATUS_META[displayStatus];
-  const timelineCards = useMemo(() => {
-    if (!cards.length) return [];
+  const isModelDrivenStatus = displayStatus === 'loading' || displayStatus === 'monitoring' || displayStatus === 'verifying';
+  const statusBadgeStyle = isResolvedHero
+    ? {
+        borderColor: 'rgba(var(--sc-neutral-rgb), 0.18)',
+        background: 'rgba(var(--sc-surface-1-rgb), 0.72)',
+        color: 'var(--sc-text-soft)',
+      }
+    : isModelDrivenStatus
+    ? {
+        borderColor: 'rgba(var(--model-accent-rgb), 0.32)',
+        background: 'linear-gradient(180deg, var(--model-accent-10), rgba(var(--sc-surface-0-rgb), 0.92))',
+        color: 'var(--model-accent-solid)',
+      }
+    : displayStatus === 'ready'
+      ? {
+          borderColor: 'rgba(var(--sc-supported-rgb), 0.24)',
+          background: 'rgba(var(--sc-supported-rgb), 0.10)',
+          color: 'var(--sc-supported)',
+        }
+      : displayStatus === 'no-transcript'
+        ? {
+            borderColor: 'rgba(var(--sc-partial-rgb), 0.24)',
+            background: 'rgba(var(--sc-partial-rgb), 0.10)',
+            color: 'var(--sc-partial)',
+          }
+        : displayStatus === 'error'
+          ? {
+              borderColor: 'rgba(var(--sc-disputed-rgb), 0.24)',
+              background: 'rgba(var(--sc-disputed-rgb), 0.10)',
+              color: 'var(--sc-disputed)',
+            }
+          : undefined;
+  const verificationSummary = useMemo(() => buildVerificationSummary(cards), [cards]);
 
-    const timelineStep = cards.length > 60 ? Math.ceil(cards.length / 60) : 1;
-
-    return timelineStep > 1
-      ? cards.filter((_card, index) => index % timelineStep === 0)
-      : cards;
-  }, [cards]);
-  const verificationSummary = useMemo(() => {
-    if (!cards.length) return null;
-    
-    const supported = cards.filter(c => c.status === 'supported').length;
-    const partial = cards.filter(c => c.status === 'partial').length;
-    const disputed = cards.filter(c => c.status === 'disputed').length;
-    const unresolved = cards.filter(c => c.status === 'unverifiable').length;
-    const resolved = supported + partial + disputed;
-    
-    if (resolved === 0 && unresolved === 0) return null;
-    
-    const parts: string[] = [];
-    if (supported > 0) parts.push(`${supported} supported`);
-    if (partial > 0) parts.push(`${partial} mixed`);
-    if (disputed > 0) parts.push(`${disputed} unsupported`);
-    if (unresolved > 0) parts.push(`${unresolved} unresolved`);
-    
-    return { text: parts.join(' • '), resolved, total: cards.length };
-  }, [cards]);
-
-  const isActive = displayStatus === 'monitoring' || displayStatus === 'verifying';
-  const anchorTime = isActive
+  const isScanning = !isResolvedHero && (displayStatus === 'monitoring' || displayStatus === 'verifying');
+  const anchorTime = isResolvedHero
+    ? heroState.card.timestampSeconds
+    : isScanning
     ? playbackState?.currentTime ?? lastScannedTimestamp ?? null
     : lastScannedTimestamp ?? playbackState?.currentTime ?? null;
-  const anchorCopy = displayStatus === 'no-transcript'
-    ? 'Transcript unavailable'
-    : displayStatus === 'verifying' && anchorTime !== null
-      ? `Latest note at ${formatTime(anchorTime)}`
-      : anchorTime !== null
-        ? `At ${formatTime(anchorTime)}`
-        : 'Waiting for video';
 
-  // PHASE 1D.11 FIX: Show different status when transcript exists vs waiting for transcript
-  const hasTranscriptContent = (chunksScanned ?? 0) > 0 || (lastScannedTimestamp ?? 0) > 0;
-  const statusLineCopy =
-    displayStatus === 'monitoring'
-      ? (hasTranscriptContent ? 'Turning the transcript into verifiable notes.' : 'Waiting for a concrete claim worth checking.')
-      : displayStatus === 'verifying'
-        ? 'Checking the latest note against web sources.'
-        : displayStatus === 'ready'
-          ? 'Recent notes are up to date.'
-          : null;
+  const heroAwareCopy = useMemo(() => {
+    if (heroState?.mode === 'resolved') {
+      return {
+        anchor: `Checked at ${formatTime(heroState.card.timestampSeconds)}`,
+        statusLine: null,
+      };
+    }
+    if (heroState?.mode === 'verifying') {
+      return {
+        anchor: anchorTime !== null ? `Checking at ${formatTime(anchorTime)}` : 'Checking now',
+        statusLine: 'Checking the latest claim against web sources.',
+      };
+    }
+    return null;
+  }, [heroState, anchorTime]);
+
+  const anchorCopy = heroAwareCopy?.anchor ?? buildHeaderAnchorCopy(displayStatus, anchorTime);
+  const statusBadgeLabel = !isLiveTab
+    ? isResolvedHero
+      ? 'Just checked'
+      : heroState?.mode === 'verifying'
+        ? 'Verifying'
+        : statusMeta.label
+    : null;
+  const showSummary = !isLiveTab && verificationSummary;
 
   return (
-    <header className="glass-deep mx-3 mt-3 px-4 pb-3.5 pt-3.5 rounded-lg">
-      {/* Title + badge - HUD Compressed Typography */}
+    <header
+      className={[
+        'video-header mx-3',
+        isLiveTab
+          ? 'mt-2.5 pl-[52px] pr-3 pb-0 pt-1.5'
+          : 'glass-deep rounded-lg px-4 pb-3 pt-3',
+      ].join(' ').trim()}
+      style={modelCssVars}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1
-            className="text-[13.5px] font-semibold tracking-[-0.011em] leading-[1.4] text-sc-text line-clamp-2 text-balance"
+            className={[
+              'font-semibold tracking-[-0.011em] leading-[1.4] text-sc-text line-clamp-2 text-balance',
+              isLiveTab ? 'text-[12.75px] opacity-95' : 'text-[13.5px]',
+            ].join(' ')}
           >
             {title}
           </h1>
         </div>
 
-        <div className={[
-          'px-2 py-0.5 rounded font-mono text-[9px] font-bold tracking-[0.08em] uppercase bg-sc-surface-2 border border-sc-border-soft/80 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]',
-          statusMeta.tone,
-          isActive ? 'animate-pulse-glow shadow-[0_0_12px_rgba(138,180,248,0.25)]' : '',
-        ].join(' ')}>
-          {statusMeta.label}
+        {statusBadgeLabel && (
+          <div
+            className={[
+              'video-header-status-badge px-2 py-0.5 rounded font-mono text-[9px] font-bold tracking-[0.08em] uppercase bg-sc-surface-2 border border-sc-border-soft/80 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]',
+              isResolvedHero ? 'video-header-status-badge-resolved' : '',
+              statusMeta.tone,
+              isScanning ? 'animate-pulse-glow' : '',
+            ].join(' ')}
+            style={{
+              ...(statusBadgeStyle ?? {}),
+              boxShadow: isScanning ? 'var(--model-accent-glow)' : undefined,
+            }}
+          >
+            {statusBadgeLabel}
+          </div>
+        )}
+      </div>
+
+      {!isLiveTab && (
+        <div className="mt-1.5 flex items-center gap-2">
+          <p
+            className={`truncate font-mono uppercase tracking-[0.12em] text-sc-muted ${isResolvedHero ? 'opacity-60' : 'opacity-75'} text-[11px]`}
+          >
+            {channel}
+            <span className="mx-1.5 opacity-25">·</span>
+            {anchorCopy}
+          </p>
         </div>
-      </div>
+      )}
 
-      {/* Meta row: channel · timestamp */}
-      <div className="mt-1.5 flex items-center gap-2">
-        <p className="truncate text-[11px] font-mono text-sc-muted uppercase tracking-[0.12em] opacity-75">
-          {channel}
-          <span className="mx-1.5 opacity-25">·</span>
-          {anchorCopy}
-        </p>
-      </div>
-
-      {verificationSummary && (
-        <div className="mt-4 rounded-md border border-sc-border-soft/70 bg-sc-surface-1/60 px-3 py-2.5">
+      {showSummary && (
+        <div className="mt-3 rounded-md border border-sc-border-soft/70 bg-sc-surface-1/60 px-3 py-2.5">
           <div className="flex items-end justify-between gap-3">
             <span className="text-[9px] font-bold tracking-[0.12em] uppercase text-sc-muted/60">
-              Verified notes
+              Verification summary
             </span>
             <span className="text-[11px] text-sc-muted/70">
-              {verificationSummary.resolved} resolved of {verificationSummary.total}
+              {verificationSummary.total} checked
             </span>
           </div>
           <p className="mt-1.5 text-[10px] font-mono text-sc-muted/80 tracking-wide">
@@ -176,54 +325,6 @@ export const VideoHeader = ({
           </p>
         </div>
       )}
-
-      {/* Compact status line */}
-      {statusLineCopy && (
-        <p className={`mt-3 text-[10.5px] font-medium leading-relaxed tracking-wide italic opacity-85 font-sc ${statusMeta.accentClass}`}>
-          {statusLineCopy}
-        </p>
-      )}
-
-      {/* Enhanced Timeline with Spectrum Gradient */}
-      <div className="relative mt-4 h-5">
-        {/* Base track with spectrum gradient */}
-        <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full timeline-spectrum-track opacity-40" />
-        
-        {/* Active progress with glow */}
-        <div
-          className="absolute left-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full timeline-spectrum-progress transition-[width] duration-500"
-          style={{ width: `${Math.max(progress, scanProgress)}%` }}
-        />
-        
-        {/* Scan head - diamond shaped with drift animation */}
-        <div
-          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 transition-[left] duration-500 z-10"
-          style={{ left: `${scanProgress}%` }}
-        >
-          <div 
-            className={`h-3 w-3 rotate-45 border-2 bg-sc-bg-0 transition-colors shadow-[0_0_10px_rgba(var(--model-accent-rgb,168,199,250),0.5),inset_0_0_4px_#fff] ${
-              isActive 
-                ? 'border-sc-accent animate-scan-head-drift' 
-                : 'border-sc-line-strong'
-            }`}
-          />
-        </div>
-
-        {/* Verdict ticks - diamond shape with color coding */}
-        {playbackState?.duration && timelineCards.map((card) => {
-          const pct = Math.min(99, Math.max(1, (card.timestampSeconds / playbackState.duration) * 100));
-
-          return (
-            <div
-              key={card.id}
-              className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-              style={{ left: `${pct}%` }}
-            >
-              <div className={`timeline-diamond timeline-diamond-${card.status}`} />
-            </div>
-          );
-        })}
-      </div>
     </header>
   );
 };

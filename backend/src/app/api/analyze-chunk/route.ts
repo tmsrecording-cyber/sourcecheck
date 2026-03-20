@@ -326,6 +326,9 @@ async function normalizeClaimResult(
   let candidatesFilteredByVerifiability = 0;
   let finalCandidateCount = 0;
   
+  console.log('[analyze-chunk:candidates] Raw candidates from LLM:', rawCandidates?.length || 0, 
+    rawCandidates?.map(c => ({ text: c.claim_text?.slice(0, 50), verifiability: c.verifiability })));
+  
   if (rawCandidates && rawCandidates.length > 0) {
     // Filter candidates with valid quotes found in transcript
     const validCandidates = rawCandidates.filter((candidate) => {
@@ -667,7 +670,7 @@ export async function POST(request: NextRequest) {
       outputTokens,
     } = await askGeminiJSON<RawExtraction>(
       prompt,
-      1200,
+      2000,
       CLAIM_EXTRACTION_SCHEMA,
       effectiveModel,
       customApiKey,
@@ -677,6 +680,8 @@ export async function POST(request: NextRequest) {
     // -------------------------------------------------------------------------
     // PHASE 7: Normalize entities
     // -------------------------------------------------------------------------
+    console.log('[analyze-chunk:raw] LLM response:', JSON.stringify(rawExtraction).slice(0, 500));
+    
     const entities = Array.isArray(rawExtraction?.entities)
       ? rawExtraction.entities.filter(
           (value): value is string =>

@@ -40,13 +40,16 @@ import {
   shouldShowSettings,
   type ClassifiedError,
 } from './utils/api';
+import { PROVIDER_SETTINGS_KEY, getStoredProviderApiKey } from './providers/types';
 import {
   isMetadataOnlyVideoChange,
   shouldPreserveStateOnRefresh,
 } from './utils/session-transition';
 import { logTranscriptFailure, logProviderError, logRetryExhausted } from './telemetry';
+import { hardenStorageAccessLevels } from '../utils/storageAccess';
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
+void hardenStorageAccessLevels();
 
 const LARGE_SEEK_TIME_SECONDS = 180;    // jumps > 3 min that weren't caught by VIDEO_SEEKED
 const STARTUP_BACKFILL_SECONDS = 120;   // on first run, scan the last 2 min of history
@@ -292,6 +295,7 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   currentScanEntities: [],
   currentScanActionState: null,
   currentScanReason: null,
+  lastProviderError: null,
   lastProcessedIndex: -1,
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
@@ -512,6 +516,7 @@ const dispatch = (event: WorkerEvent) => {
     currentScanEntities,
     currentScanActionState,
     currentScanReason,
+    lastProviderError: runtimeState.lastProviderError,
     lastProcessedIndex,
     transcriptLoadDeadlineAt,
     pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
@@ -531,6 +536,24 @@ const dispatch = (event: WorkerEvent) => {
 
 const wait = (ms: number) =>
   new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+
+const setLastProviderError = (
+  nextError: WorkerRuntimeState['lastProviderError'],
+) => {
+  runtimeState = {
+    ...runtimeState,
+    lastProviderError: nextError
+      ? {
+          code: nextError.code,
+          message: nextError.message,
+        }
+      : null,
+  };
+};
+
+const clearLastProviderError = () => {
+  setLastProviderError(null);
+};
 
 /**
  * Estimate the byte size of a value when serialized to JSON.
@@ -1590,6 +1613,7 @@ const resetSessionState = (nextVideo: ActiveVideoContext | null) => {
   currentScanEntities = [];
   currentScanActionState = null;
   currentScanReason = null;
+  clearLastProviderError();
   bufferedFutureScan = null;
   verificationQueue = [];
   activeVerificationKeys = new Set<string>();
@@ -1903,12 +1927,13 @@ const hydrateState = async () => {
       'transcriptFetchLog',
       'pendingTranscriptBuffer', 'pendingVerifications',
     ]),
-    chrome.storage.local.get([TRANSCRIPT_SNAPSHOT_KEY, PENDING_TRANSCRIPT_BUFFER_KEY]),
+    chrome.storage.local.get([TRANSCRIPT_SNAPSHOT_KEY, PENDING_TRANSCRIPT_BUFFER_KEY, PROVIDER_SETTINGS_KEY]),
     chrome.storage.sync.get(['selectedModel']),
   ])
     .then(([stored, localStored, syncStored]) => {
       const storedRuntime = stored[WORKER_RUNTIME_STATE_KEY] as Partial<WorkerRuntimeState> | null | undefined;
       const syncSelectedModel = syncStored?.selectedModel as string | undefined;
+      const storedProviderApiKey = getStoredProviderApiKey(localStored[PROVIDER_SETTINGS_KEY]);
 
       // Restore canonical state from stored WorkerRuntimeState
       if (storedRuntime && typeof storedRuntime === 'object') {
@@ -1952,11 +1977,20 @@ const hydrateState = async () => {
           // Restore selectedModel from sync storage if not in session
           // Validate against allowed models to prevent corrupted values
           selectedModel: (() => {
-            // BUGFIX #2: HYDRATION MODEL NORMALIZATION — Normalize first, then validate.
-            // Prevents stale aliases or malformed but normalizable values from being rejected inconsistently.
             const rawModel = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
             const normalized = normalizeModel(rawModel);
-            return (normalized ?? INITIAL_RUNTIME_STATE.selectedModel) as GeminiModelOption;
+            if (!storedProviderApiKey) {
+              if (normalized !== FREEMIUM_MODEL) {
+                console.warn(
+                  `[model-policy] Clearing stale non-BYOK model '${normalized}' during hydration; reverting to '${FREEMIUM_MODEL}'`
+                );
+                void chrome.storage.sync.set({ selectedModel: FREEMIUM_MODEL }).catch((storageError) => {
+                  console.error('[SourceCheck/SW] Failed to reset stale sync model during hydration:', storageError);
+                });
+              }
+              return FREEMIUM_MODEL;
+            }
+            return normalized as GeminiModelOption;
           })(),
         };
 
@@ -2151,7 +2185,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       .map((c) => c.text)
       .join(' ');
 
-    const { sourceCard } = await fetchWithBYOK('/api/verify-claim', {
+    const { sourceCard: rawSourceCard, similarClaims = [] } = await fetchWithBYOK('/api/verify-claim', {
       claim: item.claim, 
       videoId: item.videoId,
       videoTitle: item.videoTitle, 
@@ -2159,6 +2193,18 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       model: runtimeState.selectedModel,
       contextTranscript: contextTranscript || undefined,
     }) as VerifyClaimResponse;
+    const sourceCard: SourceCard = similarClaims.length > 0
+      ? {
+          ...rawSourceCard,
+          similarClaims,
+          relatedClaimIds: Array.from(
+            new Set([
+              ...(rawSourceCard.relatedClaimIds ?? []),
+              ...similarClaims.map((claim) => claim.id),
+            ]),
+          ),
+        }
+      : rawSourceCard;
     console.log(
       `[SourceCheck/SW] verify-claim success video=${item.videoId} card=${sourceCard.status}`
     );
@@ -2184,6 +2230,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     }
 
     syncVisibleTimelineState(currentPlaybackState?.currentTime ?? null);
+    clearLastProviderError();
     dispatch({ type: 'VERIFY_COMPLETED' });
     persistPanelState({ includeCards: true, includeQueue: true });
     
@@ -2231,6 +2278,11 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       route: '/api/verify-claim',
       attempts: MAX_VERIFICATION_RETRIES + 1,
       context: classifiedError.code,
+    });
+
+    setLastProviderError({
+      code: classifiedError.code,
+      message: classifiedError.message,
     });
     
     // Broadcast error to sidepanel for unified UI handling (fire-and-forget, has internal try-catch)
@@ -2618,10 +2670,16 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
       }) as AnalyzeChunkResponse;
     } catch (analyzeError) {
       // TRIAGE: Log model-specific failures
+      const errorMessage = analyzeError instanceof Error 
+        ? analyzeError.message 
+        : typeof analyzeError === 'object' && analyzeError !== null
+          ? JSON.stringify(analyzeError)
+          : String(analyzeError);
       console.error('[Pipeline] ANALYZE CHUNK FAILED:', {
         videoId: requestVideoId,
         model: runtimeState.selectedModel,
-        error: analyzeError instanceof Error ? analyzeError.message : String(analyzeError),
+        error: errorMessage,
+        errorType: analyzeError instanceof Error ? 'Error' : typeof analyzeError,
         durationMs: Date.now() - analyzeStartTime,
       });
       throw analyzeError;
@@ -3038,22 +3096,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === 'MODEL_CHANGED') {
-      // BUGFIX #1: MODEL POLICY ENFORCEMENT — Always normalize and validate through shared policy.
-      // Prevents corrupted/stale UI values from persisting invalid models to storage/runtime.
       const normalizedModel = normalizeModel(message.model);
-      if (!normalizedModel) {
-        console.error('[SourceCheck/SW] Invalid model rejected:', message.model);
-        sendResponse({ status: 'error', error: 'Invalid model selection.' });
-        return;
-      }
-      runtimeState.selectedModel = normalizedModel;
+      let effectiveModel = normalizedModel;
+
       try {
-        await chrome.storage.sync.set({ selectedModel: normalizedModel });
+        const storedProvider = await chrome.storage.local.get([PROVIDER_SETTINGS_KEY]);
+        const storedProviderApiKey = getStoredProviderApiKey(storedProvider[PROVIDER_SETTINGS_KEY]);
+        if (!storedProviderApiKey) {
+          if (normalizedModel !== FREEMIUM_MODEL) {
+            console.warn(
+              `[model-policy] Ignoring non-BYOK model '${normalizedModel}' and reverting to '${FREEMIUM_MODEL}'`
+            );
+          }
+          effectiveModel = FREEMIUM_MODEL;
+        }
+      } catch (storageError) {
+        console.error('[SourceCheck/SW] Failed to read provider settings for model change:', storageError);
+        effectiveModel = FREEMIUM_MODEL;
+      }
+
+      runtimeState.selectedModel = effectiveModel;
+      clearLastProviderError();
+      try {
+        await chrome.storage.sync.set({ selectedModel: effectiveModel });
       } catch (storageError) {
         console.error('[SourceCheck/SW] Failed to persist model selection:', storageError);
       }
       persistPanelState();
-      console.log('[SourceCheck/SW] Model changed to:', normalizedModel);
+      console.log('[SourceCheck/SW] Model changed to:', effectiveModel);
       sendResponse({ status: 'ok' });
       return;
     }
@@ -3073,6 +3143,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         
         console.error('[SourceCheck/SW] Ask question failed:', summarizeErrorForLog(error));
+
+        setLastProviderError({
+          code: classifiedError.code,
+          message: classifiedError.message,
+        });
+        persistPanelState();
         
         // Broadcast provider error when appropriate (auth/quota/BYOK failures)
         if (shouldShowSettings(classifiedError.code)) {
@@ -3085,6 +3161,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           errorCode: classifiedError.code,
         });
       }
+      return;
+    }
+
+    if (message.type === 'CLEAR_PROVIDER_ERROR') {
+      clearLastProviderError();
+      persistPanelState();
+      sendResponse({ status: 'ok' });
       return;
     }
 
@@ -3113,6 +3196,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'error', error: 'The source tab no longer matches the active video.' });
         return;
       }
+
+      clearLastProviderError();
+      persistPanelState();
 
       const result = await chrome.tabs.sendMessage(targetTab.id, {
         type: 'RETRY_TRANSCRIPT',

@@ -42,6 +42,32 @@ export interface ProviderSettings {
 }
 
 export const PROVIDER_SETTINGS_KEY = 'providerSettings';
+const GEMINI_API_KEY_PREFIX = 'AIza';
+const MIN_GEMINI_API_KEY_LENGTH = 20;
+
+export const getStoredProviderApiKey = (settings: unknown): string | null => {
+  if (!settings || typeof settings !== 'object') {
+    return null;
+  }
+
+  const rawApiKey = (settings as { apiKey?: unknown }).apiKey;
+  if (typeof rawApiKey !== 'string') {
+    return null;
+  }
+
+  const trimmedApiKey = rawApiKey.trim();
+  if (
+    trimmedApiKey.length < MIN_GEMINI_API_KEY_LENGTH ||
+    !trimmedApiKey.startsWith(GEMINI_API_KEY_PREFIX)
+  ) {
+    return null;
+  }
+
+  return trimmedApiKey;
+};
+
+export const hasStoredProviderApiKey = (settings: unknown): boolean =>
+  getStoredProviderApiKey(settings) !== null;
 
 export interface ProviderAdapter {
   analyzeChunk(req: AnalyzeChunkRequest): Promise<AnalyzeChunkResponse>;

@@ -1,21 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
 import { AlertTriangle, KeyRound } from 'lucide-react';
-import { PROVIDER_SETTINGS_KEY } from '../background/providers/types';
+import { FREEMIUM_MODEL } from '../../shared/types';
+import { PROVIDER_SETTINGS_KEY, hasStoredProviderApiKey } from '../background/providers/types';
 import { VideoHeader } from './components/VideoHeader';
-import { CardFeed } from './components/CardFeed';
-import { AskBox } from './components/AskBox';
+import { CardFeed, type HeroSlotState } from './components/CardFeed';
+import { AskBox, ASK_INPUT_ID } from './components/AskBox';
 import { ModelPicker } from './components/ModelPicker';
 import { SettingsPanel } from './components/SettingsPanel';
+import { NoticeStack } from './components/NoticeStack';
 import { SourceCheckLogo } from './components/SourceCheckLogo';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useExtensionStorage } from './hooks/useExtensionStorage';
+import { shouldHandleAskShortcut } from './utils/askShortcut';
+import {
+  buildModelChangedNotice,
+  buildSettingsSavedNotice,
+  getLatestTranscriptFallbackNotice,
+  type PendingSidepanelNotice,
+  type SidepanelNotice,
+} from './utils/notices';
 import { lifecycleToAnalysisStatus } from './utils/state';
+import { resolveDisplayAnalysisStatus } from './utils/displayAnalysisStatus';
 import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel } from './components/DebugPanels';
+import { hardenStorageAccessLevels } from '../utils/storageAccess';
 import type {
   AskQuestionResponse,
   AskQuestionSource,
   AnalysisStatus,
+  ProviderErrorState,
 } from '../../shared/types';
 
 const SHOW_DEBUG =
@@ -43,6 +56,18 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return fallback;
 };
 
+const MAX_ASK_HISTORY = 50;
+
+const useLiveRef = <T,>(value: T) => {
+  const ref = useRef(value);
+
+  useLayoutEffect(() => {
+    ref.current = value;
+  }, [value]);
+
+  return ref;
+};
+
 const PanelShell = ({
   label,
   subcopy,
@@ -56,20 +81,23 @@ const PanelShell = ({
 }) => (
   <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
     <div className="w-full max-w-[320px]">
-      <div className="instrument-shell px-5 py-5 border border-sc-border shadow-sc-main bg-sc-surface-glass backdrop-blur-md">
-        <div className="signal-rail" style={{ left: '24px', top: '18px', bottom: '18px' }} />
-        <div className="relative pl-[42px]">
-          <span
-            className={`rail-node ${error ? 'bg-sc-disputed animate-pulse shadow-[0_0_0_4px_rgba(198,111,93,0.18)]' : 'bg-sc-accent-soft animate-rail-node-pulse shadow-[0_0_0_4px_rgba(231,210,173,0.18)]'}`}
-            style={{
-              top: '10px',
-            }}
-          />
-          <span
-            className={`rail-connector absolute h-[1px] w-[14px] left-[26px] bg-gradient-to-r to-transparent opacity-80 ${error ? 'from-sc-disputed' : 'from-sc-accent-soft'}`}
-            style={{
-              top: '14px',
-            }}
+        <div className="instrument-shell px-5 py-5 border border-sc-border shadow-sc-main bg-sc-surface-glass backdrop-blur-md">
+          <div className="signal-rail" style={{ left: '24px', top: '18px', bottom: '18px' }} />
+          <div className="relative pl-[42px]">
+            <span
+              className={`rail-node ${error ? 'bg-sc-disputed animate-pulse' : 'bg-sc-accent animate-rail-node-pulse'}`}
+              style={{
+                top: '10px',
+                boxShadow: error
+                  ? '0 0 0 4px rgba(var(--sc-disputed-rgb), 0.16), 0 0 10px rgba(var(--sc-disputed-rgb), 0.20)'
+                  : '0 0 0 4px rgba(var(--sc-model-blue-rgb), 0.12), 0 0 10px rgba(var(--sc-model-blue-rgb), 0.18)',
+              }}
+            />
+            <span
+              className={`rail-connector absolute left-[26px] h-[1px] w-[14px] bg-gradient-to-r to-transparent opacity-80 ${error ? 'from-sc-disputed' : 'from-sc-accent'}`}
+              style={{
+                top: '14px',
+              }}
           />
           <div className="capture-plate ml-1 px-4 py-4 border border-sc-border-soft bg-sc-surface-0 shadow-sc-soft">
             <div className={`font-mono text-[9px] font-bold tracking-[0.2em] uppercase ${error ? 'text-sc-disputed' : 'text-sc-accent-soft'}`}>
@@ -98,54 +126,132 @@ export const App = () => {
   const [askError, setAskError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [showSettings, setShowSettings] = useState(false);
-  const [lastProviderError, setLastProviderError] = useState<{ code?: string; message?: string } | null>(null);
+  const [lastProviderError, setLastProviderError] = useState<ProviderErrorState | null>(null);
   const [hasCustomKey, setHasCustomKey] = useState(false);
+  const [isRetryingTranscript, setIsRetryingTranscript] = useState(false);
+  const [notices, setNotices] = useState<SidepanelNotice[]>([]);
+  // Hero slot state for header sync - keeps header aligned with promoted card dwell
+  const [heroState, setHeroState] = useState<HeroSlotState>({ mode: 'idle' });
   const isMountedRef = useRef(true);
+  const pendingAskFocusRef = useRef(false);
   const lastSettingsSaveAtRef = useRef(0);
-  const byokCheckVersionRef = useRef(0);
+  const hydratedProviderErrorSignatureRef = useRef<string | null>(null);
+  const noticeTimersRef = useRef<Map<string, number>>(new Map());
+  const lastTranscriptFallbackNoticeAtRef = useRef(0);
   
   // Refs to avoid stale closures in message listeners
-  const hasCustomKeyRef = useRef(hasCustomKey);
-  const lastProviderErrorRef = useRef(lastProviderError);
-  
-  useEffect(() => { hasCustomKeyRef.current = hasCustomKey; }, [hasCustomKey]);
-  useEffect(() => { lastProviderErrorRef.current = lastProviderError; }, [lastProviderError]);
+  const hasCustomKeyRef = useLiveRef(hasCustomKey);
+  const lastProviderErrorRef = useLiveRef(lastProviderError);
+
+  const dismissNotice = useCallback((id: string) => {
+    const timerId = noticeTimersRef.current.get(id);
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      noticeTimersRef.current.delete(id);
+    }
+
+    setNotices((currentNotices) => currentNotices.filter((notice) => notice.id !== id));
+  }, []);
+
+  const enqueueNotice = useCallback((notice: PendingSidepanelNotice) => {
+    setNotices((currentNotices) => {
+      const nextNotice: SidepanelNotice = {
+        ...notice,
+        id: notice.dedupeKey,
+      };
+      const withoutDuplicate = currentNotices.filter((entry) => entry.id !== notice.dedupeKey);
+      return [nextNotice, ...withoutDuplicate].slice(0, 3);
+    });
+
+    const existingTimerId = noticeTimersRef.current.get(notice.dedupeKey);
+    if (existingTimerId !== undefined) {
+      window.clearTimeout(existingTimerId);
+    }
+
+    const timerId = window.setTimeout(() => {
+      dismissNotice(notice.dedupeKey);
+    }, 3600);
+
+    noticeTimersRef.current.set(notice.dedupeKey, timerId);
+  }, [dismissNotice]);
 
   useEffect(() => () => {
     isMountedRef.current = false;
   }, []);
 
-  // Use runtimeState.selectedModel directly - single source of truth
+  useEffect(() => () => {
+    noticeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    noticeTimersRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    void hardenStorageAccessLevels();
+  }, []);
+
+  useEffect(() => {
+    setLastProviderError(runtimeState.lastProviderError ?? null);
+  }, [runtimeState.lastProviderError]);
+
+  useEffect(() => {
+    const code = runtimeState.lastProviderError?.code;
+    const message = runtimeState.lastProviderError?.message;
+    const signature = code || message ? `${code ?? ''}::${message ?? ''}` : null;
+
+    if (!signature) {
+      hydratedProviderErrorSignatureRef.current = null;
+      return;
+    }
+
+    const isHydratedUserKeyError = hasCustomKey && (
+      code === 'AUTH_ERROR' ||
+      code === 'INVALID_API_KEY' ||
+      code === 'QUOTA_EXHAUSTED'
+    );
+
+    if (
+      isHydratedUserKeyError &&
+      !showSettings &&
+      hydratedProviderErrorSignatureRef.current !== signature
+    ) {
+      hydratedProviderErrorSignatureRef.current = signature;
+      setShowSettings(true);
+    }
+  }, [hasCustomKey, runtimeState.lastProviderError, showSettings]);
 
   // Check BYOK status from storage
   useEffect(() => {
-    const checkByokStatus = () => {
-      const currentVersion = ++byokCheckVersionRef.current;
-      chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
-        if (chrome.runtime.lastError || !isMountedRef.current) {
+    let cancelled = false;
+
+    const checkByokStatus = async () => {
+      try {
+        const result = await chrome.storage.local.get([PROVIDER_SETTINGS_KEY]);
+        if (cancelled || !isMountedRef.current) {
           return;
         }
-        // Only apply if this is still the latest request (monotonic versioning)
-        if (currentVersion !== byokCheckVersionRef.current) {
-          return;
-        }
-        const stored = result[PROVIDER_SETTINGS_KEY];
-        const hasKey = !!(stored && typeof stored === 'object' && typeof stored.apiKey === 'string' && stored.apiKey.trim());
-        setHasCustomKey(hasKey);
-      });
-    };
 
-    checkByokStatus();
-
-    // Listen for storage changes to update BYOK status in real-time
-    const storageListener = (changes: Record<string, chrome.storage.StorageChange>) => {
-      if (changes[PROVIDER_SETTINGS_KEY]) {
-        checkByokStatus();
+        setHasCustomKey(hasStoredProviderApiKey(result[PROVIDER_SETTINGS_KEY]));
+      } catch {
+        // Ignore transient storage read failures; the onChanged listener will retry.
       }
     };
 
-    chrome.storage.local.onChanged.addListener(storageListener);
-    return () => chrome.storage.local.onChanged.removeListener(storageListener);
+    void checkByokStatus();
+
+    // Listen for storage changes to update BYOK status in real-time
+    const storageListener = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName === 'local' && changes[PROVIDER_SETTINGS_KEY]) {
+        void checkByokStatus();
+      }
+    };
+
+    chrome.storage.onChanged.addListener(storageListener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(storageListener);
+    };
   }, []);
 
   useEffect(() => {
@@ -156,30 +262,122 @@ export const App = () => {
     setActiveTab('live');
     // Clear stale provider errors when switching videos
     setLastProviderError(null);
-    // Note: displayAnalysisStatus is synced separately via the effect below;
-    // do not force-set it here to avoid dual authority.
+    setIsRetryingTranscript(false);
+    lastTranscriptFallbackNoticeAtRef.current = 0;
   }, [runtimeState.currentVideo?.videoId]);
 
   const analysisStatus = lifecycleToAnalysisStatus(runtimeState.lifecycle);
-  const [displayAnalysisStatus, setDisplayAnalysisStatus] = useState<AnalysisStatus>(analysisStatus);
+  const effectiveSelectedModel = hasCustomKey ? runtimeState.selectedModel : FREEMIUM_MODEL;
+  const hasAskContext = (transcript?.length ?? 0) > 0 || runtimeState.sourceCards.length > 0;
+  const canFocusAsk = hasAskContext && !isThinking;
+  const activeTabRef = useLiveRef(activeTab);
+  const canFocusAskRef = useLiveRef(canFocusAsk);
+  const showSettingsRef = useLiveRef(showSettings);
+  const previousDisplayAnalysisStatusRef = useRef<AnalysisStatus>(analysisStatus);
+  const resolvedDisplayAnalysisStatus = resolveDisplayAnalysisStatus({
+    previousStatus: previousDisplayAnalysisStatusRef.current,
+    nextStatus: analysisStatus,
+    sourceCardCount: runtimeState.sourceCards.length,
+    pendingClaimCount: runtimeState.pendingClaims.length,
+    transcriptChunkCount: runtimeState.transcriptChunkCount,
+  });
+  const displayAnalysisStatus =
+    isRetryingTranscript && analysisStatus === 'no-transcript'
+      ? 'loading'
+      : resolvedDisplayAnalysisStatus;
+
+  const focusAskInput = useCallback(() => {
+    if (typeof document === 'undefined') {
+      return false;
+    }
+
+    const input = document.getElementById(ASK_INPUT_ID);
+    if (!(input instanceof HTMLInputElement) || input.disabled) {
+      return false;
+    }
+
+    input.focus();
+    const caretPosition = input.value.length;
+    input.setSelectionRange?.(caretPosition, caretPosition);
+    return document.activeElement === input;
+  }, []);
+
+  useLayoutEffect(() => {
+    previousDisplayAnalysisStatusRef.current = displayAnalysisStatus;
+  }, [displayAnalysisStatus]);
 
   useEffect(() => {
-    setDisplayAnalysisStatus((prevStatus) => {
-      const shouldHoldUnavailableState =
-        prevStatus === 'no-transcript' &&
-        analysisStatus === 'loading' &&
-        runtimeState.sourceCards.length === 0 &&
-        runtimeState.pendingClaims.length === 0 &&
-        runtimeState.transcriptChunkCount === 0;
+    if (isRetryingTranscript && analysisStatus !== 'no-transcript') {
+      setIsRetryingTranscript(false);
+    }
+  }, [analysisStatus, isRetryingTranscript]);
 
-      return shouldHoldUnavailableState ? prevStatus : analysisStatus;
-    });
-  }, [
-    analysisStatus,
-    runtimeState.pendingClaims.length,
-    runtimeState.sourceCards.length,
-    runtimeState.transcriptChunkCount,
-  ]);
+  useEffect(() => {
+    const fallbackNotice = getLatestTranscriptFallbackNotice(
+      runtimeState.transcriptFetchLog,
+      lastTranscriptFallbackNoticeAtRef.current,
+    );
+
+    if (!fallbackNotice) {
+      return;
+    }
+
+    lastTranscriptFallbackNoticeAtRef.current = fallbackNotice.entryAt;
+    enqueueNotice(fallbackNotice.notice);
+  }, [enqueueNotice, runtimeState.transcriptFetchLog]);
+
+  useEffect(() => {
+    if (!pendingAskFocusRef.current || showSettings || activeTab !== 'live' || !canFocusAsk) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      if (focusAskInput()) {
+        pendingAskFocusRef.current = false;
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
+  }, [activeTab, canFocusAsk, focusAskInput, showSettings]);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (
+        !shouldHandleAskShortcut({
+          key: event.key,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          defaultPrevented: event.defaultPrevented,
+          target: event.target,
+          hasContext: canFocusAskRef.current,
+          showSettings: showSettingsRef.current,
+        })
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      pendingAskFocusRef.current = true;
+
+      if (activeTabRef.current !== 'live') {
+        startTransition(() => {
+          setActiveTab('live');
+        });
+        return;
+      }
+
+      if (focusAskInput()) {
+        pendingAskFocusRef.current = false;
+      }
+    };
+
+    document.addEventListener('keydown', handleShortcut);
+    return () => {
+      document.removeEventListener('keydown', handleShortcut);
+    };
+  }, [focusAskInput]);
 
   const feedScrollKey = useMemo(() => {
     return [
@@ -235,12 +433,15 @@ export const App = () => {
       }
 
       setAskDraft('');
-      setAskHistory((currentHistory) => [...currentHistory, {
-        query: trimmedQuery,
-        answer: result.answer,
-        timestampSeconds: submittedTimestamp,
-        sources: result.sources ?? [],
-      }]);
+      setAskHistory((currentHistory) => ([
+        ...currentHistory.slice(-(MAX_ASK_HISTORY - 1)),
+        {
+          query: trimmedQuery,
+          answer: result.answer,
+          timestampSeconds: submittedTimestamp,
+          sources: result.sources ?? [],
+        },
+      ]));
     } catch (askSubmitError: unknown) {
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
         setAskError(getErrorMessage(askSubmitError, 'Could not resolve that.'));
@@ -257,13 +458,16 @@ export const App = () => {
     // Clear stale errors before attempting fresh retry
     setAskError(null);
     setLastProviderError(null);
+    setIsRetryingTranscript(true);
     try {
+      await chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' });
       await chrome.runtime.sendMessage({
         type: 'RETRY_TRANSCRIPT',
         payload: { videoId: runtimeState.currentVideo.videoId }
       });
     } catch (error) {
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
+      setIsRetryingTranscript(false);
       if (isMountedRef.current) {
         setAskError('Transcript recovery failed. Please refresh the page.');
       }
@@ -308,14 +512,16 @@ export const App = () => {
 
   if (showSettings) {
     return (
-      <SettingsPanel 
+        <SettingsPanel 
         onSaved={() => {
           lastSettingsSaveAtRef.current = Date.now();
           setShowSettings(false);
           setLastProviderError(null);
+          enqueueNotice(buildSettingsSavedNotice());
+          void chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' }).catch(() => {});
         }} 
         lastError={lastProviderError}
-        effectiveModel={runtimeState.selectedModel}
+        effectiveModel={effectiveSelectedModel}
       />
     );
   }
@@ -354,15 +560,17 @@ export const App = () => {
       <div className="hud-grid" aria-hidden="true" />
       <div className="hud-circuit" aria-hidden="true" />
       <div className="flex h-full min-h-0 w-full flex-col bg-sc-bg-0 relative">
-        <div className="tactile-header flex-shrink-0 flex items-center h-[52px] px-4 hud-header z-20 gap-2">
-          {/* Left: Logo + Nav - can shrink */}
-          <div className="flex gap-2 items-center h-full min-w-0 flex-1">
+        <NoticeStack notices={notices} onDismiss={dismissNotice} />
+        <div className="tactile-header hud-header z-20 grid h-[52px] flex-shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3">
+          <div className="flex items-center gap-2 min-w-0">
             <SourceCheckLogo size={16} className="flex-shrink-0" />
             <div className="w-px h-3.5 bg-sc-border-soft/60 flex-shrink-0" aria-hidden="true" />
-            <nav className="flex gap-0.5 h-full items-center min-w-0" role="tablist">
+          </div>
+
+          <nav className="flex h-full min-w-0 items-center justify-center gap-0.5 overflow-hidden" role="tablist">
               <button
                 onClick={() => setActiveTab('live')}
-                className={`tab-btn transition-all duration-300 ease-out ${activeTab === 'live' ? 'active' : ''}`}
+                className={`tab-btn min-w-0 px-2.5 transition-all duration-300 ease-out ${activeTab === 'live' ? 'active' : ''}`}
                 role="tab"
                 aria-selected={activeTab === 'live'}
               >
@@ -371,25 +579,29 @@ export const App = () => {
               </button>
               <button
                 onClick={() => setActiveTab('history')}
-                className={`tab-btn transition-all duration-300 ease-out ${activeTab === 'history' ? 'active' : ''}`}
+                className={`tab-btn min-w-0 px-2.5 transition-all duration-300 ease-out ${activeTab === 'history' ? 'active' : ''}`}
                 role="tab"
                 aria-selected={activeTab === 'history'}
               >
                 HISTORY
                 <span className={`tab-indicator transition-all duration-300 ease-out ${activeTab === 'history' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
               </button>
-            </nav>
-          </div>
-          
-          {/* Right: Picker + Settings - fixed width, no shrink */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          </nav>
+
+          <div className="flex min-w-0 items-center justify-end gap-1.5 flex-shrink-0">
             <ModelPicker 
-              selectedModel={runtimeState.selectedModel} 
+              selectedModel={effectiveSelectedModel} 
               hasCustomKey={hasCustomKey}
               compact
               onModelChange={async (model) => {
+                if (model === effectiveSelectedModel) {
+                  return;
+                }
+
+                setLastProviderError(null);
                 try {
                   await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
+                  enqueueNotice(buildModelChangedNotice(model, hasCustomKey));
                 } catch (error) {
                   console.error('[SourceCheck/UI] Model change failed:', error);
                 }
@@ -417,11 +629,14 @@ export const App = () => {
           <VideoHeader
             title={runtimeState.currentVideo.title}
             channel={runtimeState.currentVideo.channel}
+            activeTab={activeTab}
             status={displayAnalysisStatus}
             playbackState={runtimeState.playbackState}
             chunksScanned={runtimeState.chunksScanned}
             lastScannedTimestamp={runtimeState.lastScannedTimestamp}
-            cards={runtimeState.sourceCards}
+            cards={runtimeState.allSourceCards}
+            selectedModel={effectiveSelectedModel}
+            heroState={heroState}
           />
           <CardFeed
             cards={runtimeState.sourceCards}
@@ -441,7 +656,8 @@ export const App = () => {
             onEntitySelect={handleEntitySelect}
             onRetryTranscript={handleRetryTranscript}
             activeTab={activeTab}
-            selectedModel={runtimeState.selectedModel}
+            selectedModel={effectiveSelectedModel}
+            onHeroStateChange={setHeroState}
           />
         </div>
         {activeTab === 'live' && (

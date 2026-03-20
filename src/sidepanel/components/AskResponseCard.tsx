@@ -29,29 +29,24 @@ export const AskResponseCard = ({
       initial={prefersReducedMotion ? false : { opacity: 0, y: 12, scale: 0.985 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={transition}
-      className="relative pl-[72px]"
+      className="ask-response-card relative feed-rail-offset"
     >
-      <div className="absolute left-0 top-[14px] w-[36px] pr-1 text-right">
-        <span className="rail-timestamp font-mono text-[10px] font-medium tracking-[0.05em] text-accentSoft/76">
+      <div className="absolute left-0 top-[14px] w-[30px] text-right">
+        <span className="rail-timestamp font-mono text-[10px] font-medium tracking-[0.05em] text-sc-accent opacity-80">
           {formatTime(timestampSeconds)}
         </span>
       </div>
 
       <span
-        className="absolute left-[42px] top-[20px] h-[9px] w-[9px] bg-accentSoft"
-        style={{
-          clipPath: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
-          boxShadow: '0 0 10px rgba(224, 204, 157, 0.18)',
-        }}
+        className="ask-response-rail-node absolute top-[20px] h-[9px] w-[9px] bg-sc-accent"
       />
       <span
-        className="absolute left-[50px] top-[24px] h-px w-[14px]"
-        style={{ background: 'linear-gradient(90deg, rgba(224, 204, 157, 0.72), transparent)' }}
+        className="ask-response-rail-connector absolute top-[24px] h-px w-[14px]"
       />
 
       <div className="query-console relative ml-1 px-4 py-4">
-        <div className="mb-3 flex items-start gap-2 border-b border-surfaceBorder/30 pb-3">
-          <span className="mt-0.5 shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-accentSoft/52">
+        <div className="mb-3 flex items-start gap-2 border-b border-sc-border-soft pb-3">
+          <span className="mt-0.5 shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-sc-accent opacity-60">
             You asked
           </span>
           <p className="ask-card-query text-[12px] leading-[1.52] tracking-[-0.006em] text-textMain/78">
@@ -64,7 +59,7 @@ export const AskResponseCard = ({
         </p>
 
         {sources.length > 0 && (
-          <div className="mt-4 border-t border-surfaceBorder/30 pt-3">
+          <div className="mt-4 border-t border-sc-border-soft pt-3">
             <p className="ask-card-sources-label font-mono text-[9px] uppercase tracking-[0.14em] text-textMuted/48">
               Sourced from
             </p>
@@ -76,7 +71,7 @@ export const AskResponseCard = ({
                     href={source.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="ask-card-source-link truncate text-[11px] text-accentSoft/78 transition-colors hover:text-accent"
+                    className="ask-card-source-link truncate text-[11px] text-sc-accent opacity-80 transition-colors hover:opacity-100"
                   >
                     {source.title}
                   </a>

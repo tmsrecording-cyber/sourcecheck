@@ -1,7 +1,7 @@
 import { API_BASE, REQUEST_TIMEOUT_MS } from '../../config';
 import type { GeminiModelOption } from '../../../shared/types';
 import { FREEMIUM_MODEL, normalizeModel } from '../../../shared/types';
-import { PROVIDER_SETTINGS_KEY, type ProviderSettings } from '../providers/types';
+import { PROVIDER_SETTINGS_KEY, getStoredProviderApiKey } from '../providers/types';
 import { logSessionInitFailure, logProviderError, logRetryExhausted } from '../telemetry';
 
 // Retry delays for session token acquisition: 300ms, 800ms, 1500ms (exponential backoff)
@@ -450,13 +450,11 @@ export async function fetchWithBYOK(
     chrome.storage.local.get([PROVIDER_SETTINGS_KEY]),
     chrome.storage.sync.get(['selectedModel']),
   ]);
-  const providerSettings: ProviderSettings | undefined = providerResult[PROVIDER_SETTINGS_KEY];
-  
-  const customApiKey = providerSettings?.apiKey ?? null;
+  const customApiKey = getStoredProviderApiKey(providerResult[PROVIDER_SETTINGS_KEY]);
   // CANONICAL: selectedModel always comes from sync storage (single source of truth)
   const selectedModel = normalizeModel(syncResult.selectedModel);
 
-  const hasCustomKey = customApiKey && customApiKey.trim() !== '';
+  const hasCustomKey = customApiKey !== null;
   
   // MODEL POLICY: 
   // - Freemium (no custom key): Always use FREEMIUM_MODEL
@@ -489,7 +487,7 @@ export async function fetchWithBYOK(
       }
 
       if (hasCustomKey) {
-        headers.set('X-Custom-Api-Key', customApiKey.trim());
+        headers.set('X-Custom-Api-Key', customApiKey);
         // CANONICAL: Always send the selected model from sync storage (single source of truth)
         headers.set('X-Custom-Model', selectedModel);
       }

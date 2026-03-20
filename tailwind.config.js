@@ -7,34 +7,39 @@ export default {
     extend: {
       colors: {
         sc: {
-          // LUMINOUS DARK - Premium Developer Tool Palette
-          'bg-0': '#09090B',       // True black canvas
-          'bg-1': '#18181B',       // Elevated surface
-          'bg-2': '#27272A',       // Higher surface
-          'surface-0': '#18181B',  // Default card background
-          'surface-1': '#27272A',  // Hovered card
-          'surface-2': '#3F3F46',  // Borders/Dividers
-          'surface-glass': 'rgba(24, 24, 27, 0.75)', // True glass
-          line: 'rgba(255, 255, 255, 0.1)',
-          'line-strong': 'rgba(255, 255, 255, 0.2)',
-          'border-soft': 'rgba(255, 255, 255, 0.06)',
-          border: 'rgba(255, 255, 255, 0.12)',  // Crisp borders
-          'border-strong': 'rgba(255, 255, 255, 0.22)',
-          
-          // Luminous Typography - Crisp whites
-          text: '#FAFAFA',         // Stark primary text
-          'text-soft': '#E4E4E7',  // Secondary text (zinc-200)
-          muted: '#A1A1AA',        // De-emphasized (zinc-400)
-          'text-faint': '#71717A', // Very faint (zinc-500)
-          
-          // Neon Accents - High saturation
-          accent: '#60A5FA',       // Bright blue-400
-          'accent-soft': '#93C5FD', // Blue-300
-          supported: '#34D399',    // Bright emerald-400
-          partial: '#FBBF24',      // Vivid amber-400
-          disputed: '#FB7185',     // Sharp rose-400
-          neutral: '#A1A1AA',      // Zinc-400
-          // Google Brand Colors (for logo/identity)
+          // Google dark neutrals
+          'bg-0': '#171717',
+          'bg-1': '#202124',
+          'bg-2': '#3C4043',
+          'surface-0': '#202124',
+          'surface-1': '#2B2D31',
+          'surface-2': '#3C4043',
+          'surface-glass': 'rgba(32, 33, 36, 0.92)',
+          line: 'rgba(255, 255, 255, 0.08)',
+          'line-strong': 'rgba(255, 255, 255, 0.14)',
+          'border-soft': 'rgba(95, 99, 104, 0.32)',
+          border: 'rgba(95, 99, 104, 0.56)',
+          'border-strong': 'rgba(154, 160, 166, 0.72)',
+
+          // Text
+          text: '#FFFFFF',
+          'text-soft': '#E8EAED',
+          muted: '#9AA0A6',
+          'text-faint': '#80868B',
+
+          // Baseline accent and semantic states
+          accent: '#8AB4F8',
+          'accent-soft': '#AECBFA',
+          supported: '#81C995',
+          partial: '#FDE293',
+          disputed: '#F28B82',
+          neutral: '#9AA0A6',
+          'model-blue': '#8AB4F8',
+          'model-green': '#81C995',
+          'model-yellow': '#FDE293',
+          'status-red': '#F28B82',
+
+          // Google brand colors for logo identity
           'google-blue': '#4285F4',
           'google-red': '#EA4335',
           'google-yellow': '#FBBC05',
@@ -42,19 +47,15 @@ export default {
         }
       },
       boxShadow: {
-        'sc-soft': '0 4px 6px rgba(0, 0, 0, 0.3)',
-        'sc-main': '0 10px 20px rgba(0, 0, 0, 0.4)',
-        // Dual-layer: depth + back-lit glow
-        'sc-card': '0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
-        'sc-input': 'inset 0 2px 4px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 255, 255, 0.03)',
-        'sc-glow-blue': '0 0 15px rgba(96, 165, 250, 0.2)',
-        // Inner highlight for glass edge catching light
-        'sc-glass': 'inset 0 1px 0 0 rgba(255, 255, 255, 0.05), inset 1px 0 0 0 rgba(255, 255, 255, 0.02)',
-        // Enhanced hero with inner glow
-        'sc-hero': '0 0 25px rgba(96, 165, 250, 0.15), inset 0 0 0 1px rgba(96, 165, 250, 0.1)',
-        // Backlit mechanical button
-        'sc-mechanical': 'inset 0 1px 0 0 rgba(255, 255, 255, 0.1), 0 2px 4px rgba(0, 0, 0, 0.3)',
-        'sc-mechanical-active': 'inset 0 2px 4px rgba(0, 0, 0, 0.4)',
+        'sc-soft': '0 8px 16px rgba(0, 0, 0, 0.24)',
+        'sc-main': '0 18px 40px rgba(0, 0, 0, 0.34)',
+        'sc-card': '0 12px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04)',
+        'sc-input': 'inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 16px rgba(0, 0, 0, 0.22)',
+        'sc-glow-blue': '0 0 16px rgba(138, 180, 248, 0.18)',
+        'sc-glass': 'inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 1px 0 0 rgba(255, 255, 255, 0.02)',
+        'sc-hero': '0 0 18px rgba(138, 180, 248, 0.14), inset 0 0 0 1px rgba(138, 180, 248, 0.08)',
+        'sc-mechanical': 'inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 4px 10px rgba(0, 0, 0, 0.22)',
+        'sc-mechanical-active': 'inset 0 2px 6px rgba(0, 0, 0, 0.32)',
       },
       fontFamily: {
         sc: ['"Avenir Next"', '"Manrope"', '"Inter"', '-apple-system', 'sans-serif'],
@@ -93,24 +94,24 @@ export default {
           '0%, 100%': { 
             transform: 'scale(1)', 
             opacity: '1', 
-            boxShadow: '0 0 0 3px rgba(168, 199, 250, 0.08)' 
+            boxShadow: '0 0 0 3px rgba(var(--model-accent-rgb, 138, 180, 248), 0.08)' 
           },
           '50%': { 
             transform: 'scale(1.4)', 
             opacity: '0.7', 
-            boxShadow: '0 0 8px rgba(168, 199, 250, 0.2)' 
+            boxShadow: '0 0 8px rgba(var(--model-accent-rgb, 138, 180, 248), 0.2)' 
           },
         },
         scanHeadDrift: {
           '0%, 100%': { 
             opacity: '0.82', 
             transform: 'rotate(45deg) translateX(0) scale(1)', 
-            filter: 'drop-shadow(0 0 0 rgba(168, 199, 250, 0))' 
+            filter: 'drop-shadow(0 0 0 rgba(var(--model-accent-rgb, 138, 180, 248), 0))' 
           },
           '50%': { 
             opacity: '1', 
             transform: 'rotate(45deg) translateX(1.5px) scale(1.05)', 
-            filter: 'drop-shadow(0 0 4px rgba(168, 199, 250, 0.2))' 
+            filter: 'drop-shadow(0 0 4px rgba(var(--model-accent-rgb, 138, 180, 248), 0.24))' 
           },
         },
         dotBounce: {
