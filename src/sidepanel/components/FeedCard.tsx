@@ -10,11 +10,28 @@
  * This creates visual continuity as cards flow down the waterfall.
  */
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { formatTime } from '../utils/formatTime';
 import { stripLegacyCachePrefix } from '../utils/trustCopy';
 import type { SimilarClaim, SourceCard as SourceCardRecord, VerificationStatus } from '../../../shared/types';
+import {
+  SOFT_SPRING,
+  DURATION,
+  DISTANCE,
+  hoverLift,
+  hoverLiftCompact,
+  pressSettle,
+  expandReveal,
+  chevronRotate,
+} from '../styles/motionTokens';
+
+// Backend placeholder strings that should not be displayed as real source titles
+const BACKEND_SOURCE_PLACEHOLDERS = new Set(['Needs primary source', 'No strong web match']);
+const resolveSourceTitle = (raw: string | undefined | null): string | null => {
+  const trimmed = raw?.trim();
+  return (trimmed && !BACKEND_SOURCE_PLACEHOLDERS.has(trimmed)) ? trimmed : null;
+};
 
 // Card size variants
 type CardSize = 'scanning' | 'verifying' | 'hero' | 'compact' | 'state' | 'skeleton';
@@ -84,7 +101,7 @@ const STATUS_META: Record<VerificationStatus, { label: string; rgb: string }> = 
   supported: { label: 'Supported', rgb: '129, 201, 149' },
   partial: { label: 'Mixed', rgb: '253, 226, 147' },
   disputed: { label: 'Unsupported', rgb: '242, 139, 130' },
-  unverifiable: { label: 'Needs review', rgb: '154, 160, 166' },
+  unverifiable: { label: 'Unverifiable', rgb: '154, 160, 166' },
 };
 
 const buildSimilarClaimSummary = (similarClaims: SimilarClaim[]): string | null => {
@@ -99,6 +116,12 @@ const buildSimilarClaimSummary = (similarClaims: SimilarClaim[]): string | null 
   }
 
   return `${leadLabel} +${similarClaims.length - 1} more`;
+};
+
+const stopSourceLinkPropagation = (
+  event: ReactMouseEvent<HTMLAnchorElement> | ReactKeyboardEvent<HTMLAnchorElement>,
+) => {
+  event.stopPropagation();
 };
 
 // Status icons
@@ -146,13 +169,11 @@ const VerifyingContent = ({ claimText }: { claimText: string }) => {
   }, []);
   
   const thoughts = [
-    'analyzing claim structure...',
-    'searching web sources...', 
-    'cross-referencing data...',
-    'synthesizing findings...'
+    'Reading the claim',
+    'Searching sources',
+    'Cross-referencing',
+    'Synthesizing results',
   ];
-  const scanProgress = [18, 42, 68, 88][thoughtIndex] ?? 18;
-
   return (
     <>
       <div className="flex items-center gap-2">
@@ -165,16 +186,17 @@ const VerifyingContent = ({ claimText }: { claimText: string }) => {
       </p>
 
       <div className="thinking-stream mt-3">
-        <div className="thinking-terminal">
-          <span className="thinking-prompt">›</span>
-          <span className="thinking-text">{thoughts[thoughtIndex]}</span>
+        {/* Step pills — one per thought phase, fills left to right */}
+        <div className="verifying-pips" aria-hidden="true">
+          {thoughts.map((_, i) => (
+            <span
+              key={i}
+              className="verifying-pip"
+              data-state={i < thoughtIndex ? 'done' : i === thoughtIndex ? 'active' : 'pending'}
+            />
+          ))}
         </div>
-        <div className="thinking-scan-lane" aria-hidden="true">
-          <div className="thinking-scan-track" />
-          <div className="thinking-scan-fill" style={{ width: `${scanProgress}%` }} />
-          <div className="thinking-scan-head" style={{ left: `${scanProgress}%` }} />
-        </div>
-        <p className="thinking-status-copy">Cross-checking public sources before surfacing a result.</p>
+        <p className="verifying-thought">{thoughts[thoughtIndex]}</p>
       </div>
     </>
   );
@@ -184,7 +206,10 @@ const VerifyingContent = ({ claimText }: { claimText: string }) => {
 const HeroContent = ({ card }: { card: SourceCardRecord }) => {
   const meta = STATUS_META[card.status];
   const nuance = stripLegacyCachePrefix(card.nuance);
-  const source = card.sourceTitle?.trim() || 'No strong web match';
+  const resolvedSourceTitle = resolveSourceTitle(card.sourceTitle);
+  const source = resolvedSourceTitle || 'No reliable source found';
+  const evidenceSnippet = card.evidenceSnippet?.trim() || '';
+  const hasSourceLink = Boolean(card.sourceUrl?.trim() && resolvedSourceTitle);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
 
   return (
@@ -197,18 +222,41 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
       </div>
 
       {nuance && (
-        <p className="mt-2.5 text-[15px] font-semibold text-textMain leading-snug line-clamp-3">
+        <p className="feed-card-claim-summary mt-2.5 line-clamp-3">
           {nuance}
         </p>
       )}
 
-      <p className="mt-2.5 text-[13px] text-textMain/65 leading-relaxed line-clamp-2">
+      <p className="feed-card-quote mt-2.5 line-clamp-2">
         "{card.claim.claimText}"
       </p>
 
-      <div className="mt-3 pt-3 border-t border-sc-border-soft/50">
-        <p className="text-[11px] uppercase tracking-wider text-sc-muted font-medium">Source</p>
-        <p className="mt-1 text-[12px] text-textMain/80">{source}</p>
+      {evidenceSnippet && (
+        <div className="feed-card-evidence-block mt-3">
+          <p className="feed-card-evidence-kicker">Evidence</p>
+          <p className="feed-card-evidence-copy mt-1 line-clamp-4">
+            "{evidenceSnippet}"
+          </p>
+        </div>
+      )}
+
+      <div className="feed-card-source-block mt-3">
+        <p className="feed-card-source-kicker">Source</p>
+        {hasSourceLink ? (
+          <a
+            href={card.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="feed-card-source-link feed-card-source-copy mt-1"
+            onClick={stopSourceLinkPropagation}
+            onKeyDown={stopSourceLinkPropagation}
+          >
+            <span>{source}</span>
+            <span aria-hidden="true">↗</span>
+          </a>
+        ) : (
+          <p className="feed-card-source-copy mt-1">{source}</p>
+        )}
       </div>
 
       {memorySummary && (
@@ -235,7 +283,10 @@ const CompactContent = ({
   const nuance = stripLegacyCachePrefix(card.nuance);
   const prefersReducedMotion = useReducedMotion();
   const primaryText = nuance || card.claim.claimText;
-  const secondaryText = card.sourceTitle?.trim() || (nuance ? card.claim.claimText : '');
+  const resolvedSourceTitleCompact = resolveSourceTitle(card.sourceTitle);
+  const secondaryText = resolvedSourceTitleCompact || (nuance ? card.claim.claimText : '');
+  const evidenceSnippet = card.evidenceSnippet?.trim() || '';
+  const hasSourceLink = Boolean(card.sourceUrl?.trim() && resolvedSourceTitleCompact);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
   const isInteractive = Boolean(onToggle);
 
@@ -283,10 +334,10 @@ const CompactContent = ({
 
           {isExpanded && (
             <motion.div
-              initial={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
+              initial={prefersReducedMotion ? false : expandReveal.initial}
+              animate={expandReveal.animate}
+              exit={expandReveal.exit}
+              transition={expandReveal.transition}
               className="compact-expanded-panel"
             >
               {nuance && nuance !== card.claim.claimText && (
@@ -294,9 +345,28 @@ const CompactContent = ({
                   "{card.claim.claimText}"
                 </p>
               )}
+              {evidenceSnippet && (
+                <p className="compact-expanded-evidence">
+                  "{evidenceSnippet}"
+                </p>
+              )}
               {card.sourceTitle && (
                 <p className="compact-expanded-source">
-                  {card.sourceTitle}
+                  {hasSourceLink ? (
+                    <a
+                      href={card.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="compact-expanded-source-link"
+                      onClick={stopSourceLinkPropagation}
+                      onKeyDown={stopSourceLinkPropagation}
+                    >
+                      <span>{card.sourceTitle}</span>
+                      <span aria-hidden="true">↗</span>
+                    </a>
+                  ) : (
+                    card.sourceTitle
+                  )}
                 </p>
               )}
               {memorySummary && (
@@ -312,7 +382,7 @@ const CompactContent = ({
             className="compact-expand-indicator"
             initial={false}
             animate={{ rotate: isExpanded ? 180 : 0, opacity: isExpanded ? 0.88 : 0.52 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            transition={chevronRotate.transition}
             aria-hidden="true"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -329,6 +399,22 @@ const CompactContent = ({
       </div>
     </div>
   );
+};
+
+/**
+ * Normalize ALL CAPS transcript text for display.
+ * YouTube auto-captions on news channels often arrive in uppercase.
+ * Detects >60% uppercase letter ratio and converts to sentence case.
+ */
+const normalizeCapsText = (text: string): string => {
+  const letters = text.match(/[A-Za-z]/g) ?? [];
+  if (letters.length === 0) return text;
+  const upperRatio = (text.match(/[A-Z]/g) ?? []).length / letters.length;
+  if (upperRatio < 0.6) return text;
+  // Convert to sentence case: lowercase all, capitalize after sentence boundaries
+  return text
+    .toLowerCase()
+    .replace(/(^\s*|[.!?]\s+)([a-z])/g, (_, boundary, char) => boundary + char.toUpperCase());
 };
 
 // Scanning/forming card
@@ -349,14 +435,14 @@ const ScanningContent = ({
     <>
       <div className="flex items-center gap-2">
         <span className={`status-dot ${isVerifying ? 'status-dot-pulse' : 'status-dot-subtle'}`} />
-        <span className="text-[11px] uppercase tracking-wider text-sc-muted font-medium">
-          {isVerifying ? 'Checking claim...' : 'Scanning transcript...'}
+        <span className="text-[11px] text-sc-muted font-medium tracking-[0.02em]">
+          {isVerifying ? 'Checking claim…' : 'Scanning'}
         </span>
       </div>
 
       {previewText && (
         <p className="mt-2.5 text-[14px] text-textMain/80 leading-relaxed line-clamp-2">
-          {previewText}
+          {normalizeCapsText(previewText)}
         </p>
       )}
 
@@ -369,7 +455,7 @@ const ScanningContent = ({
       )}
 
       {reason && !isVerifying && (
-        <p className="mt-2 text-[11px] text-sc-muted italic">{reason}</p>
+        <p className="mt-2 text-[11px] text-sc-muted/70">{reason}</p>
       )}
     </>
   );
@@ -528,19 +614,21 @@ export const FeedCard = (props: FeedCardProps) => {
         data-size={size}
         data-status={status}
         data-tone={tone}
-        initial={prefersReducedMotion || isCompact ? false : { y: 8, opacity: 0 }}
+        initial={prefersReducedMotion || isCompact ? false : { y: DISTANCE.enterY, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
         layout={size !== 'scanning' && size !== 'skeleton'}
         whileHover={
           prefersReducedMotion || isPassiveCard
             ? undefined
-            : { y: -1, scale: size === 'compact' ? 1.003 : 1.006 }
+            : isCompact
+              ? hoverLiftCompact
+              : hoverLift
         }
         whileTap={
           prefersReducedMotion || isPassiveCard
             ? undefined
-            : { scale: 0.996 }
+            : pressSettle
         }
       >
         {content}
