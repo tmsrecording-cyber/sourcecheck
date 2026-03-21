@@ -579,6 +579,29 @@ export const CardFeed = ({
               </div>
             )}
 
+            {/* Ambient live listener — shown below stack when hero slot is occupied.
+                Makes LIVE visually distinct from HISTORY even in a passive caught-up state. */}
+            {activeTab === 'live' && liveStripMode !== null && effectiveHeroMode !== 'none' && (
+              <FeedCard
+                size="scanning"
+                timestampSeconds={activeReadingTimestamp}
+                previewText={
+                  activePreview ||
+                  (liveStripMode === 'watching'
+                    ? 'Watching for the next checkable claim.'
+                    : 'Listening for checkable claims.')
+                }
+                entities={scanEntities}
+                actionState={scanActionState}
+                reason={
+                  (scanReason && SAFE_SCAN_REASONS.has(scanReason) ? scanReason : null) ||
+                  (liveStripMode === 'watching'
+                    ? 'Watching for the next checkable claim.'
+                    : 'Listening for checkable claims.')
+                }
+              />
+            )}
+
             {/* Empty history state */}
             {activeTab === 'history' && displayCards.length === 0 && askHistory.length === 0 && (
               <FeedCard
