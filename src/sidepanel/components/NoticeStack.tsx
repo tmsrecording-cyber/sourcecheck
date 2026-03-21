@@ -3,6 +3,7 @@ import { CheckCircle2, Info, X } from 'lucide-react';
 import type { CSSProperties } from 'react';
 
 import type { SidepanelNotice } from '../utils/notices';
+import { getNoticeArrival, getPressSettle } from '../styles/motionTokens';
 
 const NOTICE_TONES = {
   accent: {
@@ -27,6 +28,7 @@ export const NoticeStack = ({
   onDismiss: (id: string) => void;
 }) => {
   const prefersReducedMotion = useReducedMotion();
+  const pressFeedback = getPressSettle(prefersReducedMotion);
 
   if (notices.length === 0) {
     return null;
@@ -39,14 +41,16 @@ export const NoticeStack = ({
           const tone = NOTICE_TONES[notice.tone];
           const Icon = tone.icon;
 
+          const arrival = getNoticeArrival(prefersReducedMotion);
+
           return (
             <motion.div
               key={notice.id}
               className="sidepanel-notice"
-              initial={prefersReducedMotion ? false : { opacity: 0, y: -10, scale: 0.98 }}
-              animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
-              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.98 }}
-              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              initial={arrival.initial}
+              animate={arrival.animate}
+              exit={arrival.exit}
+              transition={arrival.transition}
               style={{ '--notice-rgb': tone.rgb } as CSSProperties}
             >
               <div className="sidepanel-notice-icon" aria-hidden="true">
@@ -56,14 +60,15 @@ export const NoticeStack = ({
                 <p className="sidepanel-notice-title">{notice.title}</p>
                 <p className="sidepanel-notice-message">{notice.message}</p>
               </div>
-              <button
+              <motion.button
                 type="button"
                 className="sidepanel-notice-dismiss"
                 onClick={() => onDismiss(notice.id)}
                 aria-label="Dismiss notice"
+                whileTap={pressFeedback}
               >
                 <X size={12} strokeWidth={2} />
-              </button>
+              </motion.button>
             </motion.div>
           );
         })}

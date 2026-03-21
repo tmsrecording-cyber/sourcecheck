@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildAskReadyNotice,
   buildModelChangedNotice,
   buildSettingsSavedNotice,
   getLatestTranscriptFallbackNotice,
@@ -11,7 +12,7 @@ describe('sidepanel notices', () => {
     expect(buildSettingsSavedNotice()).toEqual({
       dedupeKey: 'settings-saved',
       title: 'Settings saved',
-      message: 'Your API key is ready for the next checks.',
+      message: 'API key saved.',
       tone: 'success',
     });
   });
@@ -27,13 +28,22 @@ describe('sidepanel notices', () => {
     });
   });
 
+  it('builds ask-ready notice for live answers', () => {
+    expect(buildAskReadyNotice()).toEqual({
+      dedupeKey: 'ask-ready',
+      title: 'Answer ready',
+      message: 'See HISTORY for the answer.',
+      tone: 'accent',
+    });
+  });
+
   it('falls back to the managed-model notice when BYOK is inactive', () => {
     expect(
       buildModelChangedNotice('gemini-3-flash-preview', false),
     ).toEqual({
       dedupeKey: 'model:gemini-2.5-flash:managed',
-      title: 'Managed model active',
-      message: 'SourceCheck is using Flash 2.5.',
+      title: 'Managed model',
+      message: 'Using Flash 2.5.',
       tone: 'accent',
     });
   });
@@ -51,8 +61,8 @@ describe('sidepanel notices', () => {
       entryAt: 20,
       notice: {
         dedupeKey: 'fallback:20',
-        title: 'Fallback transcript active',
-        message: 'Using the YouTube transcript panel for this video.',
+        title: 'Backup transcript active',
+        message: 'Using YouTube transcript panel.',
         tone: 'accent',
       },
     });

@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion';
 import type { AskQuestionSource } from '../../../shared/types';
 import { formatTime } from '../utils/formatTime';
+import { getAskResponseEntry } from '../styles/motionTokens';
 
 interface AskResponseCardProps {
   query: string;
@@ -9,11 +10,6 @@ interface AskResponseCardProps {
   sources: AskQuestionSource[];
 }
 
-const CARD_TRANSITION = {
-  duration: 0.4,
-  ease: [0.16, 1, 0.3, 1] as const,
-};
-
 export const AskResponseCard = ({
   query,
   answer,
@@ -21,14 +17,14 @@ export const AskResponseCard = ({
   sources,
 }: AskResponseCardProps) => {
   const prefersReducedMotion = useReducedMotion();
-  const transition = prefersReducedMotion ? { duration: 0 } : CARD_TRANSITION;
+  const entry = getAskResponseEntry(prefersReducedMotion);
 
   return (
     <motion.div
       layout
-      initial={prefersReducedMotion ? false : { opacity: 0, y: 12, scale: 0.985 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={transition}
+      initial={entry.initial}
+      animate={entry.animate}
+      transition={entry.transition}
       className="ask-response-card relative feed-rail-offset"
     >
       <div className="absolute left-0 top-[14px] w-[30px] text-right">
@@ -44,24 +40,24 @@ export const AskResponseCard = ({
         className="ask-response-rail-connector absolute top-[24px] h-px w-[14px]"
       />
 
-      <div className="query-console relative ml-1 px-4 py-4">
-        <div className="mb-3 flex items-start gap-2 border-b border-sc-border-soft pb-3">
-          <span className="mt-0.5 shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-sc-accent opacity-60">
-            You asked
+      <div className="query-console ask-response-shell relative ml-1 px-4 py-4">
+        <div className="ask-card-query-row mb-3 flex items-start gap-2 border-b border-sc-border-soft pb-3">
+          <span className="ask-card-kicker mt-0.5 shrink-0">
+            Asked
           </span>
-          <p className="ask-card-query text-[12px] leading-[1.52] tracking-[-0.006em] text-textMain/78">
+          <p className="ask-card-query">
             "{query}"
           </p>
         </div>
 
-        <p className="ask-card-answer text-[13px] leading-[1.65] tracking-[-0.01em] text-textMain/94">
+        <p className="ask-card-answer">
           {answer}
         </p>
 
         {sources.length > 0 && (
-          <div className="mt-4 border-t border-sc-border-soft pt-3">
-            <p className="ask-card-sources-label font-mono text-[9px] uppercase tracking-[0.14em] text-textMuted/48">
-              Sourced from
+          <div className="ask-card-sources mt-4 border-t border-sc-border-soft pt-3">
+            <p className="ask-card-sources-label">
+              Referenced
             </p>
             <div className="mt-2 flex flex-col gap-1.5">
               {sources.map((source, index) => (

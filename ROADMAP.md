@@ -176,6 +176,72 @@ The product's core value is trust. Anything misleading in the header, wording, o
 - [ ] Non-blocking events use lightweight notices instead of heavy UI takeovers.
 - [ ] No expansion work has started yet.
 
+## Milestone 3.5 — Sidepanel Interaction Language Lock
+**Goal:** Freeze the sidepanel's motion, cue hierarchy, and copy tone so future work reuses a system instead of adding one-off polish.
+
+**Why now**
+The current YouTube product already contains several strong interaction patterns. They feel good because they are local, weighted, and readable. If we move to Milestone 4 without systematizing them, transcript-adapter work will multiply inconsistency across states and sources.
+
+This milestone is a lock-and-systematize pass on the current sidepanel lane, not a new product direction.
+
+**Implementation**
+- Capture the sidepanel interaction language in a repo artifact:
+  - motion tokens
+  - semantic visual-cue roles
+  - copy tone contract
+  - reduced-motion contract
+- Consolidate repeated motion values into shared tokens while preserving the current SourceCheck feel.
+- Standardize hover and press behavior across:
+  - feed cards
+  - ask responses
+  - tabs
+  - model picker
+  - notices
+- Audit CSS transitions and either:
+  - align them with shared motion tokens
+  - or remove strays that conflict with JS-driven motion
+- Decide whether any remaining expressive 3D fold behavior is an intentional exception or should be flattened.
+- Tighten robotic system/cue copy where it weakens trust or clarity.
+- Add regression guardrails for:
+  - hover lift
+  - press settle
+  - stack entry
+  - expand/reveal
+  - notice arrival
+  - reduced-motion fallback
+
+**Key files**
+- `SIDEPANEL_VISUAL_LANGUAGE.md`
+- `src/sidepanel/components/FeedCard.tsx`
+- `src/sidepanel/components/CardFeed.tsx`
+- `src/sidepanel/components/AskResponseCard.tsx`
+- `src/sidepanel/components/ModelPicker.tsx`
+- `src/sidepanel/components/NoticeStack.tsx`
+- `src/sidepanel/styles/globals.css`
+- sidepanel unit tests covering notices and visual-state builders
+
+**Exit Criteria**
+- [x] Shared motion tokens exist and replace repeated ad hoc timings/easings in the active sidepanel shell.
+- [x] Interactive sidepanel surfaces use consistent hover and press behavior.
+- [x] Reduced-motion behavior is consistent across both JS and CSS-driven interactions.
+- [x] System and verdict copy follow a documented tone contract.
+- [x] The current polished sidepanel state is checkpointed as the new rollback-safe baseline.
+- [x] Milestone 4 has not started yet.
+
+**M3.5 Completion Notes (2026-03-20)**
+All exit criteria met. Additional hardening completed during close-out:
+- ModelPicker: custom SVG icons (bolt/hexagon/star), freemium lock rows with "Requires API key"
+- Scanning card: robotic italic removed, SCANNING→Scanning, ALL CAPS transcript normalization
+- SAFE_SCAN_REASONS whitelist: raw AI rationale strings blocked from UI
+- Backend placeholder filter: `Needs primary source` / `No strong web match` blocked in FeedCard
+- React key antipattern fixed in Q&A history (`askHistory.map`)
+- Retry queue priority: failed verifications re-queued at front (`unshift`)
+- Timing oracle closed: `timingSafeEqual` now uses HMAC hashing (no length leak)
+- Gemini parser: arrays no longer eagerly returned; scanner advances past extracted regions
+- Hero dwell self-cancellation fixed: split into three effects, timer no longer killed by state update cleanup
+- ask-video contract: introduced `AskSourceCard` type; backend validator now guards `claim.claimText`
+- Extension unit: 83/83 ✅ | Backend unit: 105/105 ✅ | tsc: clean ✅
+
 ## Milestone 4 — Transcript Ingestion Abstraction
 **Goal:** Build the adapter layer that the current YouTube implementation bypasses.
 

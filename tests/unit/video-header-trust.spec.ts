@@ -40,14 +40,14 @@ describe('video header trust helpers', () => {
     ]);
 
     expect(summary).not.toBeNull();
-    expect(summary?.text).toBe('Supported 1 • Mixed 1 • Unsupported 1 • Unresolved 1');
+    expect(summary?.text).toBe('Supported 1 • Mixed 1 • Unsupported 1 • Unverifiable 1');
     expect(summary?.total).toBe(4);
   });
 
   it('preserves zero-count buckets in the summary text', () => {
     const summary = buildVerificationSummary([makeCard('1', 'supported')]);
 
-    expect(summary?.text).toBe('Supported 1 • Mixed 0 • Unsupported 0 • Unresolved 0');
+    expect(summary?.text).toBe('Supported 1 • Mixed 0 • Unsupported 0 • Unverifiable 0');
     expect(summary?.total).toBe(1);
   });
 
@@ -78,10 +78,10 @@ describe('video header trust helpers', () => {
   });
 
   it('matches the exact status-line copy', () => {
-    expect(buildStatusLineCopy('monitoring', true)).toBe('Turning captions into verifiable notes.');
-    expect(buildStatusLineCopy('monitoring', false)).toBe('Waiting for a concrete claim worth checking.');
-    expect(buildStatusLineCopy('verifying', true)).toBe('Checking the latest claim against web sources.');
-    expect(buildStatusLineCopy('ready', true)).toBe('Recent checks are up to date.');
+    expect(buildStatusLineCopy('monitoring', true)).toBe('Listening for checkable claims.');
+    expect(buildStatusLineCopy('monitoring', false)).toBe('Waiting for a claim worth checking.');
+    expect(buildStatusLineCopy('verifying', true)).toBe('Checking the latest claim.');
+    expect(buildStatusLineCopy('ready', true)).toBe('Checks are up to date.');
     expect(buildStatusLineCopy('loading', false)).toBe('Loading transcript.');
     expect(buildStatusLineCopy('no-transcript', false)).toBe('No usable captions were found for this video.');
     expect(buildStatusLineCopy('error', true)).toBe('Something interrupted verification. Try refreshing the page.');

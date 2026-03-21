@@ -1,78 +1,84 @@
-# Checkpoint: sidepanel-m3-lock-in-progress
+# Checkpoint: M3.5 Complete — Ready for M4
 
-**Date:** 2026-03-20  
-**Status:** Baseline locked  
-**Tag:** baseline-2026-03-20-sidepanel-lock
+**Date:** 2026-03-20
+**Status:** M3.5 exit criteria fully met. M4 (Transcript Ingestion Abstraction) is next.
+**Tag:** baseline-2026-03-20-m3.5-complete *(pending git tag)*
 
-## Current Verified State
+---
 
-### Automated gates
-- ✅ Extension unit tests: `75/75`
+## Automated Gates
+
+- ✅ Extension unit tests: `83/83`
 - ✅ Backend unit tests: `105/105`
-- ✅ Extension build: `npm run build`
-- ✅ Extension smoke e2e: `npm run test:e2e:smoke`
+- ✅ Extension tsc: clean
+- ✅ Backend tsc: clean
 
-### Product state confirmed in code
-- ✅ Unified `FeedCard` system is the single live/history card primitive
-- ✅ Managed model path is hard-locked to `gemini-2.5-flash`
-- ✅ BYOK model selection is preserved only when a valid stored key exists
-- ✅ Cross-video memory UI renders in hero and compact cards
-- ✅ Global Ask focus shortcut works from the sidepanel shell
-- ✅ Sidepanel notice layer exists for settings save, model change, and transcript fallback
+---
 
-## What Changed Since The 2026-03-17 Recovery Baseline
+## What M3.5 Delivered
 
-1. **Model policy hardening**
-   - Freemium/managed mode now snaps back to `gemini-2.5-flash`
-   - Stale saved BYOK models no longer leak into managed sessions
-   - UI shows effective model, not stale sync state
+### Interaction Language Locked
+- `motionTokens.ts` — shared spring/duration/distance tokens, hover lift, press settle, expand/reveal
+- `SIDEPANEL_VISUAL_LANGUAGE.md` — documented tone contract, motion roles, reduced-motion rules
+- All interactive surfaces (feed cards, model picker, notices, ask responses, tabs) use consistent hover/press behavior
+- CSS transitions audited; italic and mono-font removed from scan/thinking states
 
-2. **Sidepanel architecture cleanup**
-   - `CardFeed.tsx` reduced from the old multi-path legacy structure to the current lean feed shell
-   - Dead live-strip/checking/history-row code removed
-   - Loading, empty, hero, verifying, scanning, and compact states all render through `FeedCard`
+### Copy Tone Hardened
+- Scanning card: `SCANNING...` → `Scanning`, no italic, human rotating thoughts
+- ALL CAPS YouTube captions normalized to sentence case in transcript preview
+- Raw AI rationale blocked via `SAFE_SCAN_REASONS` whitelist in `CardFeed`
+- Backend placeholder text (`Needs primary source`, `No strong web match`) filtered in `FeedCard`
+- `VideoHeader` copy: `Building notes` → `Listening`, `Unresolved` → `Unverifiable`
+- Notices: `Key saved.` → `API key saved.`, `Fallback transcript active` → `Backup transcript active`
 
-3. **Trust and memory improvements**
-   - Similar-claim memory is wired end-to-end from backend to UI
-   - Cached/memory wording is normalized for user-facing trust copy
-   - Legacy truth-score UI is removed from active UI and dead CSS cleaned up
+### Model Picker Overhauled
+- Custom SVG icons: bolt (Flash Lite), hexagon+dot (Flash 2.5), 4-point star (Flash 3 Preview)
+- Shows all 3 models; BYOK-only ones locked with `Lock` icon + "Requires API key"
 
-4. **Shell interaction hardening**
-   - Ask shortcut supports `/` and `Cmd+K` / `Ctrl+K`
-   - App listeners use safer live-ref patterns
-   - Transcript retry display state no longer relies on the older effect-driven double render pattern
+### Bugs Fixed
+- **Hero dwell self-cancellation**: split into three effects; timer no longer killed by `setDwellState` cleanup
+- **ask-video contract mismatch**: introduced `AskSourceCard` type; backend validator guards `claim.claimText`; no more 500 on malformed payload
+- **React key antipattern**: `askHistory.map` now uses `timestampSeconds-query` (no index)
+- **Verification retry queue**: `unshift` instead of `push` — retried claims go to front
+- **Timing oracle**: `timingSafeEqual` now uses HMAC; no length leak
+- **Gemini eager array parser**: scanner advances past extracted regions; objects preferred over preamble arrays
+- **Generation guard completeness**: `VERIFY_COMPLETED` dispatch guarded at all three exit sites
 
-## Manual Evidence Captured This Pass
+---
 
-These are supported by current UI validation during this pass:
-- ✅ Live scan hero card
-- ✅ Verified hero card
-- ✅ Mixed / unresolved compact history rows
-- ✅ Cross-video memory surfaced as `Seen before`
-- ✅ Managed model picker showing `2.5` while managed usage stays on Flash 2.5
+## Product State Confirmed in Code
 
-## Manual Baseline Checklist
+- ✅ Unified `FeedCard` is the single card primitive across all states
+- ✅ Freemium hard-locked to `gemini-2.5-flash`; BYOK unlocks Flash Lite and Flash 3 Preview
+- ✅ Cross-video memory (`similarClaims`) renders in hero and compact cards
+- ✅ Global Ask focus shortcut (`/` and `Cmd/Ctrl+K`) works from sidepanel shell
+- ✅ Notice layer covers: API key saved, model changed, backup transcript, answer ready
+- ✅ HISTORY tab shows only resolved cards and Q&A — no live scan state
+- ✅ Ask payloads trimmed to `AskSourceCard` shape (no oversized serialization)
 
-These were the final human baseline checks used to validate the lock:
+---
+
+## Manual Baseline Checklist (to perform before M4 starts)
+
 - [ ] Live YouTube scan from empty state through first verified card
-- [ ] Source card expansion/collapse in a real browsing session
-- [ ] Ask flow submission and answer rendering in live mode
+- [ ] Source card expansion/collapse in a live browsing session
+- [ ] Ask flow: question → answer in HISTORY with "Answer ready" notice
 - [ ] Refresh continuity on an active video
-- [ ] BYOK save, reload, remove-key reset back to managed model
+- [ ] BYOK: save key → Flash 3 Preview available; remove key → snaps back to Flash 2.5
+- [ ] ModelPicker: locked rows render correctly for freemium users
 
-## Known Remaining Work
+---
 
-### Product-safe next steps
-1. Add a small App-shell regression layer if a React component test harness is introduced later.
-2. Treat sidepanel visual/interaction changes as regression-sensitive from this point forward.
-3. Keep the baseline tag as the rollback point for future UI work.
+## M4 Start Conditions
 
-### Things not to misstate
-- This is **not** “production scaling complete.”
-- Transcript extraction is still resilient-but-fragile because YouTube DOM and player-response shapes can drift.
-- A formal baseline tag should not be created until these changes are committed cleanly.
+M4 (Transcript Ingestion Abstraction) may begin once:
+1. Manual baseline checklist above is complete
+2. Git tag `baseline-2026-03-20-m3.5-complete` is created
+3. All automated gates remain green on the tagged commit
 
-## Current Risk Read
+## M4 Scope Reminder
 
-**Low** on current sidepanel regressions due to unit/build/smoke coverage.  
-**Medium** on transcript extraction durability because it depends on YouTube internals and selector fallbacks.
+- Introduce `TranscriptSourceType`, `TranscriptSourceVisibility`, `TranscriptSourceContext`
+- Move YouTube extraction behind a `youtube` adapter with **no behavior change**
+- Worker pipeline and backend APIs remain source-agnostic
+- No new features, no Meet work — adapter contract only

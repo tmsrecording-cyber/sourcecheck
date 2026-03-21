@@ -59,7 +59,7 @@ export const buildVerificationSummary = (cards: SourceCard[]): VerificationSumma
 
   return {
     ...summary,
-    text: `Supported ${summary.supported} • Mixed ${summary.mixed} • Unsupported ${summary.unsupported} • Unresolved ${summary.unresolved}`,
+    text: `Supported ${summary.supported} • Mixed ${summary.mixed} • Unsupported ${summary.unsupported} • Unverifiable ${summary.unresolved}`,
   };
 };
 
@@ -92,12 +92,12 @@ export const buildStatusLineCopy = (
   switch (status) {
     case 'monitoring':
       return hasTranscriptContent
-        ? 'Turning captions into verifiable notes.'
-        : 'Waiting for a concrete claim worth checking.';
+        ? 'Listening for checkable claims.'
+        : 'Waiting for a claim worth checking.';
     case 'verifying':
-      return 'Checking the latest claim against web sources.';
+      return 'Checking the latest claim.';
     case 'ready':
-      return 'Recent checks are up to date.';
+      return 'Checks are up to date.';
     case 'loading':
       return 'Loading transcript.';
     case 'no-transcript':
@@ -139,12 +139,12 @@ const STATUS_META: Record<
     accentClass: 'text-sc-neutral',
   },
   loading: {
-    label: 'Preparing',
+    label: 'Loading',
     tone: 'text-sc-accent-soft',
     accentClass: 'text-sc-accent-soft',
   },
   monitoring: {
-    label: 'Building notes',
+    label: 'Listening',
     tone: 'text-sc-accent',
     accentClass: 'text-sc-accent',
   },
@@ -234,16 +234,10 @@ export const VideoHeader = ({
 
   const heroAwareCopy = useMemo(() => {
     if (heroState?.mode === 'resolved') {
-      return {
-        anchor: `Checked at ${formatTime(heroState.card.timestampSeconds)}`,
-        statusLine: null,
-      };
+      return { anchor: `Checked at ${formatTime(heroState.card.timestampSeconds)}` };
     }
     if (heroState?.mode === 'verifying') {
-      return {
-        anchor: anchorTime !== null ? `Checking at ${formatTime(anchorTime)}` : 'Checking now',
-        statusLine: 'Checking the latest claim against web sources.',
-      };
+      return { anchor: anchorTime !== null ? `Checking at ${formatTime(anchorTime)}` : 'Checking now' };
     }
     return null;
   }, [heroState, anchorTime]);

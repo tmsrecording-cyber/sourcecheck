@@ -26,7 +26,7 @@ const MODEL_LABELS: Record<GeminiModelOption, string> = {
 export const buildSettingsSavedNotice = (): PendingSidepanelNotice => ({
   dedupeKey: 'settings-saved',
   title: 'Settings saved',
-  message: 'Your API key is ready for the next checks.',
+  message: 'API key saved.',
   tone: 'success',
 });
 
@@ -37,8 +37,8 @@ export const buildModelChangedNotice = (
   if (!hasCustomKey || model === FREEMIUM_MODEL) {
     return {
       dedupeKey: `model:${FREEMIUM_MODEL}:managed`,
-      title: 'Managed model active',
-      message: 'SourceCheck is using Flash 2.5.',
+      title: 'Managed model',
+      message: 'Using Flash 2.5.',
       tone: 'accent',
     };
   }
@@ -50,6 +50,13 @@ export const buildModelChangedNotice = (
     tone: 'accent',
   };
 };
+
+export const buildAskReadyNotice = (): PendingSidepanelNotice => ({
+  dedupeKey: 'ask-ready',
+  title: 'Answer ready',
+  message: 'See HISTORY for the answer.',
+  tone: 'accent',
+});
 
 export const getLatestTranscriptFallbackNotice = (
   entries: TranscriptFetchDebugEntry[],
@@ -66,8 +73,8 @@ export const getLatestTranscriptFallbackNotice = (
         entryAt: entry.at,
         notice: {
           dedupeKey: `fallback:${entry.at}`,
-          title: 'Fallback transcript active',
-          message: 'Using the YouTube transcript panel for this video.',
+          title: 'Backup transcript active',
+          message: 'Using YouTube transcript panel.',
           tone: 'accent',
         },
       };

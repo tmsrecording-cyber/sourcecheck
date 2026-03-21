@@ -155,6 +155,7 @@ export type CanonicalErrorCode =
   | 'PROVIDER_OVERLOADED'  // 503 - retryable
   | 'NETWORK_ERROR'        // Network/fetch failures - retryable
   | 'UPSTREAM_ERROR'       // 502/504 - retryable
+  | 'PAYLOAD_TOO_LARGE'    // 413 - request body too large
   | 'UNKNOWN_ERROR';       // Fallback
 
 /**
@@ -172,7 +173,7 @@ export interface ClassifiedError {
  * Non-retryable error codes that should fail fast without retries.
  * EXPORTED: Single source of truth for error code classification.
  */
-export const NON_RETRYABLE_ERROR_CODES = ['AUTH_ERROR', 'QUOTA_EXHAUSTED', 'INVALID_API_KEY'] as const;
+export const NON_RETRYABLE_ERROR_CODES = ['AUTH_ERROR', 'QUOTA_EXHAUSTED', 'INVALID_API_KEY', 'PAYLOAD_TOO_LARGE'] as const;
 
 /**
  * Error codes that should trigger settings panel opening.
@@ -285,6 +286,16 @@ export function classifyError(
       code: 'UPSTREAM_ERROR',
       message: 'Upstream service error. Retrying...',
       retryable: true,
+      showSettings: false,
+      clearSession: false,
+    };
+  }
+
+  if (status === 413) {
+    return {
+      code: 'PAYLOAD_TOO_LARGE',
+      message: 'Ask context too large. Try again after the video progresses.',
+      retryable: false,
       showSettings: false,
       clearSession: false,
     };

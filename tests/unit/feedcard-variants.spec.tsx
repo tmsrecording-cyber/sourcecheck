@@ -41,6 +41,19 @@ const crossVideoCard: SourceCard = {
   relatedClaimIds: ['similar-1'],
 };
 
+const linkedCard: SourceCard = {
+  ...baseCard,
+  id: 'card-3',
+  sourceTitle: 'Federal Register',
+  sourceUrl: 'https://www.federalregister.gov/example',
+};
+
+const evidenceCard: SourceCard = {
+  ...linkedCard,
+  id: 'card-4',
+  evidenceSnippet: 'The Federal Register confirms records retention requirements for official communications.',
+};
+
 describe('FeedCard variants', () => {
   it('renders compact cards with compressed secondary metadata', () => {
     const html = renderToStaticMarkup(
@@ -53,8 +66,9 @@ describe('FeedCard variants', () => {
 
     expect(html).toContain('feed-card-compact');
     expect(html).toContain('compact-secondary-text');
-    expect(html).toContain('Needs primary source');
-    expect(html).toContain('Needs review');
+    // 'Needs primary source' is a backend placeholder — filtered out; compact fallback shows claim text
+    expect(html).toContain('Federal Records Act');
+    expect(html).toContain('Unverifiable');
   });
 
   it('surfaces seen-before context when cross-video memory is available', () => {
@@ -78,6 +92,59 @@ describe('FeedCard variants', () => {
     expect(compactHtml).toContain('Presidential records explainer');
     expect(heroHtml).toContain('Seen before');
     expect(heroHtml).toContain('Presidential records explainer');
+  });
+
+  it('renders source titles as external links when a source URL is available', () => {
+    const compactHtml = renderToStaticMarkup(
+      <FeedCard
+        size="compact"
+        timestampSeconds={linkedCard.timestampSeconds}
+        card={linkedCard}
+        isExpanded
+      />,
+    );
+    const heroHtml = renderToStaticMarkup(
+      <FeedCard
+        size="hero"
+        timestampSeconds={linkedCard.timestampSeconds}
+        card={linkedCard}
+      />,
+    );
+
+    expect(heroHtml).toContain('feed-card-source-link');
+    expect(heroHtml).toContain('href="https://www.federalregister.gov/example"');
+    expect(heroHtml).toContain('target="_blank"');
+    expect(heroHtml).toContain('noopener noreferrer');
+    expect(heroHtml).toContain('↗');
+
+    expect(compactHtml).toContain('compact-expanded-source-link');
+    expect(compactHtml).toContain('href="https://www.federalregister.gov/example"');
+    expect(compactHtml).toContain('↗');
+  });
+
+  it('surfaces evidence snippets in hero and expanded compact cards', () => {
+    const compactHtml = renderToStaticMarkup(
+      <FeedCard
+        size="compact"
+        timestampSeconds={evidenceCard.timestampSeconds}
+        card={evidenceCard}
+        isExpanded
+      />,
+    );
+    const heroHtml = renderToStaticMarkup(
+      <FeedCard
+        size="hero"
+        timestampSeconds={evidenceCard.timestampSeconds}
+        card={evidenceCard}
+      />,
+    );
+
+    expect(heroHtml).toContain('feed-card-evidence-kicker');
+    expect(heroHtml).toContain('Evidence');
+    expect(heroHtml).toContain('records retention requirements');
+
+    expect(compactHtml).toContain('compact-expanded-evidence');
+    expect(compactHtml).toContain('records retention requirements');
   });
 
   it('renders state cards through the unified feed-card family', () => {

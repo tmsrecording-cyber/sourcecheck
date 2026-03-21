@@ -11,6 +11,22 @@ import type {
 import { FeedCard } from './FeedCard';
 import { AskResponseCard } from './AskResponseCard';
 import { buildModelCssVars } from '../styles/modelTheme';
+import {
+  getStackEntryVariants,
+  heroCardEntry,
+  heroResolvedEntry,
+} from '../styles/motionTokens';
+
+/**
+ * Scan reasons that are safe to display to users.
+ * Raw AI rationale (e.g. "The transcript ends mid-sentence…") is suppressed —
+ * only our own curated strings are allowed through.
+ */
+const SAFE_SCAN_REASONS = new Set([
+  'Catching up to current playback position…',
+  'Watching for the next checkable claim.',
+  'Listening for checkable claims.',
+]);
 
 /** Hero slot state for header sync and dwell management */
 export type HeroSlotState =
@@ -200,33 +216,7 @@ export const getLiveNoHeroCardMode = ({
   return 'none';
 };
 
-const STACK_ENTRY_VARIANTS = {
-  hidden: {
-    opacity: 0,
-    y: -10,
-    rotateX: -18,
-    transformPerspective: 1200,
-    transformOrigin: 'top center' as const,
-  },
-  visible: (index: number) => ({
-    opacity: 1,
-    y: 0,
-    rotateX: 0,
-    transition: {
-      duration: 0.28,
-      delay: Math.min(index, 4) * 0.03,
-      ease: [0.16, 1, 0.3, 1] as const,
-    },
-  }),
-  exit: {
-    opacity: 0,
-    y: -6,
-    transition: {
-      duration: 0.18,
-      ease: [0.4, 0, 1, 1] as const,
-    },
-  },
-};
+// Stack entry variants now imported from motionTokens
 
 /* ── Main feed ── */
 
@@ -244,8 +234,6 @@ export const CardFeed = ({
   liveTimestampSeconds = null,
   isPinned = true,
   pinToTop,
-  onEntitySelect,
-  onRetryTranscript,
   activeTab = 'live',
   selectedModel = 'gemini-3.1-flash-lite-preview',
   allCards,
@@ -289,48 +277,47 @@ export const CardFeed = ({
   const prevLatestPendingRef = useRef<PendingClaimPreview | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Dwell logic: hold resolved card in hero slot for minimum time ──
+  // Keep a ref to dwellState so it can be read in effects without being a dependency
+  // (adding dwellState as a dep causes the cleanup to kill the timer on every state update)
+  const dwellStateRef = useRef(dwellState);
+  dwellStateRef.current = dwellState;
+
+  // ── Dwell logic: start dwell when a pending claim resolves ──
+  // Does NOT list dwellState as a dep — its cleanup must not cancel the dwell timer.
   useEffect(() => {
-    // Detect when a pending claim resolves (was pending, now gone, and we have a checked card)
     const wasPending = prevLatestPendingRef.current !== null;
     const isNowPending = latestPendingClaim !== null;
-    const hasCheckedCard = latestCheckedCard !== null;
 
-    if (wasPending && !isNowPending && hasCheckedCard) {
-      // Claim just resolved - start dwell period
-      const now = Date.now();
-      const dwellUntil = now + MIN_RESOLVED_DWELL_MS;
+    if (wasPending && !isNowPending && latestCheckedCard) {
+      if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
+      const dwellUntil = Date.now() + MIN_RESOLVED_DWELL_MS;
       setDwellState({ card: latestCheckedCard, dwellUntil, yieldedToNext: false });
-
-      // Clear any existing timer
-      if (dwellTimerRef.current) {
-        clearTimeout(dwellTimerRef.current);
-      }
-
-      // Set timer to auto-clear dwell after minimum time
       dwellTimerRef.current = setTimeout(() => {
         setDwellState((prev) => (prev ? { ...prev, yieldedToNext: true } : null));
       }, MIN_RESOLVED_DWELL_MS);
     }
 
-    // If dwell is active and the checked card changes (newer card arrives), clear dwell
-    if (dwellState && latestCheckedCard && dwellState.card.id !== latestCheckedCard.id) {
+    prevLatestPendingRef.current = latestPendingClaim;
+  }, [latestPendingClaim, latestCheckedCard]);
+
+  // ── Dwell logic: clear dwell when a different checked card arrives ──
+  useEffect(() => {
+    const currentDwell = dwellStateRef.current;
+    if (currentDwell && latestCheckedCard && currentDwell.card.id !== latestCheckedCard.id) {
       if (dwellTimerRef.current) {
         clearTimeout(dwellTimerRef.current);
         dwellTimerRef.current = null;
       }
       setDwellState(null);
     }
+  }, [latestCheckedCard]);
 
-    // Update refs for next comparison
-    prevLatestPendingRef.current = latestPendingClaim;
-
+  // ── Cleanup dwell timer on unmount ──
+  useEffect(() => {
     return () => {
-      if (dwellTimerRef.current) {
-        clearTimeout(dwellTimerRef.current);
-      }
+      if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
     };
-  }, [latestPendingClaim, latestCheckedCard, dwellState]);
+  }, []);
 
   // ── Compute effective hero mode considering dwell ──
   // If we're in dwell period, force heroMode to 'checked' even if there's a new pending claim
@@ -464,10 +451,10 @@ export const CardFeed = ({
                 {effectiveHeroMode === 'pending' && latestPendingClaim && (
                   <motion.div
                     key={latestPendingClaim.id}
-                    initial={prefersReducedMotion ? false : { y: 8, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: -8, opacity: 0 }}
-                    transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                    initial={prefersReducedMotion ? false : heroCardEntry.initial}
+                    animate={heroCardEntry.animate}
+                    exit={heroCardEntry.exit}
+                    transition={heroCardEntry.transition}
                   >
                     <FeedCard
                       size="verifying"
@@ -480,13 +467,12 @@ export const CardFeed = ({
                 
                 {effectiveHeroMode === 'checked' && latestCheckedCard && (
                   <motion.div
-                    key={latestCheckedCard.id}
                     layout={!prefersReducedMotion}
                     layoutId={`card-${latestCheckedCard.id}`}
-                    initial={prefersReducedMotion ? false : { y: 8, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: -8, opacity: 0 }}
-                    transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                    initial={prefersReducedMotion ? false : heroResolvedEntry.initial}
+                    animate={heroResolvedEntry.animate}
+                    exit={heroResolvedEntry.exit}
+                    transition={heroResolvedEntry.transition}
                   >
                     <FeedCard
                       size="hero"
@@ -528,7 +514,7 @@ export const CardFeed = ({
                   entities={scanEntities}
                   actionState={scanActionState}
                   reason={
-                    scanReason ||
+                    (scanReason && SAFE_SCAN_REASONS.has(scanReason) ? scanReason : null) ||
                     (liveStripMode === 'watching'
                       ? 'Watching for the next checkable claim.'
                       : 'Listening for checkable claims.')
@@ -538,8 +524,8 @@ export const CardFeed = ({
                 <FeedCard
                   size="scanning"
                   timestampSeconds={null}
-                  previewText="Loading transcript..."
-                  reason="Fetching captions"
+                  previewText="Loading transcript…"
+                  reason="Loading transcript…"
                 />
               ) : null
             )}
@@ -563,7 +549,7 @@ export const CardFeed = ({
                     layout={enableListLayoutAnimations}
                     layoutId={enableListLayoutAnimations ? `card-${card.id}` : undefined}
                     custom={index}
-                    variants={prefersReducedMotion ? undefined : STACK_ENTRY_VARIANTS}
+                    variants={getStackEntryVariants(prefersReducedMotion)}
                     initial={prefersReducedMotion ? false : 'hidden'}
                     animate={prefersReducedMotion ? undefined : 'visible'}
                     exit={prefersReducedMotion ? undefined : 'exit'}
@@ -614,9 +600,9 @@ export const CardFeed = ({
                     <p className="feed-section-label feed-section-label-qa">Q&A History</p>
                   </div>
                 </div>
-                {askHistory.map((entry, index) => (
+                {askHistory.map((entry) => (
                   <AskResponseCard
-                    key={`${entry.query}-${entry.timestampSeconds}-${index}`}
+                    key={`${entry.timestampSeconds}-${entry.query}`}
                     query={entry.query}
                     answer={entry.answer}
                     timestampSeconds={entry.timestampSeconds}
