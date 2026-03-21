@@ -19,7 +19,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual as cryptoTimingSafeEqual } from 'crypto';
+import { timingSafeEqual as cryptoTimingSafeEqual, createHmac, randomBytes } from 'crypto';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 
 // Environment variable name for the expected client secret
@@ -64,29 +64,17 @@ function validateClientSecret(request: NextRequest): boolean {
 }
 
 /**
- * Timing-safe string comparison using Node.js native crypto.
- * Prevents timing attacks that could reveal the secret length or content.
- * 
- * NOTE: Strings of different lengths are immediately rejected (no timing leak)
- * because crypto.timingSafeEqual requires equal-length buffers.
+ * Timing-safe string comparison using HMAC hashing.
+ * Both strings are hashed with a fresh random key so the comparison is always
+ * over equal-length digests — this eliminates the length timing oracle that
+ * arises from comparing raw buffers of different sizes.
  */
 function timingSafeEqual(left: string, right: string): boolean {
-  // Early return on length mismatch - this is safe from timing attacks
-  // because crypto.timingSafeEqual requires equal-length buffers anyway
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  // Use Node.js native timingSafeEqual for constant-time comparison
-  const leftBuf = Buffer.from(left, 'utf8');
-  const rightBuf = Buffer.from(right, 'utf8');
-  
-  try {
-    return cryptoTimingSafeEqual(leftBuf, rightBuf);
-  } catch {
-    // Fallback for any edge cases (shouldn't happen with equal-length buffers)
-    return false;
-  }
+  // Fresh random key per call — prevents precomputation and length oracle
+  const key = randomBytes(32);
+  const leftHash = createHmac('sha256', key).update(left, 'utf8').digest();
+  const rightHash = createHmac('sha256', key).update(right, 'utf8').digest();
+  return cryptoTimingSafeEqual(leftHash, rightHash);
 }
 
 /**

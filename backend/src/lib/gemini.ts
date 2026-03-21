@@ -273,22 +273,14 @@ export const parseJsonResponse = <T>(rawText: string): T => {
         continue;
       }
 
+      // Always advance past the end of the extracted balanced region.
+      // This prevents the scanner from re-entering the interior and spuriously
+      // matching sub-objects that belong to an already-seen array.
+      const skipTo = index + extracted.length - 1; // for loop will +1 after
+
       try {
         const result = JSON.parse(cleanJsonSyntax(extracted)) as T;
-        // FIX: If we find a non-empty array at the current position, check if it
-        // contains objects. Top-level arrays (like [{id:1}, {id:2}]) should be
-        // returned as-is rather than extracting the first object inside.
-        if (Array.isArray(result) && result.length > 0 && result.some(item => typeof item === 'object' && item !== null)) {
-          console.log('[gemini.ts] JSON parse succeeded with balanced array extraction:', {
-            recoveryMethod: 'balanced_array',
-            rawTextLength: rawText.length,
-            extractedLength: extracted.length,
-          });
-          return result;
-        }
-        // Prioritize returning an object if we find one first, or if we find 
-        // a plausible object at all. If it's an array, it might just be the 
-        // entities list prefix.
+        // Objects are immediately returned — they're the target schema shape.
         if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
           console.log('[gemini.ts] JSON parse succeeded with balanced object extraction:', {
             recoveryMethod: 'balanced_object',
@@ -297,12 +289,17 @@ export const parseJsonResponse = <T>(rawText: string): T => {
           });
           return result;
         }
-        // Save arrays as candidates in case we don't find a proper object later
-        // (but only if we didn't AlREADY find an object).
-        candidates.push(result);
+        // Arrays are saved as candidates rather than returned immediately.
+        // LLM preamble can contain arrays (e.g., entity lists) before the real
+        // JSON object — eagerly returning here would miss the correct payload.
+        if (Array.isArray(result) && result.length > 0) {
+          candidates.push(result);
+        }
       } catch {
         // Keep scanning: benign brace-like prose can precede the real JSON payload.
       }
+
+      index = skipTo;
     }
 
     // If we reached here, we didn't find a perfect object. If we found any valid

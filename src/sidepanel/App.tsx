@@ -1,4 +1,5 @@
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
 import { AlertTriangle, KeyRound } from 'lucide-react';
 import { FREEMIUM_MODEL } from '../../shared/types';
@@ -14,12 +15,14 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { useExtensionStorage } from './hooks/useExtensionStorage';
 import { shouldHandleAskShortcut } from './utils/askShortcut';
 import {
+  buildAskReadyNotice,
   buildModelChangedNotice,
   buildSettingsSavedNotice,
   getLatestTranscriptFallbackNotice,
   type PendingSidepanelNotice,
   type SidepanelNotice,
 } from './utils/notices';
+import { getPressSettle } from './styles/motionTokens';
 import { lifecycleToAnalysisStatus } from './utils/state';
 import { resolveDisplayAnalysisStatus } from './utils/displayAnalysisStatus';
 import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel } from './components/DebugPanels';
@@ -120,6 +123,7 @@ const PanelShell = ({
 
 export const App = () => {
   const { isStorageReady, runtimeState, transcript, currentVideoIdRef } = useExtensionStorage();
+  const prefersReducedMotion = useReducedMotion();
   const [askDraft, setAskDraft] = useState('');
   const [askHistory, setAskHistory] = useState<AskHistoryEntry[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -273,6 +277,7 @@ export const App = () => {
   const activeTabRef = useLiveRef(activeTab);
   const canFocusAskRef = useLiveRef(canFocusAsk);
   const showSettingsRef = useLiveRef(showSettings);
+  const pressFeedback = getPressSettle(prefersReducedMotion);
   const previousDisplayAnalysisStatusRef = useRef<AnalysisStatus>(analysisStatus);
   const resolvedDisplayAnalysisStatus = resolveDisplayAnalysisStatus({
     previousStatus: previousDisplayAnalysisStatusRef.current,
@@ -428,7 +433,7 @@ export const App = () => {
       }
 
       if (!result || result.status !== 'ok') {
-        setAskError(result?.error || 'Could not resolve that.');
+        setAskError(result?.error || 'Could not answer that yet.');
         return;
       }
 
@@ -442,9 +447,12 @@ export const App = () => {
           sources: result.sources ?? [],
         },
       ]));
+      if (activeTab === 'live') {
+        enqueueNotice(buildAskReadyNotice());
+      }
     } catch (askSubmitError: unknown) {
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
-        setAskError(getErrorMessage(askSubmitError, 'Could not resolve that.'));
+        setAskError(getErrorMessage(askSubmitError, 'Could not answer that yet.'));
       }
     } finally {
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
@@ -469,7 +477,7 @@ export const App = () => {
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
       setIsRetryingTranscript(false);
       if (isMountedRef.current) {
-        setAskError('Transcript recovery failed. Please refresh the page.');
+        setAskError('Transcript retry failed. Refresh the page.');
       }
     }
   };
@@ -560,7 +568,6 @@ export const App = () => {
       <div className="hud-grid" aria-hidden="true" />
       <div className="hud-circuit" aria-hidden="true" />
       <div className="flex h-full min-h-0 w-full flex-col bg-sc-bg-0 relative">
-        <NoticeStack notices={notices} onDismiss={dismissNotice} />
         <div className="tactile-header hud-header z-20 grid h-[52px] flex-shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3">
           <div className="flex items-center gap-2 min-w-0">
             <SourceCheckLogo size={16} className="flex-shrink-0" />
@@ -568,24 +575,26 @@ export const App = () => {
           </div>
 
           <nav className="flex h-full min-w-0 items-center justify-center gap-0.5 overflow-hidden" role="tablist">
-              <button
+              <motion.button
                 onClick={() => setActiveTab('live')}
-                className={`tab-btn min-w-0 px-2.5 transition-all duration-300 ease-out ${activeTab === 'live' ? 'active' : ''}`}
+                className={`tab-btn min-w-0 px-2.5 ${activeTab === 'live' ? 'active' : ''}`}
                 role="tab"
                 aria-selected={activeTab === 'live'}
+                whileTap={pressFeedback}
               >
                 LIVE
-                <span className={`tab-indicator transition-all duration-300 ease-out ${activeTab === 'live' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
-              </button>
-              <button
+                <span className={`tab-indicator ${activeTab === 'live' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
+              </motion.button>
+              <motion.button
                 onClick={() => setActiveTab('history')}
-                className={`tab-btn min-w-0 px-2.5 transition-all duration-300 ease-out ${activeTab === 'history' ? 'active' : ''}`}
+                className={`tab-btn min-w-0 px-2.5 ${activeTab === 'history' ? 'active' : ''}`}
                 role="tab"
                 aria-selected={activeTab === 'history'}
+                whileTap={pressFeedback}
               >
                 HISTORY
-                <span className={`tab-indicator transition-all duration-300 ease-out ${activeTab === 'history' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
-              </button>
+                <span className={`tab-indicator ${activeTab === 'history' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
+              </motion.button>
           </nav>
 
           <div className="flex min-w-0 items-center justify-end gap-1.5 flex-shrink-0">
@@ -607,14 +616,15 @@ export const App = () => {
                 }
               }} 
             />
-            <button
+            <motion.button
               onClick={() => setShowSettings(true)}
-              className="h-7 w-7 flex items-center justify-center text-sc-muted hover:text-sc-text hover:bg-sc-surface-1 rounded-md transition-all duration-200 focus:outline-none"
+              className="header-icon-btn h-7 w-7 flex items-center justify-center rounded-md text-sc-muted hover:bg-sc-surface-1 hover:text-sc-text focus:outline-none"
               aria-label="API key settings"
               title="API key settings"
+              whileTap={pressFeedback}
             >
               <KeyRound size={14} strokeWidth={1.75} />
-            </button>
+            </motion.button>
           </div>
         </div>
 
@@ -625,6 +635,11 @@ export const App = () => {
               <EventTimeline runtimeState={runtimeState} />
               <TranscriptFetchLogPanel runtimeState={runtimeState} />
             </>
+          )}
+          {notices.length > 0 && (
+            <div className="sidepanel-notice-lane">
+              <NoticeStack notices={notices} onDismiss={dismissNotice} />
+            </div>
           )}
           <VideoHeader
             title={runtimeState.currentVideo.title}

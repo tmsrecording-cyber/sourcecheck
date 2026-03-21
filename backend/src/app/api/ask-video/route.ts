@@ -133,6 +133,12 @@ const validateAskVideoRequest = (body: AskVideoQuestionRequest) => {
     return `sourceCards exceeds ${MAX_SOURCE_CARDS} items.`;
   }
 
+  for (const card of sourceCards) {
+    if (typeof (card as { claim?: { claimText?: unknown } })?.claim?.claimText !== 'string') {
+      return 'Each sourceCard must include claim.claimText.';
+    }
+  }
+
   return null;
 };
 
