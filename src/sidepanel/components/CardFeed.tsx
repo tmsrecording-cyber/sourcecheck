@@ -405,9 +405,16 @@ export const CardFeed = ({
     ),
     [activeTab, cards, displayCards, olderCardsStartIndex]
   );
+  const hasAmbientScanCard =
+    activeTab === 'live' && liveStripMode !== null && effectiveHeroMode !== 'none';
+
   const hasLiveFeedSurface =
     activeTab === 'live' &&
-    (effectiveHeroMode !== 'none' || liveNoHeroCardMode !== 'none' || olderCards.length > 0);
+    (effectiveHeroMode !== 'none' || liveNoHeroCardMode !== 'none' || olderCards.length > 0) &&
+    // Suppress decorative tail when the ambient scan card is the only content
+    // below the hero — the 228px min-height ghost cards would create dead space.
+    !(hasAmbientScanCard && olderCards.length === 0);
+
   const liveStackTailDensity =
     olderCards.length >= 2
       ? 'stacked'
@@ -568,19 +575,8 @@ export const CardFeed = ({
               </motion.div>
             )}
 
-            {hasLiveFeedSurface && (
-              <div
-                className="feed-stack-tail"
-                data-density={liveStackTailDensity}
-                aria-hidden="true"
-              >
-                <div className="feed-stack-tail-card feed-stack-tail-card-primary" />
-                <div className="feed-stack-tail-card feed-stack-tail-card-secondary" />
-              </div>
-            )}
-
             {/* Ambient live listener — shown below stack when hero slot is occupied.
-                Makes LIVE visually distinct from HISTORY even in a passive caught-up state. */}
+                Placed before the stack tail so it sits in the content flow, not after. */}
             {activeTab === 'live' && liveStripMode !== null && effectiveHeroMode !== 'none' && (
               <FeedCard
                 size="scanning"
@@ -600,6 +596,17 @@ export const CardFeed = ({
                     : 'Listening for checkable claims.')
                 }
               />
+            )}
+
+            {hasLiveFeedSurface && (
+              <div
+                className="feed-stack-tail"
+                data-density={liveStackTailDensity}
+                aria-hidden="true"
+              >
+                <div className="feed-stack-tail-card feed-stack-tail-card-primary" />
+                <div className="feed-stack-tail-card feed-stack-tail-card-secondary" />
+              </div>
             )}
 
             {/* Empty history state */}

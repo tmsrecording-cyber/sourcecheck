@@ -178,7 +178,11 @@ describe('FeedCard variants', () => {
   });
 
   it('keeps the passive stack tail scoped to live feed composition', () => {
-    const liveHtml = renderToStaticMarkup(
+    const card2 = { ...baseCard, id: 'card-2', timestampSeconds: 120 };
+
+    // With only 1 card (hero) + ambient scan card and no older cards, the tail
+    // is suppressed to avoid dead space below the ambient scanning card.
+    const liveNoOlderCardsHtml = renderToStaticMarkup(
       <CardFeed
         cards={[baseCard]}
         pendingClaims={[]}
@@ -186,6 +190,22 @@ describe('FeedCard variants', () => {
         activeTab="live"
       />,
     );
+    expect(liveNoOlderCardsHtml).not.toContain('feed-stack-tail');
+    // Ambient scanning card should appear instead
+    expect(liveNoOlderCardsHtml).toContain('feed-card-scanning');
+
+    // With older cards present the tail reappears to hint at depth.
+    const liveWithOlderCardsHtml = renderToStaticMarkup(
+      <CardFeed
+        cards={[baseCard, card2]}
+        pendingClaims={[]}
+        status="ready"
+        activeTab="live"
+      />,
+    );
+    expect(liveWithOlderCardsHtml).toContain('feed-stack-tail');
+
+    // History never shows the stack tail.
     const historyHtml = renderToStaticMarkup(
       <CardFeed
         cards={[baseCard]}
@@ -195,9 +215,6 @@ describe('FeedCard variants', () => {
         activeTab="history"
       />,
     );
-
-    expect(liveHtml).toContain('feed-stack-tail');
-    expect(liveHtml).toContain('data-density="hero"');
     expect(historyHtml).not.toContain('feed-stack-tail');
   });
 });
