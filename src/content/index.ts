@@ -1,5 +1,6 @@
 import { initPlaybackTracking, setPlaybackVideoId, stopPlaybackTracking, stopVideoElementObserver } from './playback';
-import { extractTranscriptData, resetTranscriptExtractionState } from './transcript';
+import { resetTranscriptExtractionState } from './transcript';
+import { youTubeAdapter } from './adapters/youtube';
 import type { TranscriptDebugState, TranscriptFetchDebugEntry } from '../../shared/types';
 import './remote-logger'; // Auto-starts remote logging if SC_LOG_ENDPOINT is set
 
@@ -429,52 +430,8 @@ const withTimeout = async <T>(
   }
 };
 
-const getStructuredData = (): Record<string, any> | null => {
-  const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"]'));
-
-  for (const script of scripts) {
-    try {
-      const parsed = JSON.parse(script.textContent || 'null');
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      const videoObject = items.find((item) => item?.['@type'] === 'VideoObject');
-      if (videoObject) return videoObject;
-    } catch {
-      // Ignore malformed structured data blocks.
-    }
-  }
-
-  return null;
-};
-
-const extractVideoMetadata = () => {
-  const structuredData = getStructuredData();
-
-  const titleCandidates = [
-    document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent,
-    document.querySelector('h1.title yt-formatted-string')?.textContent,
-    document.querySelector('meta[property="og:title"]')?.getAttribute('content'),
-    document.querySelector('meta[name="title"]')?.getAttribute('content'),
-    structuredData?.name,
-    document.title.replace(/\s*-\s*YouTube$/, ''),
-  ].filter((c): c is string => typeof c === 'string');
-
-  const channelCandidates = [
-    document.querySelector('#owner #channel-name a')?.textContent,
-    document.querySelector('#owner-name a')?.textContent,
-    document.querySelector('ytd-channel-name a')?.textContent,
-    document.querySelector('link[itemprop="name"]')?.getAttribute('content'),
-    document.querySelector('meta[itemprop="author"]')?.getAttribute('content'),
-    structuredData?.author?.name,
-  ].filter((c): c is string => typeof c === 'string');
-
-  const title = titleCandidates.map(cleanText).find(Boolean) || 'Unknown Title';
-  const channel = channelCandidates.map(cleanText).find(Boolean) || 'Unknown Channel';
-
-  return { title, channel };
-};
-
 const sendVideoChanged = async (videoId: string) => {
-  const metadata = extractVideoMetadata();
+  const metadata = youTubeAdapter.extractMetadata(document);
 
   const result = await sendMessageWithRetry({
     type: 'VIDEO_CHANGED',
@@ -483,6 +440,7 @@ const sendVideoChanged = async (videoId: string) => {
       title: metadata.title,
       channel: metadata.channel,
       pageSessionId,
+      sourceContext: youTubeAdapter.buildSourceContext(videoId, metadata.title),
     },
   });
 
@@ -602,7 +560,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
       !panelFallbackSucceeded &&
       !autoPanelOpenDisabledAfterFailure;
     const extractionResult = await withTimeout(
-      extractTranscriptData(videoId, signal, (entry) => {
+      youTubeAdapter.extractTranscript(videoId, signal, (entry) => {
         void deliverTranscriptFetchDebug(videoId, {
           at: Date.now(),
           ...entry,
@@ -801,13 +759,12 @@ const checkVideoState = async () => {
     pathname: window.location.pathname,
     currentVideoId,
   });
-  if (window.location.pathname !== '/watch') {
+  if (!youTubeAdapter.canHandle(window.location)) {
     await clearActiveVideo();
     return;
   }
 
-  const urlParams = new URLSearchParams(window.location.search);
-  const videoId = urlParams.get('v');
+  const videoId = youTubeAdapter.getVideoId(window.location);
 
   if (!videoId) {
     await clearActiveVideo();

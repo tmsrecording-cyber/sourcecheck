@@ -57,6 +57,10 @@ const MAX_VERIFICATION_RETRIES = 2;
 const MAX_CONCURRENT_VERIFICATIONS = 2;
 const PLAYHEAD_LEASH_SECONDS = 15;
 const MAX_SOURCE_CARDS = 20;  // Aligned with backend ask-video limit
+const MAX_ASK_SOURCE_CARDS = 12;
+const MAX_ASK_TRANSCRIPT_CHUNKS = 18;
+const MAX_ASK_TRANSCRIPT_CHUNK_CHARS = 600;
+const MAX_ASK_TRANSCRIPT_TOTAL_CHARS = 12_000;
 const MAX_PENDING_CLAIMS = 100;      // Prevent unbounded growth during long videos
 const MAX_VERIFICATION_QUEUE = 50;   // Limit queued verifications
 const TRANSCRIPT_LOAD_TIMEOUT_MS = 65_000;
@@ -696,18 +700,8 @@ const mergeVideoMetadata = (
   title: preferKnownMetadata(currentVideo.title, nextVideo.title),
   channel: preferKnownMetadata(currentVideo.channel, nextVideo.channel),
   sourceTabId: nextVideo.sourceTabId ?? currentVideo.sourceTabId,
+  sourceContext: nextVideo.sourceContext ?? currentVideo.sourceContext,
 });
-
-const formatPlaybackTime = (seconds: number) => {
-  const safeSeconds = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const remainder = safeSeconds % 60;
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${remainder.toString().padStart(2, '0')}`;
-  }
-  return `${minutes}:${remainder.toString().padStart(2, '0')}`;
-};
 
 /**
  * Sanitize any value to remove sensitive headers before logging.
@@ -1203,7 +1197,7 @@ const syncVisibleTimelineState = (currentTime: number | null = currentPlaybackSt
     currentScanActionState = hasLiveTranscript ? null : 'BUFFERING';
     currentScanReason = hasLiveTranscript
       ? null
-      : `Repositioning cognitive scan to ${formatPlaybackTime(currentTime)}...`;
+      : 'Catching up to current playback position…';
   }
 
   if (bufferedFutureScan && (leashCutoff === null || bufferedFutureScan.timestampSeconds <= leashCutoff)) {
@@ -2110,7 +2104,9 @@ const retryVerificationItem = async (
 ) => {
   if (item.retryCount >= MAX_VERIFICATION_RETRIES) {
     removePendingClaimByKey(item.key);
-    dispatch({ type: 'VERIFY_COMPLETED' });
+    if (runGeneration === verificationGeneration) {
+      dispatch({ type: 'VERIFY_COMPLETED' });
+    }
     persistPanelState({ includeCards: true, includeQueue: true });
     return false;
   }
@@ -2131,7 +2127,7 @@ const retryVerificationItem = async (
       console.warn('[SourceCheck/SW] Verification queue at capacity (retry), dropped oldest item');
     }
   }
-  verificationQueue.push({ ...item, retryCount: item.retryCount + 1 });
+  verificationQueue.unshift({ ...item, retryCount: item.retryCount + 1 });
   persistPanelState({ includeCards: true, includeQueue: true });
   return true;
 };
@@ -2143,7 +2139,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       `timestamp=${item.claim.timestampSeconds}`
     );
     removePendingClaimByKey(item.key);
-    dispatch({ type: 'VERIFY_COMPLETED' });
+    // Do not dispatch VERIFY_COMPLETED — the session already changed
     persistPanelState({ includeCards: true, includeQueue: true });
     return;
   }
@@ -2154,7 +2150,9 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       `timestamp=${item.claim.timestampSeconds}`
     );
     removePendingClaimByKey(item.key);
-    dispatch({ type: 'VERIFY_COMPLETED' });
+    if (runGeneration === verificationGeneration) {
+      dispatch({ type: 'VERIFY_COMPLETED' });
+    }
     persistPanelState({ includeCards: true, includeQueue: true });
     return;
   }
@@ -2392,7 +2390,7 @@ const flushPipelineForSeek = (currentTime: number) => {
   currentScanEntities = [];
   currentScanPreview = livePreview;
   currentScanActionState = livePreview ? null : 'BUFFERING';
-  currentScanReason = livePreview ? null : `Repositioning cognitive scan to ${formatPlaybackTime(currentTime)}...`;
+  currentScanReason = livePreview ? null : 'Catching up to current playback position…';
   lastScannedTimestamp = currentTime;
   bufferedFutureScan = null;
 
@@ -2505,6 +2503,48 @@ const getRelevantSourceCards = (currentTime: number | null) => {
   return (nearbyCards.length > 0 ? nearbyCards : releasedCards).slice(0, 20);
 };
 
+const buildAskTranscriptContext = (currentTime: number | null) => {
+  const context = getTranscriptContext(currentTime);
+  if (context.length === 0) return [];
+
+  const trimmed: typeof context = [];
+  let totalChars = 0;
+
+  for (const chunk of context) {
+    if (trimmed.length >= MAX_ASK_TRANSCRIPT_CHUNKS) {
+      break;
+    }
+
+    const text = chunk.text.trim();
+    if (!text) continue;
+
+    const clippedText = text.slice(0, MAX_ASK_TRANSCRIPT_CHUNK_CHARS);
+    totalChars += clippedText.length;
+    if (totalChars > MAX_ASK_TRANSCRIPT_TOTAL_CHARS) {
+      break;
+    }
+
+    trimmed.push({
+      ...chunk,
+      text: clippedText,
+    });
+  }
+
+  return trimmed;
+};
+
+const buildAskSourceCards = (currentTime: number | null) =>
+  getRelevantSourceCards(currentTime)
+    .slice(0, MAX_ASK_SOURCE_CARDS)
+    .map((card) => ({
+      claim: { claimText: card.claim.claimText.slice(0, 240) },
+      status: card.status,
+      sourceTitle: (card.sourceTitle ?? '').slice(0, 240),
+      sourceUrl: (card.sourceUrl ?? '').slice(0, 300),
+      nuance: (card.nuance ?? '').slice(0, 300),
+      timestampSeconds: card.timestampSeconds,
+    }));
+
 const askVideoQuestion = async (question: string) => {
   if (!currentVideoInfo) throw new Error('No active video context available yet.');
   const currentTime = currentPlaybackState?.currentTime ?? null;
@@ -2513,8 +2553,8 @@ const askVideoQuestion = async (question: string) => {
     videoTitle: currentVideoInfo.title,
     channelName: currentVideoInfo.channel,
     currentTime,
-    transcriptContext: getTranscriptContext(currentTime),
-    sourceCards: getRelevantSourceCards(currentTime),
+    transcriptContext: buildAskTranscriptContext(currentTime),
+    sourceCards: buildAskSourceCards(currentTime),
     model: runtimeState.selectedModel,  // Include selected model
   };
   if (payload.transcriptContext.length === 0 && payload.sourceCards.length === 0) {

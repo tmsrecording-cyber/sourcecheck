@@ -113,12 +113,38 @@ export interface TranscriptChunk {
   index: number;        // chunk index in the full transcript
 }
 
+// ─── Transcript Source Abstraction (M4) ──────────────────────────────────────
+
+/** Which platform the transcript originates from */
+export type TranscriptSourceType = 'youtube' | 'meet';
+
+/** Whether the content is publicly accessible or private (meeting) */
+export type TranscriptSourceVisibility = 'public' | 'private';
+
+/**
+ * Identifies and describes the source of a transcript.
+ * Carried in runtime state so all pipeline components know what they're working with
+ * without baking in platform-specific assumptions.
+ */
+export interface TranscriptSourceContext {
+  type: TranscriptSourceType;
+  visibility: TranscriptSourceVisibility;
+  /** Platform-specific identifier (e.g. YouTube video ID, Meet meeting ID) */
+  sourceId: string;
+  /** Human-readable label (e.g. video title) */
+  sourceLabel: string;
+}
+
+// ─── Video / Playback ─────────────────────────────────────────────────────────
+
 export interface ActiveVideoContext {
   videoId: string;
   title: string;
   channel: string;
   pageSessionId?: string;
   sourceTabId?: number;
+  /** Source context for this video — populated by the adapter layer (M4+) */
+  sourceContext?: TranscriptSourceContext;
 }
 
 export interface PlaybackState {
@@ -371,6 +397,16 @@ export interface PanelSessionState {
   selectedModel?: GeminiModelOption;
 }
 
+/** Trimmed source card sent to /api/ask-video (only the fields the backend needs) */
+export interface AskSourceCard {
+  claim: { claimText: string };
+  status: VerificationStatus;
+  sourceTitle: string;
+  sourceUrl: string;
+  nuance: string;
+  timestampSeconds: number;
+}
+
 /** What the extension sends to /api/ask-video */
 export interface AskVideoQuestionRequest {
   question: string;
@@ -378,7 +414,7 @@ export interface AskVideoQuestionRequest {
   channelName: string;
   currentTime?: number | null;
   transcriptContext: TranscriptChunk[];
-  sourceCards: SourceCard[];
+  sourceCards: AskSourceCard[];
   model?: GeminiModelOption;  // optional model selection (validated server-side)
 }
 
