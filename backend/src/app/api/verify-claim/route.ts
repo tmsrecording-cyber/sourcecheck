@@ -378,15 +378,17 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const { claim, contextTranscript } = parsedBody;
+    const { claim, contextTranscript, isPrivate } = parsedBody;
 
     // ============================================================================
     // CROSS-VIDEO MEMORY: Check for similar claims before calling Gemini
+    // Private sessions (e.g. Google Meet) skip both the lookup and the save so
+    // meeting content is never indexed in cross-video memory.
     // ============================================================================
-    // Generate embedding for the claim to search for similar previously verified claims
-    const embeddingText = `${claim.claimText} ${claim.claimType}`.trim();
-    const embedding = await generateEmbedding(embeddingText, customApiKey);
-    
+    // Generate embedding for the claim to search for similar previously verified claims.
+    // Use claimText only — consistent with what is stored, so similarity scores are accurate.
+    const embedding = isPrivate ? [] : await generateEmbedding(claim.claimText, customApiKey, 'RETRIEVAL_QUERY');
+
     let similarClaim = null;
     if (embedding.length > 0) {
       similarClaim = await findSimilarClaim(embedding);
@@ -470,7 +472,7 @@ export async function POST(request: NextRequest) {
     const effectiveModel = customApiKey && headerModel ? headerModel : body.model;
     
     console.log('[verify-claim] Calling Gemini with grounding:', {
-      requestId: `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+      requestId: crypto.randomUUID(),
       claimId: claim.id,
       claimType: claim.claimType,
       model: effectiveModel,
@@ -580,7 +582,7 @@ export async function POST(request: NextRequest) {
             status: 'unverifiable',
             sourceTitle: 'Verification unavailable',
             sourceType: 'other',
-            nuance: 'Verification temporarily unavailable. The claim will be retried automatically.',
+            nuance: 'Verification temporarily unavailable.',
             evidenceSnippet: null,
           };
           inputTokens = 0;
@@ -676,13 +678,7 @@ export async function POST(request: NextRequest) {
         : guardUnverifiableNuance(rawNuance, hasQualityGrounding)
     ).slice(0, MAX_NUANCE_LENGTH);
 
-    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-          const r = (Math.random() * 16) | 0;
-          const v = c === 'x' ? r : (r & 0x3) | 0x8;
-          return v.toString(16);
-        });
+    const id = crypto.randomUUID();
 
     const evidenceSnippet = sanitizeEvidenceSnippet(
       rawVerification.evidenceSnippet,
@@ -690,11 +686,13 @@ export async function POST(request: NextRequest) {
       status
     );
 
-    // Reuse embedding from cross-video memory check, or generate if needed
+    // Reuse embedding from cross-video memory check, or generate if needed.
+    // Private sessions intentionally skip embeddings end-to-end — do not
+    // regenerate here even though the initial embedding array is empty.
+    // Use claimText only — same text as the query so stored vectors are in the same space.
     let claimEmbedding = embedding;
-    if (claimEmbedding.length === 0) {
-      const embeddingText = `${claim.claimText} ${resolvedNuance}`.trim();
-      claimEmbedding = await generateEmbedding(embeddingText, customApiKey);
+    if (claimEmbedding.length === 0 && !isPrivate) {
+      claimEmbedding = await generateEmbedding(claim.claimText, customApiKey, 'RETRIEVAL_DOCUMENT');
     }
 
     const sourceCard: SourceCard = {
@@ -712,9 +710,10 @@ export async function POST(request: NextRequest) {
     };
     
     // ---- Cross-video memory: Save claim vector for future similarity search ----
+    // Private sessions (isPrivate=true) must never be stored in cross-video memory.
     // Fire and forget - don't await to avoid slowing down the response
-    if (claimEmbedding.length > 0) {
-      void upsertClaimVector({
+    if (claimEmbedding.length > 0 && !isPrivate) {
+      upsertClaimVector({
         id: sourceCard.id,
         claimText: claim.claimText,
         status: sourceCard.status,
@@ -727,7 +726,9 @@ export async function POST(request: NextRequest) {
         timestampSeconds: claim.timestampSeconds,
         verifiedAt: sourceCard.verifiedAt,
         wordingVersion: WORDING_VERSION,
-      }, claimEmbedding);
+      }, claimEmbedding).catch((err) => {
+        console.error('[vector-store] upsert failed:', err);
+      });
     }
 
     // Explicit downgrade logging for auditability

@@ -3,37 +3,25 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type {
   AskQuestionSource,
   AnalysisStatus,
-  ExtractionActionState,
   PendingClaimPreview,
   SourceCard,
-  VerificationStatus,
 } from '../../../shared/types';
+import { BYOK_DEFAULT_MODEL } from '../../../shared/types';
 import { FeedCard } from './FeedCard';
 import { AskResponseCard } from './AskResponseCard';
 import { buildModelCssVars } from '../styles/modelTheme';
 import {
   getStackEntryVariants,
-  heroCardEntry,
-  heroResolvedEntry,
+  SOFT_SPRING,
+  DURATION,
 } from '../styles/motionTokens';
 
-/**
- * Scan reasons that are safe to display to users.
- * Raw AI rationale (e.g. "The transcript ends mid-sentence…") is suppressed —
- * only our own curated strings are allowed through.
- */
-const SAFE_SCAN_REASONS = new Set([
-  'Catching up to current playback position…',
-  'Watching for the next checkable claim.',
-  'Listening for checkable claims.',
-]);
 
-/** Hero slot state for header sync and dwell management */
+/** @deprecated — kept for API compatibility; the stage now owns this logic */
 export type HeroSlotState =
   | { mode: 'verifying'; claimText: string; timestampSeconds: number | null }
-  | { mode: 'resolved'; card: SourceCard; dwellUntil: number }
   | { mode: 'scanning'; timestampSeconds: number | null }
-  | { mode: 'idle' };
+  | { mode: 'idle'; };
 
 interface CardFeedProps {
   askHistory?: Array<{
@@ -51,7 +39,7 @@ interface CardFeedProps {
   lastScannedTimestamp?: number | null;
   currentScanPreview?: string | null;
   scanEntities?: string[];
-  scanActionState?: ExtractionActionState | null;
+  scanActionState?: string | null;
   scanReason?: string | null;
   liveTimestampSeconds?: number | null;
   isPinned?: boolean;
@@ -60,29 +48,9 @@ interface CardFeedProps {
   onRetryTranscript?: () => void;
   selectedModel?: string;
   activeTab?: 'live' | 'history';
-  /** Called when hero slot state changes (for header sync) */
+  /** @deprecated — no longer used; stage owns its own state */
   onHeroStateChange?: (state: HeroSlotState) => void;
 }
-
-const VERDICT_META: Record<
-  VerificationStatus,
-  {
-    accentRgb: string;
-  }
-> = {
-  supported: {
-    accentRgb: 'var(--sc-supported-rgb)',
-  },
-  partial: {
-    accentRgb: 'var(--sc-partial-rgb)',
-  },
-  disputed: {
-    accentRgb: 'var(--sc-disputed-rgb)',
-  },
-  unverifiable: {
-    accentRgb: 'var(--sc-neutral-rgb)',
-  },
-};
 
 const FEED_RAIL_LAYOUT = {
   '--rail-left': '46px',
@@ -91,132 +59,20 @@ const FEED_RAIL_LAYOUT = {
 } as CSSProperties;
 
 const MAX_HISTORY_ROWS = 20;
+void MAX_HISTORY_ROWS; // referenced for future pagination
 
-// Dwell timing: resolved hero card stays promoted for minimum time before yielding
-// to new pending claims. This prevents the jarring "blink" when a claim resolves
-// and a new one immediately arrives.
-const MIN_RESOLVED_DWELL_MS = 1500; // 1.5s minimum dwell
-
-export type LiveStripMode = 'primary' | 'forming' | 'watching';
-
-export type PromotedLiveHeroMode = 'none' | 'pending' | 'checked';
-
-export type LiveNoHeroCardMode =
-  | 'none'
-  | 'scanning'
-  | 'no-transcript'
-  | 'error'
-  | 'loading';
-
-export const resolvePromotedLiveLayout = ({
-  activeTab,
-  hasCheckedCard,
-  hasPendingClaim,
-}: {
-  activeTab: 'live' | 'history';
-  hasCheckedCard: boolean;
-  hasPendingClaim: boolean;
-}): {
-  heroMode: PromotedLiveHeroMode;
-  olderCardsStartIndex: number;
-} => {
-  if (activeTab !== 'live') {
-    return {
-      heroMode: 'none',
-      olderCardsStartIndex: 0,
-    };
-  }
-
-  if (hasPendingClaim) {
-    return {
-      heroMode: 'pending',
-      olderCardsStartIndex: 0,
-    };
-  }
-
-  if (hasCheckedCard) {
-    return {
-      heroMode: 'checked',
-      olderCardsStartIndex: 1,
-    };
-  }
-
-  return {
-    heroMode: 'none',
-    olderCardsStartIndex: 0,
-  };
+const STATUS_RGB: Record<string, string> = {
+  supported: '129, 201, 149',
+  partial: '253, 226, 147',
+  disputed: '242, 139, 130',
+  unverifiable: '154, 160, 166',
 };
 
-export const getLiveStripMode = ({
-  activeTab,
-  status,
-  hasCheckedCard,
-  hasPendingClaim,
-  hasScanSignal,
-}: {
-  activeTab: 'live' | 'history';
-  status: AnalysisStatus;
-  hasCheckedCard: boolean;
-  hasPendingClaim: boolean;
-  hasScanSignal: boolean;
-}): LiveStripMode | null => {
-  if (activeTab !== 'live' || hasPendingClaim) {
-    return null;
-  }
-
-  if (status === 'ready') {
-    return 'watching';
-  }
-
-  if (status === 'monitoring' || status === 'verifying') {
-    if (!hasScanSignal && !hasCheckedCard) {
-      return null;
-    }
-    return hasCheckedCard ? 'forming' : 'primary';
-  }
-
-  if (status === 'loading' && !hasCheckedCard && hasScanSignal) {
-    return 'primary';
-  }
-
-  return null;
-};
-
-export const getLiveNoHeroCardMode = ({
-  activeTab,
-  effectiveHeroMode,
-  status,
-  liveStripMode,
-}: {
-  activeTab: 'live' | 'history';
-  effectiveHeroMode: PromotedLiveHeroMode;
-  status: AnalysisStatus;
-  liveStripMode: LiveStripMode | null;
-}): LiveNoHeroCardMode => {
-  if (activeTab !== 'live' || effectiveHeroMode !== 'none') {
-    return 'none';
-  }
-
-  if (status === 'no-transcript') {
-    return 'no-transcript';
-  }
-
-  if (status === 'error') {
-    return 'error';
-  }
-
-  if (liveStripMode) {
-    return 'scanning';
-  }
-
-  if (status === 'loading') {
-    return 'loading';
-  }
-
-  return 'none';
-};
-
-// Stack entry variants now imported from motionTokens
+// ─── Stage hold durations ─────────────────────────────────────────────────────
+/** How long the resolved card holds in the stage before docking (ms) */
+const STAGE_HOLD_MS = 2500;
+/** Shorter hold when there's a claim queued behind this one */
+const STAGE_HOLD_SHORT_MS = 900;
 
 /* ── Main feed ── */
 
@@ -235,402 +91,322 @@ export const CardFeed = ({
   isPinned = true,
   pinToTop,
   activeTab = 'live',
-  selectedModel = 'gemini-3.1-flash-lite-preview',
+  selectedModel = BYOK_DEFAULT_MODEL,
   allCards,
-  onHeroStateChange,
+  onRetryTranscript,
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
   const enableListLayoutAnimations = !prefersReducedMotion;
+
   const isInitialLoading =
     status === 'loading' &&
     cards.length === 0 &&
     pendingClaims.length === 0 &&
     chunksScanned === 0;
 
-  // ── Basic derived values (needed by dwell logic) ──
-  const latestCheckedCard = activeTab === 'live' ? (cards[0] ?? null) : null;
-  const latestPendingClaim = pendingClaims[0] ?? null;
-  const hasScanSignal =
-    chunksScanned > 0 ||
-    lastScannedTimestamp !== null ||
-    Boolean(currentScanPreview);
-  const liveStripMode = getLiveStripMode({
-    activeTab,
-    status,
-    hasCheckedCard: Boolean(latestCheckedCard),
-    hasPendingClaim: Boolean(latestPendingClaim),
-    hasScanSignal,
-  });
+  // ── Stage state ──────────────────────────────────────────────────────────────
+  // The stage owns exactly ONE claim lifecycle at a time.
+  // Flow: pending → checking → resolved (hold) → docked into recent checks
+  const [stageCardId, setStageCardId] = useState<string | null>(null);
+  const stageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Dwell state for resolved hero cards ──
-  // When a claim resolves, we hold it in the hero slot for MIN_RESOLVED_DWELL_MS
-  // even if a new pending claim arrives. This prevents the jarring "blink" when
-  // focus rapidly shifts from a just-resolved card to a new verifying claim.
-  const [dwellState, setDwellState] = useState<{
-    card: SourceCard;
-    dwellUntil: number;
-    yieldedToNext: boolean;
-  } | null>(null);
+  const displayCards = useMemo(() => allCards ?? cards, [allCards, cards]);
 
-  // Track previous values to detect transitions
-  const prevLatestPendingRef = useRef<PendingClaimPreview | null>(null);
-  const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Claim key mirrors getClaimKey() in the service worker.
+  // PendingClaimPreview.id is this hash; SourceCard.id is a fresh UUID from
+  // the backend, so stage lookups must use the claim key, not the card UUID.
+  const cardClaimKey = (card: SourceCard) =>
+    `${card.claim.timestampSeconds}:${card.claim.claimText.trim().toLowerCase()}`;
 
-  // Keep a ref to dwellState so it can be read in effects without being a dependency
-  // (adding dwellState as a dep causes the cleanup to kill the timer on every state update)
-  const dwellStateRef = useRef(dwellState);
-  dwellStateRef.current = dwellState;
+  // Cards in stage and feed
+  const stageCheckingClaim = pendingClaims.find((c) => c.id === stageCardId) ?? null;
+  const stageResolvedCard = displayCards.find((c) => cardClaimKey(c) === stageCardId) ?? null;
+  const stageMode: 'listening' | 'checking' | 'resolved' =
+    !stageCardId ? 'listening' :
+    stageCheckingClaim ? 'checking' :
+    stageResolvedCard ? 'resolved' :
+    'listening';
 
-  // ── Dwell logic: start dwell when a pending claim resolves ──
-  // Does NOT list dwellState as a dep — its cleanup must not cancel the dwell timer.
+  // Recent checks: all resolved cards except the one currently in stage
+  const recentChecks = displayCards.filter((c) => cardClaimKey(c) !== stageCardId);
+
+  // Queue: pending claims that are NOT the one in the stage
+  const queuedCount = pendingClaims.filter((c) => c.id !== stageCardId).length;
+
+  // Promote next pending claim into stage when stage is empty
   useEffect(() => {
-    const wasPending = prevLatestPendingRef.current !== null;
-    const isNowPending = latestPendingClaim !== null;
+    if (activeTab !== 'live') return;
+    if (stageCardId) return;
+    const next = pendingClaims[0];
+    if (next) setStageCardId(next.id);
+  }, [activeTab, pendingClaims, stageCardId]);
 
-    if (wasPending && !isNowPending && latestCheckedCard) {
-      if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
-      const dwellUntil = Date.now() + MIN_RESOLVED_DWELL_MS;
-      setDwellState({ card: latestCheckedCard, dwellUntil, yieldedToNext: false });
-      dwellTimerRef.current = setTimeout(() => {
-        setDwellState((prev) => (prev ? { ...prev, yieldedToNext: true } : null));
-      }, MIN_RESOLVED_DWELL_MS);
-    }
-
-    prevLatestPendingRef.current = latestPendingClaim;
-  }, [latestPendingClaim, latestCheckedCard]);
-
-  // ── Dwell logic: clear dwell when a different checked card arrives ──
+  // When stage claim resolves → hold, then dock
   useEffect(() => {
-    const currentDwell = dwellStateRef.current;
-    if (currentDwell && latestCheckedCard && currentDwell.card.id !== latestCheckedCard.id) {
-      if (dwellTimerRef.current) {
-        clearTimeout(dwellTimerRef.current);
-        dwellTimerRef.current = null;
+    if (!stageCardId || !stageResolvedCard) return;
+
+    if (stageTimerRef.current) clearTimeout(stageTimerRef.current);
+
+    // Shorten hold when there's a queue waiting
+    const holdMs = queuedCount > 0 ? STAGE_HOLD_SHORT_MS : STAGE_HOLD_MS;
+
+    stageTimerRef.current = setTimeout(() => {
+      setStageCardId(null);
+      stageTimerRef.current = null;
+    }, holdMs);
+
+    return () => {
+      if (stageTimerRef.current) {
+        clearTimeout(stageTimerRef.current);
+        stageTimerRef.current = null;
       }
-      setDwellState(null);
-    }
-  }, [latestCheckedCard]);
+    };
+  }, [stageCardId, stageResolvedCard?.id, queuedCount]);
 
-  // ── Cleanup dwell timer on unmount ──
+  // Safety: clear stage if claim vanished entirely (edge case)
+  useEffect(() => {
+    if (!stageCardId) return;
+    if (!stageCheckingClaim && !stageResolvedCard) setStageCardId(null);
+  }, [stageCardId, stageCheckingClaim, stageResolvedCard]);
+
+  // Cleanup timer on unmount
   useEffect(() => {
     return () => {
-      if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
+      if (stageTimerRef.current) clearTimeout(stageTimerRef.current);
     };
   }, []);
 
-  // ── Compute effective hero mode considering dwell ──
-  // If we're in dwell period, force heroMode to 'checked' even if there's a new pending claim
-  const effectiveHeroMode: PromotedLiveHeroMode = useMemo(() => {
-    if (activeTab !== 'live') return 'none';
-
-    // During dwell, show the resolved card regardless of new pending claims
-    if (dwellState && !dwellState.yieldedToNext) {
-      return 'checked';
-    }
-
-    // Normal behavior: pending claim takes priority
-    if (latestPendingClaim) return 'pending';
-    if (latestCheckedCard) return 'checked';
-    return 'none';
-  }, [activeTab, dwellState, latestPendingClaim, latestCheckedCard]);
-
-  // ── Compute and emit hero slot state ──
-  const heroState: HeroSlotState = useMemo(() => {
-    if (effectiveHeroMode === 'pending' && latestPendingClaim) {
-      return {
-        mode: 'verifying',
-        claimText: latestPendingClaim.claimText,
-        timestampSeconds: latestPendingClaim.timestampSeconds,
-      };
-    }
-
-    if (effectiveHeroMode === 'checked' && latestCheckedCard) {
-      // Check if we're in dwell period
-      const isDwell = dwellState && dwellState.card.id === latestCheckedCard.id && !dwellState.yieldedToNext;
-      return {
-        mode: 'resolved',
-        card: latestCheckedCard,
-        dwellUntil: isDwell ? dwellState!.dwellUntil : 0,
-      };
-    }
-
-    if (liveStripMode && activeTab === 'live') {
-      return {
-        mode: 'scanning',
-        timestampSeconds: lastScannedTimestamp ?? liveTimestampSeconds,
-      };
-    }
-
-    return { mode: 'idle' };
-  }, [effectiveHeroMode, latestPendingClaim, latestCheckedCard, dwellState, liveStripMode, activeTab, lastScannedTimestamp, liveTimestampSeconds]);
-
-  // Notify parent of hero state changes
+  // Clear expanded card if it leaves recent checks
   useEffect(() => {
-    onHeroStateChange?.(heroState);
-  }, [heroState, onHeroStateChange]);
+    if (!expandedClaimId) return;
+    if (!recentChecks.some((c) => c.id === expandedClaimId)) setExpandedClaimId(null);
+  }, [expandedClaimId, recentChecks]);
 
-  // ── Derived values (after dwell/hero state computation) ──
-  const displayCards = useMemo(
-    () => (activeTab === 'history' && allCards ? allCards : cards),
-    [activeTab, allCards, cards]
-  );
-
-  const checkingTimestamp = latestPendingClaim?.timestampSeconds ?? lastScannedTimestamp;
-  const activePreview = latestPendingClaim?.claimText?.trim() || currentScanPreview?.trim() || '';
-  const activeReadingTimestamp = lastScannedTimestamp ?? liveTimestampSeconds;
-  const isLiveReading = liveStripMode !== null || status === 'verifying';
-
-  const liveNoHeroCardMode = getLiveNoHeroCardMode({
-    activeTab,
-    effectiveHeroMode,
-    status,
-    liveStripMode,
-  });
-
+  const hasScanSignal = chunksScanned > 0 || lastScannedTimestamp !== null;
+  const isLiveReading = (status === 'monitoring' || status === 'verifying') && hasScanSignal;
   const showResumeLive =
     !isPinned &&
     isLiveReading &&
     activeTab === 'live' &&
-    (cards.length > 0 || pendingClaims.length > 0 || Boolean(currentScanPreview));
-
-  // Compute olderCards based on effective hero mode (not raw layout)
-  // During dwell, latest checked card stays in hero slot, so olderCards starts from index 0
-  const olderCardsStartIndex = effectiveHeroMode === 'checked' ? 1 : 0;
-  const olderCards = useMemo(
-    () => (
-      activeTab === 'live'
-        ? cards.slice(olderCardsStartIndex, olderCardsStartIndex + MAX_HISTORY_ROWS)
-        : displayCards
-    ),
-    [activeTab, cards, displayCards, olderCardsStartIndex]
-  );
-  const hasAmbientScanCard =
-    activeTab === 'live' && liveStripMode !== null && effectiveHeroMode !== 'none';
-
-  const hasLiveFeedSurface =
-    activeTab === 'live' &&
-    (effectiveHeroMode !== 'none' || liveNoHeroCardMode !== 'none' || olderCards.length > 0) &&
-    // Suppress decorative tail when the ambient scan card is the only content
-    // below the hero — the 228px min-height ghost cards would create dead space.
-    !(hasAmbientScanCard && olderCards.length === 0);
-
-  const liveStackTailDensity =
-    olderCards.length >= 2
-      ? 'stacked'
-      : olderCards.length === 1
-        ? 'single'
-        : effectiveHeroMode !== 'none'
-          ? 'hero'
-          : 'ambient';
-
-  useEffect(() => {
-    if (!expandedClaimId) {
-      return;
-    }
-
-    if (!olderCards.some((card) => card.id === expandedClaimId)) {
-      setExpandedClaimId(null);
-    }
-  }, [expandedClaimId, olderCards]);
+    (cards.length > 0 || pendingClaims.length > 0);
 
   const modelCssVars = buildModelCssVars(selectedModel);
 
   return (
     <div className="relative" style={modelCssVars}>
       <div
-        className={`relative flex flex-col gap-2.5 px-3 pb-3 ${activeTab === 'live' ? 'pt-0.5' : 'pt-2'}`}
+        className={`relative flex flex-col gap-0 ${activeTab === 'live' ? 'pt-1' : 'pt-2'}`}
         style={{ ...FEED_RAIL_LAYOUT, ...modelCssVars } as CSSProperties}
       >
-        <div className="signal-rail signal-rail-feed" />
 
-        {isInitialLoading ? (
-          <FeedCard
-            size="skeleton"
-            timestampSeconds={null}
-            accentRgb="var(--sc-neutral-rgb)"
-          />
-        ) : (
-          <>
-            {/* Hero slot: unified FeedCard for all states */}
-            {activeTab === 'live' && (
-              <AnimatePresence mode="popLayout">
-                {effectiveHeroMode === 'pending' && latestPendingClaim && (
-                  <motion.div
-                    key={latestPendingClaim.id}
-                    initial={prefersReducedMotion ? false : heroCardEntry.initial}
-                    animate={heroCardEntry.animate}
-                    exit={heroCardEntry.exit}
-                    transition={heroCardEntry.transition}
-                  >
-                    <FeedCard
-                      size="verifying"
-                      timestampSeconds={checkingTimestamp}
-                      claimText={latestPendingClaim.claimText || 'Checking that claim…'}
-                      glow
-                    />
-                  </motion.div>
-                )}
-                
-                {effectiveHeroMode === 'checked' && latestCheckedCard && (
-                  <motion.div
-                    layout={!prefersReducedMotion}
-                    layoutId={`card-${latestCheckedCard.id}`}
-                    initial={prefersReducedMotion ? false : heroResolvedEntry.initial}
-                    animate={heroResolvedEntry.animate}
-                    exit={heroResolvedEntry.exit}
-                    transition={heroResolvedEntry.transition}
-                  >
-                    <FeedCard
-                      size="hero"
-                      timestampSeconds={latestCheckedCard.timestampSeconds}
-                      card={latestCheckedCard}
-                      accentRgb={VERDICT_META[latestCheckedCard.status].accentRgb}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            )}
+        {/* ── LIVE TAB ─────────────────────────────────────────────────────── */}
+        {activeTab === 'live' && (
+          <div className="live-tab-rail flex flex-col">
 
-            {/* Scanning / idle / error states - unified FeedCard */}
-            {liveNoHeroCardMode !== 'none' && (
-              liveNoHeroCardMode === 'no-transcript' ? (
-                <FeedCard
-                  size="scanning"
-                  timestampSeconds={null}
-                  previewText="No usable captions were returned for this video."
-                  reason="Transcript unavailable"
-                />
-              ) : liveNoHeroCardMode === 'error' ? (
-                <FeedCard
-                  size="scanning"
-                  timestampSeconds={null}
-                  previewText="Something went wrong. Refresh the YouTube tab to try again."
-                  reason="Error"
-                />
-              ) : liveNoHeroCardMode === 'scanning' ? (
-                <FeedCard
-                  size="scanning"
-                  timestampSeconds={activeReadingTimestamp}
-                  previewText={
-                    activePreview ||
-                    (liveStripMode === 'watching'
-                      ? 'Watching for the next checkable claim.'
-                      : 'Scanning for claims…')
-                  }
-                  entities={scanEntities}
-                  actionState={scanActionState}
-                  reason={
-                    (scanReason && SAFE_SCAN_REASONS.has(scanReason) ? scanReason : null) ||
-                    (liveStripMode === 'watching'
-                      ? 'Watching for the next checkable claim.'
-                      : 'Listening for checkable claims.')
-                  }
-                />
-              ) : liveNoHeroCardMode === 'loading' ? (
-                <FeedCard
-                  size="scanning"
-                  timestampSeconds={null}
-                  previewText="Loading transcript…"
-                  reason="Loading transcript…"
-                />
-              ) : null
-            )}
+            {/* Stage zone */}
+            <div className="px-3 pt-2 pb-1">
+              {(isInitialLoading || (stageCardId && stageMode !== 'listening')) && (
+                <p className="stage-section-label ml-[46px] mb-2">Live Check</p>
+              )}
 
-            {/* Checked claims stack - unified compact cards */}
-            {olderCards.length > 0 && (
-              <motion.div 
-                layout={enableListLayoutAnimations} 
-                className="feed-card-stack flex flex-col gap-1"
-              >
-                {activeTab === 'history' && (
-                  <div className="px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wider text-sc-muted font-medium">
-                      All checked claims
-                    </p>
-                  </div>
-                )}
-                {olderCards.map((card, index) => (
-                  <motion.div
-                    key={card.id}
-                    layout={enableListLayoutAnimations}
-                    layoutId={enableListLayoutAnimations ? `card-${card.id}` : undefined}
-                    custom={index}
-                    variants={getStackEntryVariants(prefersReducedMotion)}
-                    initial={prefersReducedMotion ? false : 'hidden'}
-                    animate={prefersReducedMotion ? undefined : 'visible'}
-                    exit={prefersReducedMotion ? undefined : 'exit'}
-                  >
-                    <FeedCard
-                      size="compact"
-                      timestampSeconds={card.timestampSeconds}
-                      card={card}
-                      isExpanded={expandedClaimId === card.id}
-                      onToggle={() => {
-                        setExpandedClaimId((current) => (current === card.id ? null : card.id));
-                      }}
-                    />
-                  </motion.div>
-                ))}
-              </motion.div>
-            )}
+              <div className="relative">
+                <AnimatePresence mode="wait">
 
-            {/* Ambient live listener — shown below stack when hero slot is occupied.
-                Placed before the stack tail so it sits in the content flow, not after. */}
-            {activeTab === 'live' && liveStripMode !== null && effectiveHeroMode !== 'none' && (
-              <FeedCard
-                size="scanning"
-                timestampSeconds={activeReadingTimestamp}
-                previewText={
-                  activePreview ||
-                  (liveStripMode === 'watching'
-                    ? 'Watching for the next checkable claim.'
-                    : 'Listening for checkable claims.')
-                }
-                entities={scanEntities}
-                actionState={scanActionState}
-                reason={
-                  (scanReason && SAFE_SCAN_REASONS.has(scanReason) ? scanReason : null) ||
-                  (liveStripMode === 'watching'
-                    ? 'Watching for the next checkable claim.'
-                    : 'Listening for checkable claims.')
-                }
-              />
-            )}
+                  {/* Skeleton */}
+                  {isInitialLoading && (
+                    <motion.div
+                      key="skeleton"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: DURATION.micro }}
+                    >
+                      <FeedCard
+                        size="skeleton"
+                        timestampSeconds={null}
+                        accentRgb="var(--sc-neutral-rgb)"
+                      />
+                    </motion.div>
+                  )}
 
-            {hasLiveFeedSurface && (
-              <div
-                className="feed-stack-tail"
-                data-density={liveStackTailDensity}
-                aria-hidden="true"
-              >
-                <div className="feed-stack-tail-card feed-stack-tail-card-primary" />
-                <div className="feed-stack-tail-card feed-stack-tail-card-secondary" />
+                  {/* Active claim in stage: checking or resolved */}
+                  {!isInitialLoading && stageCardId && stageMode !== 'listening' && (
+                    <motion.div
+                      key={stageCardId}
+                      layoutId={enableListLayoutAnimations ? `claim-${stageCardId}` : undefined}
+                      layout={enableListLayoutAnimations}
+                      initial={prefersReducedMotion ? false : { opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, transition: { duration: 0.06 } }}
+                      transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
+                    >
+                      <AnimatePresence mode="wait" initial={false}>
+                        {stageMode === 'checking' && stageCheckingClaim && (
+                          <motion.div
+                            key="checking"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0, transition: { duration: 0.1 } }}
+                            transition={{ duration: 0.15 }}
+                          >
+                            <FeedCard
+                              size="verifying"
+                              claimText={stageCheckingClaim.claimText || 'Checking that claim…'}
+                              timestampSeconds={stageCheckingClaim.timestampSeconds}
+                              accentRgb="var(--model-accent-rgb)"
+                              glow
+                              suppressEntry
+                            />
+                          </motion.div>
+                        )}
+                        {stageMode === 'resolved' && stageResolvedCard && (
+                          <motion.div
+                            key="resolved"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0, transition: { duration: 0.06 } }}
+                            transition={{ duration: 0.2 }}
+                          >
+                            <FeedCard
+                              size="hero"
+                              card={stageResolvedCard}
+                              timestampSeconds={stageResolvedCard.timestampSeconds}
+                              accentRgb={STATUS_RGB[stageResolvedCard.status] ?? '154, 160, 166'}
+                              suppressEntry
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      {/* Queue overlay — overlaid on stage card */}
+                      <AnimatePresence>
+                        {queuedCount > 0 && (
+                          <motion.div
+                            key="queue-chip"
+                            className="absolute bottom-3 right-3 pointer-events-none"
+                            initial={{ opacity: 0, scale: 0.88 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.9 }}
+                            transition={{ duration: 0.18, ease: SOFT_SPRING }}
+                          >
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[10px] font-medium text-sc-muted/65 bg-sc-bg-0/85 border border-sc-border-soft/50 backdrop-blur-sm tabular-nums">
+                              {queuedCount} queued
+                            </span>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  )}
+
+                  {/* Ambient state: no active claim in stage */}
+                  {!isInitialLoading && !stageCardId && (
+                    <motion.div
+                      key={`ambient-${status}`}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: DURATION.standard }}
+                    >
+                      {status === 'no-transcript' && (
+                        <FeedCard
+                          size="state"
+                          badgeLabel="No captions"
+                          timestampSeconds={null}
+                          accentRgb="var(--sc-neutral-rgb)"
+                          tone="muted"
+                          headline="No usable captions found."
+                          supportLine="Try a different video, or enable auto-captions."
+                          actionLabel={onRetryTranscript ? 'Retry' : undefined}
+                          onAction={onRetryTranscript}
+                        />
+                      )}
+                      {status === 'error' && (
+                        <FeedCard
+                          size="state"
+                          badgeLabel="Error"
+                          timestampSeconds={null}
+                          accentRgb="var(--sc-neutral-rgb)"
+                          tone="muted"
+                          headline="Something interrupted verification."
+                          supportLine="Try refreshing the page."
+                        />
+                      )}
+                      {(status === 'monitoring' || status === 'ready' || status === 'idle' || status === 'verifying') && (
+                        currentScanPreview ? (
+                          <FeedCard
+                            size="scanning"
+                            previewText={currentScanPreview}
+                            entities={scanEntities}
+                            actionState={scanActionState as 'VERIFYING' | 'REJECTED' | 'BUFFERING' | 'PARSE_ERROR' | null}
+                            reason={scanReason}
+                            timestampSeconds={liveTimestampSeconds}
+                            accentRgb="var(--model-accent-rgb)"
+                          />
+                        ) : (
+                          <div className="ml-[46px] py-3 pr-2 flex items-center gap-2.5">
+                            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sc-muted/25 animate-pulse" />
+                            <p className="text-[12px] text-sc-muted/40">
+                              Waiting for a claim worth checking
+                            </p>
+                          </div>
+                        )
+                      )}
+                    </motion.div>
+                  )}
+
+                </AnimatePresence>
+              </div>
+            </div>
+
+            {/* Recent checks */}
+            {recentChecks.length > 0 && (
+              <div className="px-3 mt-3.5">
+                <p className="stage-section-label ml-[46px] mb-2">Recent checks</p>
+                <div className="flex flex-col gap-1">
+                  {recentChecks.map((card, index) => (
+                    <motion.div
+                      key={card.id}
+                      layoutId={enableListLayoutAnimations ? `claim-${cardClaimKey(card)}` : undefined}
+                      layout={enableListLayoutAnimations}
+                      custom={index}
+                      variants={getStackEntryVariants(prefersReducedMotion)}
+                      initial={prefersReducedMotion ? false : 'hidden'}
+                      animate={prefersReducedMotion ? undefined : 'visible'}
+                    >
+                      <FeedCard
+                        size="compact"
+                        card={card}
+                        timestampSeconds={card.timestampSeconds}
+                        accentRgb={STATUS_RGB[card.status] ?? '154, 160, 166'}
+                        isExpanded={expandedClaimId === card.id}
+                        onToggle={() =>
+                          setExpandedClaimId((c) => (c === card.id ? null : card.id))
+                        }
+                      />
+                    </motion.div>
+                  ))}
+                </div>
               </div>
             )}
 
-            {/* Empty history state */}
-            {activeTab === 'history' && displayCards.length === 0 && askHistory.length === 0 && (
-              <FeedCard
-                size="state"
-                badgeLabel="No results yet"
-                timestampSeconds={null}
-                accentRgb="var(--sc-neutral-rgb)"
-                tone="muted"
-                headline="Nothing checked yet."
-                supportLine="Verified claims will appear here as the video plays. Switch to LIVE to see active scanning."
-              />
-            )}
+          </div>
+        )}
 
-            {/* Q&A History (HISTORY tab only) */}
-            {activeTab === 'history' && askHistory.length > 0 && (
+        {/* ── HISTORY TAB ──────────────────────────────────────────────────── */}
+        {activeTab === 'history' && (
+          <div className="px-3 pt-1 flex flex-col gap-2.5" style={FEED_RAIL_LAYOUT as CSSProperties}>
+            <div className="signal-rail signal-rail-feed" />
+
+            {/* Q&A History */}
+            {askHistory.length > 0 && (
               <div className="flex flex-col gap-2">
                 <div className="feed-rail-offset">
                   <div className="ml-1">
                     <p className="feed-section-label feed-section-label-qa">Q&A History</p>
                   </div>
                 </div>
-                {askHistory.map((entry) => (
+                {askHistory.slice().reverse().map((entry) => (
                   <AskResponseCard
                     key={`${entry.timestampSeconds}-${entry.query}`}
                     query={entry.query}
@@ -642,8 +418,58 @@ export const CardFeed = ({
               </div>
             )}
 
-          </>
+            {/* Fact checks */}
+            {displayCards.length > 0 && (
+              <motion.div
+                layout={enableListLayoutAnimations}
+                className="feed-card-stack flex flex-col gap-1"
+              >
+                <div className="feed-rail-offset mb-0.5">
+                  <div className="ml-1">
+                    <p className="feed-section-label">Fact checks</p>
+                  </div>
+                </div>
+                {displayCards.slice().reverse().map((card, reverseIndex) => (
+                  <motion.div
+                    key={card.id}
+                    layout={enableListLayoutAnimations}
+                    layoutId={enableListLayoutAnimations ? `claim-${card.id}` : undefined}
+                    custom={displayCards.length - 1 - reverseIndex}
+                    variants={getStackEntryVariants(prefersReducedMotion)}
+                    initial={prefersReducedMotion ? false : 'hidden'}
+                    animate={prefersReducedMotion ? undefined : 'visible'}
+                    exit={prefersReducedMotion ? undefined : 'exit'}
+                  >
+                    <FeedCard
+                      size="compact"
+                      timestampSeconds={card.timestampSeconds}
+                      card={card}
+                      accentRgb={STATUS_RGB[card.status] ?? '154, 160, 166'}
+                      isExpanded={expandedClaimId === card.id}
+                      onToggle={() => {
+                        setExpandedClaimId((current) => (current === card.id ? null : card.id));
+                      }}
+                    />
+                  </motion.div>
+                ))}
+              </motion.div>
+            )}
+
+            {/* Empty history state */}
+            {displayCards.length === 0 && askHistory.length === 0 && (
+              <FeedCard
+                size="state"
+                badgeLabel="No history"
+                timestampSeconds={null}
+                accentRgb="var(--sc-neutral-rgb)"
+                tone="muted"
+                headline="Nothing checked yet."
+                supportLine="Verified claims will appear here as the video plays."
+              />
+            )}
+          </div>
         )}
+
       </div>
 
       {showResumeLive && (

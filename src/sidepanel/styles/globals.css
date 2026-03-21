@@ -342,6 +342,23 @@ body::before {
     }
   }
 
+  @keyframes railDataFlow {
+    0% {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    20% {
+      opacity: 1;
+    }
+    80% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(250%);
+      opacity: 0;
+    }
+  }
+
   /* ── Status indicators ── */
   .status-badge {
     display: inline-flex;
@@ -612,22 +629,24 @@ body::before {
   }
 
   .verdict-badge-supported {
-    border: 1px solid rgba(var(--sc-supported-rgb), 0.24);
+    border: 1px solid rgba(var(--sc-supported-rgb), 0.28);
     background: rgba(var(--sc-supported-rgb), 0.10);
     color: var(--sc-supported);
+    box-shadow: 0 0 8px rgba(var(--sc-supported-rgb), 0.14), inset 0 0 6px rgba(var(--sc-supported-rgb), 0.06);
   }
 
   .verdict-badge-partial {
     border: 1px solid rgba(var(--sc-partial-rgb), 0.40);
     background: var(--sc-partial);
     color: var(--sc-bg-0);
+    box-shadow: 0 0 8px rgba(var(--sc-partial-rgb), 0.18);
   }
 
   .verdict-badge-disputed {
     border: 1px solid rgba(var(--sc-disputed-rgb), 0.34);
     background: rgba(var(--sc-disputed-rgb), 0.12);
     color: var(--sc-disputed);
-    box-shadow: 0 0 0 1px rgba(var(--sc-disputed-rgb), 0.16);
+    box-shadow: 0 0 8px rgba(var(--sc-disputed-rgb), 0.18), inset 0 0 6px rgba(var(--sc-disputed-rgb), 0.06);
   }
 
   .verdict-badge-unverifiable {
@@ -1672,6 +1691,17 @@ body::before {
     pointer-events: none;
   }
 
+  /* ── Stage Section Labels ── */
+  .stage-section-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--sc-muted);
+    opacity: 0.38;
+  }
+
   /* ── Feed Section Labels ── */
   .feed-section-label {
     font-family: var(--font-mono);
@@ -2023,6 +2053,32 @@ body::before {
   align-items: flex-start;
 }
 
+/* Background rail thread for the live tab — runs the full height of the feed
+   at the same x as the scanning card's diamond node, creating a continuous
+   visual timeline behind both stage cards and recent checks. */
+.live-tab-rail {
+  position: relative;
+}
+.live-tab-rail::before {
+  content: '';
+  position: absolute;
+  /* 12px (px-3) + 32px (rail-node-left offset within card wrapper) */
+  left: 44px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.14) 6%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.10) 50%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.05) 85%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
 .feed-card-wrapper-rail {
   padding-left: var(--rail-left, 38px);
 }
@@ -2218,7 +2274,64 @@ body::before {
   top: 0;
   bottom: 0;
   width: 1px;
-  opacity: 0.3;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.22) 15%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.22) 85%,
+    transparent 100%
+  );
+}
+
+/* Scanning: animated traveling segment */
+.rail-line-scan {
+  position: absolute;
+  left: 35px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.15) 20%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.4) 50%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.15) 80%,
+    transparent 100%
+  );
+  animation: railScanFlow 2.1s ease-in-out infinite;
+}
+
+/* Verifying: strong static glow with flowing pipeline on ::after */
+.rail-line-verify {
+  position: absolute;
+  left: 35px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.55) 6%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.30) 50%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.10) 92%,
+    transparent 100%
+  );
+  overflow: hidden;
+}
+
+.rail-line-verify::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 40%;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.85) 50%,
+    transparent 100%
+  );
+  animation: railDataFlow 2s ease-in-out infinite;
 }
 
 .rail-node {
@@ -2238,7 +2351,13 @@ body::before {
 }
 
 .rail-node-glow {
-  animation: railNodePulse 2s ease-in-out infinite;
+  animation: railNodeBreathe 3s ease-in-out infinite;
+}
+
+@keyframes railNodeBreathe {
+  0%, 100% { transform: rotate(45deg) scale(1);   opacity: 1; }
+  40%       { transform: rotate(45deg) scale(1.18); opacity: 0.85; }
+  70%       { transform: rotate(45deg) scale(0.94); opacity: 0.95; }
 }
 
 .rail-connector {
@@ -2380,11 +2499,12 @@ body::before {
 .feed-card-compact {
   padding: 8px 12px 9px 14px;
   background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.20), rgba(var(--sc-bg-0-rgb), 0.34));
-  border: 1px solid rgba(var(--sc-border-rgb), 0.14);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(var(--sc-border-rgb), 0.10);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
   border-radius: 10px;
   min-height: 48px;
   margin-left: 18px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .feed-card-compact:hover {
@@ -2397,27 +2517,27 @@ body::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 10px;
-  bottom: 10px;
-  width: 2px;
+  top: 8px;
+  bottom: 8px;
+  width: 2.5px;
   border-radius: 999px;
-  background: rgba(var(--sc-muted-rgb), 0.18);
+  background: rgba(var(--sc-muted-rgb), 0.22);
 }
 
 .feed-card-compact[data-status="supported"]::before {
-  background: rgba(var(--sc-supported-rgb), 0.72);
+  background: rgba(var(--sc-supported-rgb), 0.80);
 }
 
 .feed-card-compact[data-status="partial"]::before {
-  background: rgba(var(--sc-partial-rgb), 0.78);
+  background: rgba(var(--sc-partial-rgb), 0.84);
 }
 
 .feed-card-compact[data-status="disputed"]::before {
-  background: rgba(var(--sc-disputed-rgb), 0.78);
+  background: rgba(var(--sc-disputed-rgb), 0.84);
 }
 
 .feed-card-compact[data-status="unverifiable"]::before {
-  background: rgba(var(--sc-neutral-rgb), 0.52);
+  background: rgba(var(--sc-neutral-rgb), 0.60);
 }
 
 .feed-card-state,
@@ -2437,11 +2557,11 @@ body::before {
 .feed-card-state::after {
   content: "";
   position: absolute;
-  top: 16px;
-  right: 16px;
-  width: 48px;
-  height: 48px;
-  opacity: 0.035;
+  top: 14px;
+  right: 14px;
+  width: 40px;
+  height: 40px;
+  opacity: 0.055;
   pointer-events: none;
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
   background: currentColor;
@@ -2469,7 +2589,7 @@ body::before {
 }
 
 .feed-card-skeleton {
-  opacity: 0.56;
+  opacity: 0.68;
   background: linear-gradient(180deg, rgba(var(--sc-surface-0-rgb), 0.88), rgba(var(--sc-bg-0-rgb), 0.82));
   border-color: rgba(var(--sc-border-rgb), 0.56);
   box-shadow:
@@ -2495,8 +2615,9 @@ body::before {
 }
 
 .state-badge[data-tone="muted"] {
-  background: rgba(var(--sc-muted-rgb), 0.12);
-  color: var(--sc-muted);
+  background: rgba(var(--sc-muted-rgb), 0.14);
+  color: rgba(var(--sc-muted-rgb), 0.9);
+  border-color: rgba(var(--sc-muted-rgb), 0.32);
 }
 
 .state-badge[data-tone="supported"] {
@@ -2525,38 +2646,42 @@ body::before {
 }
 
 .feed-card-state-headline {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: -0.014em;
-  color: rgba(var(--sc-text-rgb), 0.96);
+  line-height: 1.42;
+  letter-spacing: -0.012em;
+  color: rgba(var(--sc-text-rgb), 0.92);
 }
 
 .feed-card-state-copy {
   font-size: 12px;
-  line-height: 1.55;
-  color: rgba(var(--sc-text-soft-rgb), 0.82);
+  line-height: 1.6;
+  color: rgba(var(--sc-text-soft-rgb), 0.68);
 }
 
 .state-card-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  border: 1px solid rgba(var(--sc-border-rgb), 0.72);
-  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--sc-muted-rgb), 0.26);
+  background: rgba(var(--sc-muted-rgb), 0.08);
+  padding: 7px 14px;
   font-size: 11px;
   font-weight: 600;
-  color: rgba(var(--sc-text-soft-rgb), 0.86);
+  letter-spacing: 0.01em;
+  color: rgba(var(--sc-text-soft-rgb), 0.78);
   transition:
     border-color var(--motion-micro) var(--motion-soft-spring),
+    background var(--motion-micro) var(--motion-soft-spring),
     color var(--motion-micro) var(--motion-soft-spring),
     transform var(--motion-fast-02) var(--motion-soft-spring);
 }
 
 .state-card-action:hover {
-  border-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.3);
-  color: rgba(var(--sc-text-rgb), 0.94);
+  border-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.36);
+  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.08);
+  color: rgba(var(--sc-text-rgb), 0.96);
   transform: translateY(-1px);
 }
 
@@ -2596,22 +2721,30 @@ body::before {
 /* Compact verdict */
 .compact-verdict {
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
-  padding: 3px 7px;
+  padding: 2px 7px;
   border-radius: 999px;
   white-space: nowrap;
-  opacity: 0.92;
-  background: rgba(var(--sc-muted-rgb), 0.12);
-  border: 1px solid rgba(var(--sc-border-rgb), 0.16);
+  background: rgba(var(--sc-muted-rgb), 0.10);
+  border: 1px solid rgba(var(--sc-border-rgb), 0.20);
 }
 
-.compact-verdict-supported { color: var(--sc-supported); }
-.compact-verdict-partial { color: var(--sc-partial); }
-.compact-verdict-disputed { color: var(--sc-disputed); }
+.compact-verdict-supported { color: var(--sc-supported); border-color: rgba(var(--sc-supported-rgb), 0.30); }
+.compact-verdict-partial { color: var(--sc-partial); border-color: rgba(var(--sc-partial-rgb), 0.30); }
+.compact-verdict-disputed { color: var(--sc-disputed); border-color: rgba(var(--sc-disputed-rgb), 0.30); }
 .compact-verdict-unverifiable { color: var(--sc-muted); }
+
+.compact-timestamp {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: rgba(var(--sc-muted-rgb), 0.60);
+  flex-shrink: 0;
+}
 
 .compact-card-layout {
   display: flex;
@@ -2898,8 +3031,8 @@ body::before {
 }
 
 @keyframes statusDotPulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.9); }
+  0%, 100% { opacity: 1; transform: scale(1);    box-shadow: 0 0 0 0 rgba(var(--model-accent-rgb, 138, 180, 248), 0); }
+  50%       { opacity: 0.7; transform: scale(1.1); box-shadow: 0 0 0 4px rgba(var(--model-accent-rgb, 138, 180, 248), 0.18); }
 }
 
 /* Entity chips */
@@ -3028,4 +3161,70 @@ body::before {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* New compact card layout - reasoning + source prominent */
+.compact-reasoning-text {
+  margin-top: 5px;
+  font-size: 13px;
+  line-height: 1.44;
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  color: rgba(var(--sc-text-rgb), 0.94);
+}
+
+.compact-source-line {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.compact-source-text {
+  color: rgba(var(--sc-text-soft-rgb), 0.78);
+}
+
+.compact-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--model-accent-solid, var(--sc-accent));
+  transition:
+    color var(--motion-fast-02) var(--motion-soft-spring),
+    opacity var(--motion-fast-02) var(--motion-soft-spring),
+    text-decoration-color var(--motion-fast-02) var(--motion-soft-spring);
+  text-decoration: underline;
+  text-decoration-thickness: 0.06em;
+  text-underline-offset: 0.14em;
+  text-decoration-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.22);
+}
+
+.compact-source-link:hover,
+.compact-source-link:focus-visible {
+  color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.94);
+  text-decoration-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.68);
+  text-shadow: 0 0 10px rgba(var(--model-accent-rgb, 138, 180, 248), 0.30);
+  outline: none;
+  transform: translateY(-1px);
+  transition: transform 0.15s ease, color 0.15s ease, text-shadow 0.15s ease;
+}
+
+/* Verdict-tinted hover glows for feed cards */
+.feed-card[data-status="supported"]:hover {
+  box-shadow: 0 0 0 1px rgba(var(--sc-supported-rgb), 0.35),
+              0 8px 24px rgba(var(--sc-supported-rgb), 0.12);
+}
+
+.feed-card[data-status="partial"]:hover {
+  box-shadow: 0 0 0 1px rgba(var(--sc-partial-rgb), 0.35),
+              0 8px 24px rgba(var(--sc-partial-rgb), 0.12);
+}
+
+.feed-card[data-status="disputed"]:hover {
+  box-shadow: 0 0 0 1px rgba(var(--sc-disputed-rgb), 0.35),
+              0 8px 24px rgba(var(--sc-disputed-rgb), 0.12);
+}
+
+.feed-card[data-status="unverifiable"]:hover {
+  box-shadow: 0 0 0 1px rgba(var(--sc-neutral-rgb), 0.35),
+              0 8px 24px rgba(var(--sc-neutral-rgb), 0.12);
 }

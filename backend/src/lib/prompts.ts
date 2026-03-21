@@ -163,6 +163,15 @@ Return highest-scoring candidate first.
 Only include candidates with verifiability >= 0.65 in the list.
 `;
 
+/**
+ * Strip newlines, carriage returns, and other control characters from
+ * user-supplied strings before they are embedded in prompt templates.
+ * This prevents prompt injection via malicious video titles, channel names,
+ * or user questions that contain newlines which can break prompt structure.
+ */
+const sanitizePromptField = (value: string): string =>
+  value.replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
 export function buildClaimExtractionPrompt(
   transcriptText: string,
   videoTitle: string,
@@ -171,10 +180,10 @@ export function buildClaimExtractionPrompt(
 ): string {
   return `${EXTRACTION_SYSTEM_PROMPT}
 
-You are watching "${videoTitle}" by ${channelName}.
+You are watching "${sanitizePromptField(videoTitle)}" by ${sanitizePromptField(channelName)}.
 
 <transcript timestamp_seconds="${approximateTimestamp}">
-${transcriptText}
+${sanitizePromptField(transcriptText)}
 </transcript>
 
 Return ONLY valid JSON. No markdown, no backticks, no explanation.
@@ -187,6 +196,118 @@ Important:
 - If the segment is not worth checking, use "REJECTED" with the best matching reason.
 - "candidates" must be [] when "has_claim" is false.
 - entities should never be null; use [] if nothing stands out.`;
+}
+
+// ============================================================================
+// MEETING EXTRACTION PROMPT — stricter profile for live conversational audio
+// ============================================================================
+
+export const MEETING_EXTRACTION_SYSTEM_PROMPT = `
+You are the claim extraction engine for SourceCheck running in MEETING MODE.
+You are processing live captions from a Google Meet call — informal, real-time conversation.
+
+Output a strict JSON object (same schema as standard mode):
+{
+  "entities": ["array of proper nouns or core subjects"],
+  "has_claim": boolean,
+  "action_state": "VERIFYING" | "REJECTED" | "BUFFERING",
+  "reason": "Short string explaining the decision",
+  "candidates": [
+    {
+      "claim_text": "Clean factual assertion",
+      "exact_quote": "Verbatim quote from captions",
+      "claim_type": "canonical" | "study" | "statistic" | "historical" | "surprising",
+      "verifiability": 0.0-1.0,
+      "value": 0.0-1.0,
+      "speaker_confidence": 0.0-1.0,
+      "reason": "Why this is checkable"
+    }
+  ]
+}
+
+=== MEETING MODE: ELEVATED REJECTION THRESHOLD ===
+
+Live meeting speech is informal and unscripted. Apply a MUCH STRICTER standard than YouTube:
+
+AUTOMATICALLY REJECT in meeting mode:
+- Hedged language: "I think", "I believe", "maybe", "probably", "seems like", "I'm not sure but", "if I recall correctly", "I heard somewhere"
+- Meeting filler: "let's circle back", "per my last email", "going forward", "just following up", "take this offline", "sync up", "align on"
+- Brainstorming / tentative: "what if we", "could we", "might be worth", "just an idea"
+- Attribution uncertainty: "I read somewhere that", "someone mentioned", "apparently"
+- Relative claims without anchors: "last year", "recently", "a few months ago" (no specific date)
+- Anything that requires knowing internal company context to evaluate
+
+ONLY extract when the speaker states something as established fact with clear attribution:
+- "The WHO report from 2023 found that X"
+- "Python 3.12 removed the GIL in October 2023"
+- "GDPR fines can reach 4% of global annual revenue"
+
+=== STRICT BOUNDARY: FALSIFIABLE VS SUBJECTIVE ===
+
+A FALSIFIABLE CLAIM can be proven true or false through public evidence.
+A SUBJECTIVE STATEMENT cannot — REJECT it.
+
+CRITICAL RULE: If a statement is hedged, speculative, or based on what someone thinks/feels/believes — REJECT it. Meeting mode has zero tolerance for "soft" claims.
+
+=== SCORING THRESHOLDS (STRICTER THAN YOUTUBE) ===
+
+verifiability:
+- 0.90+: Specific named source, number, and dated event — eligible
+- 0.80-0.89: Named entity + statistic, no date — eligible
+- <0.80: REJECT (higher bar than YouTube's 0.65)
+
+speaker_confidence (be very skeptical of live speech):
+- 1.0: "The study proves...", stated as hard fact
+- 0.75: "Research shows...", confident assertion
+- 0.50: "I think the data shows..." — reduce composite score heavily
+- <0.50: Speculative — REJECT the candidate
+
+value (meeting claims are typically lower value):
+- Apply a 0.85x multiplier to all value scores vs YouTube equivalents
+- Conversational claims are less polished and less likely to reach a broad audience
+
+=== MEETING-SPECIFIC REJECTION CHECKLIST ===
+
+Before adding any candidate, verify ALL of these:
+1. Is the claim at least 12 words? (higher bar than YouTube's 10) If NO → REJECT
+2. Is the exact_quote a grammatically complete sentence? If NO → REJECT
+3. Does it contain a proper noun, specific date, OR specific number? If NO → REJECT
+4. Does it contain ANY hedging language (think/believe/maybe/probably/seems)? If YES → REJECT
+5. Is verifiability >= 0.80? If NO → REJECT
+6. Would an outsider with internet access be able to verify this? If NO → REJECT
+
+=== BUFFERING ===
+
+Use BUFFERING when the speaker is mid-sentence. Meeting captions are often fragmented — be generous with BUFFERING rather than extracting weak partial claims.
+
+=== RANKING ===
+
+Sort candidates by: (verifiability × value × speaker_confidence).
+Only include candidates passing ALL six checks above.
+`;
+
+export function buildMeetingClaimExtractionPrompt(
+  transcriptText: string,
+  meetingTitle: string,
+  channelName: string,
+  approximateTimestamp: number
+): string {
+  return `${MEETING_EXTRACTION_SYSTEM_PROMPT}
+
+This is a live caption excerpt from "${meetingTitle}" (${channelName}).
+
+<captions timestamp_seconds="${approximateTimestamp}">
+${sanitizePromptField(transcriptText)}
+</captions>
+
+Return ONLY valid JSON. No markdown, no backticks, no explanation.
+
+Important:
+- You are in MEETING MODE — apply the stricter rejection threshold above.
+- Prefer BUFFERING over weak extractions. It is better to wait for a complete claim.
+- "candidates" must be [] when "has_claim" is false.
+- entities should never be null; use [] if nothing stands out.
+- "exact_quote" must be copied verbatim from the captions (not paraphrased).`;
 }
 
 export const ASK_SYSTEM_PROMPT = `
@@ -253,7 +374,7 @@ export function buildGroundedVerificationPrompt(
   return `You are the verification engine for SourceCheck, a YouTube fact-checking side panel.
 
 A speaker just claimed:
-"${claimText}"
+"${sanitizePromptField(claimText)}"
 (Claim type: ${claimType})${contextSection}
 
 You MUST perform a live Google Search to find current sources for this claim. Do not rely solely on training data — search the web now and cite what you find.
@@ -343,11 +464,11 @@ export function buildVideoQuestionPrompt(params: {
   const sourceSection = params.sourceCards.length > 0
     ? params.sourceCards
         .map((card) => (
-          `CLAIM: "${card.claim.claimText}"\n` +
+          `CLAIM: "${sanitizePromptField(card.claim.claimText)}"\n` +
           `STATUS: ${card.status}\n` +
-          `SOURCE: ${card.sourceTitle || 'Unknown'}\n` +
+          `SOURCE: ${sanitizePromptField(card.sourceTitle || 'Unknown')}\n` +
           `URL: ${card.sourceUrl || 'none'}\n` +
-          `NUANCE: ${card.nuance || 'No additional context'}\n` +
+          `NUANCE: ${sanitizePromptField(card.nuance || 'No additional context')}\n` +
           `TIMESTAMP: ${formatTimestamp(card.timestampSeconds)}`
         ))
         .join('\n---\n')
@@ -360,8 +481,8 @@ export function buildVideoQuestionPrompt(params: {
   return `${ASK_SYSTEM_PROMPT}
 
 === VIDEO CONTEXT ===
-Title: "${params.videoTitle}"
-Channel: ${params.channelName}
+Title: "${sanitizePromptField(params.videoTitle)}"
+Channel: ${sanitizePromptField(params.channelName)}
 ${currentTimeLine}
 
 === RECENT TRANSCRIPT (Chronological) ===
@@ -371,7 +492,7 @@ ${transcriptSection}
 ${sourceSection}
 
 === USER QUESTION ===
-"${params.question}"
+"${sanitizePromptField(params.question)}"
 
 === YOUR TASK ===
 Answer the question using ONLY the transcript and verified claims above.

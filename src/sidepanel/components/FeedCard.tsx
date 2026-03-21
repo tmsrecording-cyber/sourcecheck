@@ -10,8 +10,8 @@
  * This creates visual continuity as cards flow down the waterfall.
  */
 
-import { useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
+import { Fragment, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { formatTime } from '../utils/formatTime';
 import { stripLegacyCachePrefix } from '../utils/trustCopy';
 import type { SimilarClaim, SourceCard as SourceCardRecord, VerificationStatus } from '../../../shared/types';
@@ -43,6 +43,7 @@ interface FeedCardBaseProps {
   size: CardSize;
   accentRgb?: string;
   glow?: boolean;
+  suppressEntry?: boolean;
 }
 
 // Scanning state: showing transcript preview
@@ -127,25 +128,32 @@ const stopSourceLinkPropagation = (
 // Status icons
 const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; size?: 'small' | 'normal' }) => {
   const s = size === 'small' ? 10 : 12;
+  const sw = size === 'small' ? 1.8 : 2.2;
   const icons = {
+    // Authoritative checkmark — heavier stroke, more decisive angle
     supported: (
       <svg width={s} height={s} viewBox="0 0 12 12" fill="none">
-        <path d="M2.5 6L5 8.5L9.5 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M2 6.5L4.8 9.2L10 3" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
     ),
+    // Two offset parallel lines — reads as "mixed signal"
     partial: (
       <svg width={s} height={s} viewBox="0 0 12 12" fill="none">
-        <path d="M2.5 6H9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+        <path d="M2.5 4.8H7.8" stroke="currentColor" strokeWidth={sw - 0.4} strokeLinecap="round"/>
+        <path d="M4.2 7.2H9.5" stroke="currentColor" strokeWidth={sw - 0.4} strokeLinecap="round"/>
       </svg>
     ),
+    // Thicker X — definitive rejection
     disputed: (
       <svg width={s} height={s} viewBox="0 0 12 12" fill="none">
-        <path d="M3.5 3.5L8.5 8.5M8.5 3.5L3.5 8.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+        <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" strokeWidth={sw} strokeLinecap="round"/>
       </svg>
     ),
+    // Null circle — open ring + diagonal slash, meaning "void / cannot verify"
     unverifiable: (
       <svg width={s} height={s} viewBox="0 0 12 12" fill="none">
-        <circle cx="6" cy="6" r="1.5" fill="currentColor"/>
+        <circle cx="6" cy="6" r="3.8" stroke="currentColor" strokeWidth={sw - 0.6} strokeDasharray="2 1.2" strokeLinecap="round"/>
+        <path d="M8.2 3.8L3.8 8.2" stroke="currentColor" strokeWidth={sw - 0.8} strokeLinecap="round"/>
       </svg>
     ),
   };
@@ -157,23 +165,15 @@ const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; s
   );
 };
 
-// Verifying card with thinking animation
+// Verifying card — shows elapsed time so the user knows something real is happening
 const VerifyingContent = ({ claimText }: { claimText: string }) => {
-  const [thoughtIndex, setThoughtIndex] = useState(0);
-  
+  const [elapsed, setElapsed] = useState(0);
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      setThoughtIndex(i => (i + 1) % 4);
-    }, 900);
+    const interval = setInterval(() => setElapsed(s => s + 1), 1000);
     return () => clearInterval(interval);
   }, []);
-  
-  const thoughts = [
-    'Reading the claim',
-    'Searching sources',
-    'Cross-referencing',
-    'Synthesizing results',
-  ];
+
   return (
     <>
       <div className="flex items-center gap-2">
@@ -185,19 +185,11 @@ const VerifyingContent = ({ claimText }: { claimText: string }) => {
         {claimText}
       </p>
 
-      <div className="thinking-stream mt-3">
-        {/* Step pills — one per thought phase, fills left to right */}
-        <div className="verifying-pips" aria-hidden="true">
-          {thoughts.map((_, i) => (
-            <span
-              key={i}
-              className="verifying-pip"
-              data-state={i < thoughtIndex ? 'done' : i === thoughtIndex ? 'active' : 'pending'}
-            />
-          ))}
-        </div>
-        <p className="verifying-thought">{thoughts[thoughtIndex]}</p>
-      </div>
+      {elapsed > 0 && (
+        <p className="mt-3 text-[11px] font-mono tabular-nums text-sc-muted/50">
+          {elapsed}s
+        </p>
+      )}
     </>
   );
 };
@@ -282,13 +274,20 @@ const CompactContent = ({
   const meta = STATUS_META[card.status];
   const nuance = stripLegacyCachePrefix(card.nuance);
   const prefersReducedMotion = useReducedMotion();
-  const primaryText = nuance || card.claim.claimText;
   const resolvedSourceTitleCompact = resolveSourceTitle(card.sourceTitle);
-  const secondaryText = resolvedSourceTitleCompact || (nuance ? card.claim.claimText : '');
   const evidenceSnippet = card.evidenceSnippet?.trim() || '';
   const hasSourceLink = Boolean(card.sourceUrl?.trim() && resolvedSourceTitleCompact);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
   const isInteractive = Boolean(onToggle);
+  
+  // Extract first sentence of nuance for primary display (truncate at first period, or use full nuance)
+  const nuanceFirstSentence = nuance ? nuance.split(/\.(\s|$)/)[0] + (nuance.includes('.') ? '.' : '') : '';
+  
+  // Filter generic evaluation/boilerplate phrases — they add no info beyond the verdict badge
+  const BOILERPLATE_RE = /^we could not verify|^this claim could not|^unable to verify|^this likely needs|^no verifiable|^this requires|^verifying this|^cannot be verified|^insufficient (public )?evidence|^there (is|are) no/i;
+  const reasoningText = (nuanceFirstSentence && !BOILERPLATE_RE.test(nuanceFirstSentence))
+    ? nuanceFirstSentence
+    : card.claim.claimText;
 
   return (
     <div 
@@ -317,56 +316,59 @@ const CompactContent = ({
             <span className={`compact-verdict compact-verdict-${card.status}`}>
               {meta.label}
             </span>
+            {card.timestampSeconds !== null && card.timestampSeconds !== undefined && (
+              <span className="compact-timestamp">{formatTime(card.timestampSeconds)}</span>
+            )}
             {memorySummary && (
               <span className="compact-memory-chip">
                 Seen before
               </span>
             )}
           </div>
-          <p className="compact-claim-text line-clamp-2">
-            {primaryText}
+          
+          {/* Primary reasoning - the "why" */}
+          <p className="compact-reasoning-text line-clamp-2">
+            {reasoningText}
           </p>
-          {secondaryText && !isExpanded && (
-            <p className="compact-secondary-text line-clamp-1">
-              {secondaryText}
+          
+          {/* Source - always visible, prominent */}
+          {resolvedSourceTitleCompact && (
+            <p className="compact-source-line">
+              {hasSourceLink ? (
+                <a
+                  href={card.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="compact-source-link"
+                  onClick={stopSourceLinkPropagation}
+                  onKeyDown={stopSourceLinkPropagation}
+                >
+                  <span>{resolvedSourceTitleCompact}</span>
+                  <span aria-hidden="true">↗</span>
+                </a>
+              ) : (
+                <span className="compact-source-text">{resolvedSourceTitleCompact}</span>
+              )}
             </p>
           )}
 
+          <AnimatePresence>
           {isExpanded && (
             <motion.div
+              key="expanded"
               initial={prefersReducedMotion ? false : expandReveal.initial}
               animate={expandReveal.animate}
               exit={expandReveal.exit}
               transition={expandReveal.transition}
               className="compact-expanded-panel"
             >
-              {nuance && nuance !== card.claim.claimText && (
-                <p className="compact-expanded-quote">
-                  "{card.claim.claimText}"
-                </p>
-              )}
+              {/* Claim text moved to expanded panel */}
+              <p className="compact-expanded-quote">
+                "{card.claim.claimText}"
+              </p>
               {evidenceSnippet && (
                 <p className="compact-expanded-evidence">
                   "{evidenceSnippet}"
-                </p>
-              )}
-              {card.sourceTitle && (
-                <p className="compact-expanded-source">
-                  {hasSourceLink ? (
-                    <a
-                      href={card.sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="compact-expanded-source-link"
-                      onClick={stopSourceLinkPropagation}
-                      onKeyDown={stopSourceLinkPropagation}
-                    >
-                      <span>{card.sourceTitle}</span>
-                      <span aria-hidden="true">↗</span>
-                    </a>
-                  ) : (
-                    card.sourceTitle
-                  )}
                 </p>
               )}
               {memorySummary && (
@@ -376,6 +378,7 @@ const CompactContent = ({
               )}
             </motion.div>
           )}
+          </AnimatePresence>
         </div>
         {isInteractive && (
           <motion.span
@@ -441,7 +444,7 @@ const ScanningContent = ({
       </div>
 
       {previewText && (
-        <p className="mt-2.5 text-[14px] text-textMain/80 leading-relaxed line-clamp-2">
+        <p className="mt-2.5 text-[14px] text-textMain/92 leading-relaxed line-clamp-2">
           {normalizeCapsText(previewText)}
         </p>
       )}
@@ -454,7 +457,7 @@ const ScanningContent = ({
         </div>
       )}
 
-      {reason && !isVerifying && (
+      {reason && actionState === 'BUFFERING' && (
         <p className="mt-2 text-[11px] text-sc-muted/70">{reason}</p>
       )}
     </>
@@ -496,19 +499,23 @@ const StateContent = ({
 
 const SkeletonContent = () => (
   <div className="feed-card-skeleton-lines" aria-hidden="true">
-    <div className="skeleton h-4 w-16 rounded" />
-    <div className="mt-3 skeleton h-4 w-full rounded" />
-    <div className="mt-2 skeleton h-4 w-4/5 rounded" />
+    {/* Badge row */}
+    <div className="skeleton h-[11px] w-[52px] rounded" />
+    {/* Title */}
+    <div className="mt-3 skeleton h-[14px] w-3/4 rounded" />
+    <div className="mt-1.5 skeleton h-[14px] w-full rounded" />
+    {/* Body */}
+    <div className="mt-3 skeleton h-[11px] w-11/12 rounded" />
+    <div className="mt-1.5 skeleton h-[11px] w-2/3 rounded" />
   </div>
 );
 
 // Main FeedCard component
 export const FeedCard = (props: FeedCardProps) => {
-  const { timestampSeconds, size, accentRgb = '138, 180, 248', glow = false } = props;
+  const { timestampSeconds, size, accentRgb = '138, 180, 248', glow = false, suppressEntry = false } = props;
   const prefersReducedMotion = useReducedMotion();
   const status = props.size === 'hero' || props.size === 'compact' ? props.card.status : undefined;
   const tone = props.size === 'state' ? (props.tone ?? 'muted') : undefined;
-
   // Determine content based on size
   const content = (() => {
     switch (props.size) {
@@ -560,7 +567,8 @@ export const FeedCard = (props: FeedCardProps) => {
   };
 
   const isCompact = size === 'compact';
-  const isPassiveCard = size === 'scanning' || size === 'state' || size === 'skeleton';
+  const isScanning = size === 'scanning';
+  const isPassiveCard = size === 'state' || size === 'skeleton';
   const showRail = !isCompact;
   const railLeft = isCompact ? 0 : 44; // Reduced from 72px
 
@@ -578,12 +586,20 @@ export const FeedCard = (props: FeedCardProps) => {
             </div>
           )}
           
-          {/* Vertical rail line */}
-          <span 
-            className="rail-line"
-            style={{
-              background: `linear-gradient(180deg, transparent 0%, rgba(${accentRgb}, 0.38) 8%, rgba(${accentRgb}, 0.22) 50%, rgba(${accentRgb}, 0.08) 92%, transparent 100%)`,
-            }}
+          {/* Vertical rail line — model color for live states, verdict color for resolved */}
+          <span
+            className={[
+              'rail-line',
+              size === 'scanning' ? 'rail-line-scan' : '',
+              size === 'verifying' ? 'rail-line-verify' : '',
+            ].join(' ').trim()}
+            style={
+              size !== 'scanning' && size !== 'verifying'
+                ? {
+                    background: `linear-gradient(180deg, transparent 0%, rgba(${accentRgb}, 0.60) 8%, rgba(${accentRgb}, 0.36) 50%, rgba(${accentRgb}, 0.12) 92%, transparent 100%)`,
+                  }
+                : undefined
+            }
           />
           
           {/* Diamond node */}
@@ -614,19 +630,19 @@ export const FeedCard = (props: FeedCardProps) => {
         data-size={size}
         data-status={status}
         data-tone={tone}
-        initial={prefersReducedMotion || isCompact ? false : { y: DISTANCE.enterY, opacity: 0 }}
+        initial={prefersReducedMotion || isCompact || suppressEntry ? false : { y: DISTANCE.enterY, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
         layout={size !== 'scanning' && size !== 'skeleton'}
         whileHover={
           prefersReducedMotion || isPassiveCard
             ? undefined
-            : isCompact
+            : isCompact || isScanning
               ? hoverLiftCompact
               : hoverLift
         }
         whileTap={
-          prefersReducedMotion || isPassiveCard
+          prefersReducedMotion || isPassiveCard || isScanning
             ? undefined
             : pressSettle
         }

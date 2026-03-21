@@ -566,10 +566,8 @@ const clearLastProviderError = () => {
 const estimateByteSize = (value: unknown): number => {
   try {
     const json = JSON.stringify(value);
-    // Each character in a JavaScript string is 2 bytes (UTF-16)
-    // But for JSON over the wire/storage, it's typically UTF-8
-    // We'll estimate conservatively at 2 bytes per char
-    return json.length * 2;
+    // chrome.storage uses UTF-8 encoding — use Blob for accurate byte count
+    return new Blob([json]).size;
   } catch {
     return Infinity;
   }
@@ -1000,7 +998,13 @@ const readTranscriptFromSnapshot = (
     }));
 };
 
+/** Returns true when the active session is a private source (e.g. Google Meet). */
+const isPrivateSession = (): boolean =>
+  currentVideoInfo?.sourceContext?.visibility === 'private';
+
 const persistTranscriptSnapshot = (videoId: string | null, transcript: TranscriptChunk[]) => {
+  // Never persist transcript for private sessions (e.g. meeting captions).
+  if (isPrivateSession()) return;
   if (!videoId || transcript.length === 0) {
     chrome.storage.local.remove(TRANSCRIPT_SNAPSHOT_KEY, () => {
       if (chrome.runtime.lastError) {
@@ -1137,8 +1141,11 @@ const getAnalysisIntervalMs = (backlogChunks = 0) => {
 const getClaimKey = (claim: Pick<ExtractedClaim, 'claimText' | 'timestampSeconds'>) =>
   `${claim.timestampSeconds}:${claim.claimText.trim().toLowerCase()}`;
 
+// Leash scales with playback rate so the wall-clock reading window stays
+// constant regardless of speed. At 2x, we look 30 video-seconds ahead
+// (= 15 wall-clock seconds) rather than 15 video-seconds (= 7.5 wall-clock).
 const getLeashCutoff = (currentTime: number | null) =>
-  currentTime === null ? null : currentTime + PLAYHEAD_LEASH_SECONDS;
+  currentTime === null ? null : currentTime + PLAYHEAD_LEASH_SECONDS * getEffectivePlaybackRate();
 
 const isRepositioningReason = (reason: string | null) =>
   typeof reason === 'string' && reason.startsWith('Repositioning cognitive scan');
@@ -1623,6 +1630,7 @@ const resetSessionState = (nextVideo: ActiveVideoContext | null) => {
     ? { source: null, reason: 'pending', attemptCount: 0 }
     : { source: null, reason: null, attemptCount: 0 };
   transcriptFetchLog = [];
+  metricsAccumulator.reset();
 
   if (nextVideo) {
     dispatch({ type: 'VIDEO_CHANGED', videoId: nextVideo.videoId, title: nextVideo.title, channel: nextVideo.channel });
@@ -1760,6 +1768,19 @@ const flushPersistPanelState = (options: {
     payload.pendingVerifications = verificationQueue.slice(0, MAX_VERIFICATION_QUEUE);
   }
 
+  // Privacy: do not persist claim cards for private sessions (e.g. Google Meet).
+  // Transcript is already guarded by persistTranscriptSnapshot. Cards must also be
+  // cleared so they don't survive a service worker restart within the same session.
+  if (isPrivateSession()) {
+    payload.sourceCards = [];
+    payload.pendingClaims = [];
+    payload.allSourceCards = [];
+    payload.allPendingClaims = [];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = [];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allSourceCards = [];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = [];
+  }
+
   // Check if payload would exceed session storage quota
   if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
     console.warn('[SourceCheck/SW] Panel state payload too large, truncating...');
@@ -1870,11 +1891,10 @@ const persistPanelDiagnostics = () => {
     pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
     debugStage,
     transcriptMessageStats,
-    // Drop heavy fields: transcriptFetchLog, eventLog, sourceCards, pendingClaims
+    // Drop heavy log arrays only — sourceCards and pendingClaims are live UI state
+    // that must never be zeroed by a diagnostics write (would blank the live feed).
     transcriptFetchLog: [],
     eventLog: [],
-    sourceCards: [],
-    pendingClaims: [],
   };
   
   // Persist only the diagnostic subsets to avoid quota issues
@@ -1968,10 +1988,11 @@ const hydrateState = async () => {
           transcriptFetchLog,
           transcriptMessageStats: storedRuntime.transcriptMessageStats ?? INITIAL_RUNTIME_STATE.transcriptMessageStats,
           pendingTranscriptBufferSummary: storedRuntime.pendingTranscriptBufferSummary ?? INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary,
-          // Restore selectedModel from sync storage if not in session
-          // Validate against allowed models to prevent corrupted values
+          // Restore selectedModel — sync storage wins over session storage.
+          // Sync is written atomically (awaited) on MODEL_CHANGED; session is debounced.
+          // If the SW was killed before the debounce fired, session is stale — sync is ground truth.
           selectedModel: (() => {
-            const rawModel = storedRuntime.selectedModel ?? syncSelectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
+            const rawModel = syncSelectedModel ?? storedRuntime.selectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
             const normalized = normalizeModel(rawModel);
             if (!storedProviderApiKey) {
               if (normalized !== FREEMIUM_MODEL) {
@@ -2184,12 +2205,13 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       .join(' ');
 
     const { sourceCard: rawSourceCard, similarClaims = [] } = await fetchWithBYOK('/api/verify-claim', {
-      claim: item.claim, 
+      claim: item.claim,
       videoId: item.videoId,
-      videoTitle: item.videoTitle, 
+      videoTitle: item.videoTitle,
       channelName: item.channelName,
       model: runtimeState.selectedModel,
       contextTranscript: contextTranscript || undefined,
+      isPrivate: isPrivateSession() || undefined,
     }) as VerifyClaimResponse;
     const sourceCard: SourceCard = similarClaims.length > 0
       ? {
@@ -2349,9 +2371,17 @@ const processVerificationQueue = async () => {
   isVerifying = true;
 
   try {
+    // Use shift() pattern to safely handle queue mutations during iteration
     while (verificationQueue.length > 0) {
       if (runGeneration !== verificationGeneration) return;
-      const batch = verificationQueue.splice(0, MAX_CONCURRENT_VERIFICATIONS);
+      // Take items from front of queue - safe against mutations during processing
+      const batch: VerificationQueueItem[] = [];
+      for (let i = 0; i < MAX_CONCURRENT_VERIFICATIONS && verificationQueue.length > 0; i++) {
+        const item = verificationQueue.shift();
+        if (item) batch.push(item);
+      }
+      if (batch.length === 0) break;
+      
       console.log(
         `[SourceCheck/SW] verification batch starting size=${batch.length} ` +
         `remaining=${verificationQueue.length} active=${activeVerificationKeys.size}`
@@ -2707,6 +2737,8 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
         chunks: chunksToProcess,
         currentTimestamp: currentTime,
         model: runtimeState.selectedModel,
+        sourceType: currentVideoInfo?.sourceContext?.type ?? 'youtube',
+        isPrivate: isPrivateSession() || undefined,
       }) as AnalyzeChunkResponse;
     } catch (analyzeError) {
       // TRIAGE: Log model-specific failures
@@ -3135,6 +3167,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    if (message.type === 'TRANSCRIPT_CHUNK_LIVE') {
+      // Live caption chunk from a streaming adapter (e.g. Google Meet).
+      // Appended directly to currentTranscript and processed immediately —
+      // there is no batch protocol for live sources.
+      if (message.payload.videoId !== currentVideoInfo?.videoId) {
+        sendResponse({ status: 'ignored' });
+        return;
+      }
+      const raw = message.payload.chunk;
+      if (!raw || typeof raw.text !== 'string' || typeof raw.startMs !== 'number' || typeof raw.durationMs !== 'number') {
+        sendResponse({ status: 'error', error: 'Invalid live chunk.' });
+        return;
+      }
+      const newChunk: TranscriptChunk = {
+        text: raw.text,
+        startTime: Math.floor(raw.startMs / 1000),
+        duration: Math.max(1, Math.floor(raw.durationMs / 1000)),
+        index: currentTranscript.length,
+      };
+      currentTranscript.push(newChunk);
+      // Do not persist transcript for private sessions.
+      if (!isPrivateSession()) {
+        persistPanelState({ includeTranscript: true });
+      }
+      // Drive claim extraction with the chunk's wall-clock start time.
+      void processPlayback(newChunk.startTime).catch((err) =>
+        console.error('[SW] processPlayback error (live chunk):', err)
+      );
+      sendResponse({ status: 'ok' });
+      return;
+    }
+
     if (message.type === 'MODEL_CHANGED') {
       const normalizedModel = normalizeModel(message.model);
       let effectiveModel = normalizedModel;
@@ -3162,7 +3226,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (storageError) {
         console.error('[SourceCheck/SW] Failed to persist model selection:', storageError);
       }
-      persistPanelState();
+      // Flush session storage immediately (bypass debounce) so the model survives SW termination.
+      // The debounce window is the exact race that causes stale model on wake-up.
+      flushPersistPanelState();
       console.log('[SourceCheck/SW] Model changed to:', effectiveModel);
       sendResponse({ status: 'ok' });
       return;
