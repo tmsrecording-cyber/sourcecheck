@@ -7,6 +7,7 @@ import { logSessionInitFailure, logProviderError, logRetryExhausted } from '../t
 // Retry delays for session token acquisition: 300ms, 800ms, 1500ms (exponential backoff)
 const SESSION_TOKEN_RETRY_DELAYS_MS = [300, 800, 1500];
 const MAX_SESSION_TOKEN_ATTEMPTS = 3;
+const SESSION_FETCH_TIMEOUT_MS = 10_000;
 
 interface FetchPayload {
   [key: string]: unknown;
@@ -80,11 +81,14 @@ export async function getSessionToken(): Promise<string | null> {
         if (clientSecret) {
           headers['x-sourcecheck-client-secret'] = clientSecret;
         }
+        const fetchAbort = new AbortController();
+        const fetchTimeout = setTimeout(() => fetchAbort.abort(), SESSION_FETCH_TIMEOUT_MS);
         const res = await fetch(`${API_BASE}/api/session/init`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ extensionId: chrome.runtime.id }),
-        });
+          signal: fetchAbort.signal,
+        }).finally(() => clearTimeout(fetchTimeout));
 
         console.log('[SourceCheck/API] Session init response status:', res.status);
         

@@ -173,6 +173,37 @@ let lastAnalyzedAt = 0;
 let persistDebounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 let pendingPersistOptions: { includeTranscript?: boolean; includeCards?: boolean; includeQueue?: boolean } = {};
 const PERSIST_DEBOUNCE_MS = 250; // Batch rapid state changes into single write
+
+// STORAGE WRITE SERIALIZATION: Chrome's LevelDB backend rejects concurrent writes.
+// All chrome.storage.session.set calls must go through this queue.
+let storageWriteInFlight = false;
+let storageWriteQueue: Array<{ data: Record<string, unknown>; label: string }> = [];
+
+const enqueueStorageWrite = (data: Record<string, unknown>, label: string): void => {
+  // Coalesce: merge into the pending queued write if one exists
+  if (storageWriteQueue.length > 0) {
+    storageWriteQueue[storageWriteQueue.length - 1].data = {
+      ...storageWriteQueue[storageWriteQueue.length - 1].data,
+      ...data,
+    };
+    return;
+  }
+  storageWriteQueue.push({ data, label });
+  drainStorageWriteQueue();
+};
+
+const drainStorageWriteQueue = (): void => {
+  if (storageWriteInFlight || storageWriteQueue.length === 0) return;
+  const { data, label } = storageWriteQueue.shift()!;
+  storageWriteInFlight = true;
+  chrome.storage.session.set(data, () => {
+    storageWriteInFlight = false;
+    if (chrome.runtime.lastError) {
+      console.error(`[SourceCheck/SW] Persisting failed (${label}):`, chrome.runtime.lastError.message);
+    }
+    drainStorageWriteQueue();
+  });
+};
 let processingGeneration = 0;
 let verificationGeneration = 0;
 let transcriptLoadDeadlineAt: number | null = null;
@@ -1823,38 +1854,12 @@ const flushPersistPanelState = (options: {
         currentScanReason,
       };
       
-      chrome.storage.session.set(emergencyPayload, () => {
-        if (chrome.runtime.lastError) {
-          console.error('[SourceCheck/SW] Failed to persist emergency panel state:', chrome.runtime.lastError.message);
-        } else {
-          console.log('[Pipeline] Emergency state persisted:', {
-            sourceCardsCount: emergencySourceCards.length,
-            allSourceCardsCount: emergencyAllSourceCards.length,
-            pendingClaimsCount: emergencyPendingClaims.length,
-            allPendingClaimsCount: emergencyAllPendingClaims.length,
-          });
-        }
-      });
+      enqueueStorageWrite(emergencyPayload, 'emergency-panel-state');
       return;
     }
   }
 
-  chrome.storage.session.set(payload, () => {
-    if (chrome.runtime.lastError) {
-      if (chrome.runtime.lastError.message?.includes('QUOTA')) {
-        console.error('[SourceCheck/SW] Storage quota exceeded when persisting panel state');
-      } else {
-        console.error('[SourceCheck/SW] Failed to persist panel state:', chrome.runtime.lastError.message);
-      }
-    } else {
-      console.log('[Pipeline] State persisted:', {
-        sourceCardsCount: (payload.sourceCards as SourceCard[]).length,
-        pendingClaimsCount: (payload.pendingClaims as PendingClaimPreview[]).length,
-        lifecycle: (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).lifecycle,
-        chunksScanned: (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).chunksScanned,
-      });
-    }
-  });
+  enqueueStorageWrite(payload, 'panel-state');
 };
 
 // PERFORMANCE FIX: Debounced wrapper for persistPanelState
@@ -1906,23 +1911,11 @@ const persistPanelDiagnostics = () => {
   // Quota guard: if still too large, drop transcriptFetchLog
   if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
     console.warn('[SourceCheck/SW] Diagnostics payload too large, using minimal version');
-    chrome.storage.session.set({
-      [WORKER_RUNTIME_STATE_KEY]: minimalRuntimeState,
-    }, () => {
-      if (chrome.runtime.lastError) {
-        console.error('[SourceCheck/SW] Failed to persist minimal diagnostics:', chrome.runtime.lastError.message);
-      }
-    });
+    enqueueStorageWrite({ [WORKER_RUNTIME_STATE_KEY]: minimalRuntimeState }, 'minimal-diagnostics');
     return;
   }
-  
-  chrome.storage.session.set(payload, () => {
-    if (chrome.runtime.lastError) {
-      console.error('[SourceCheck/SW] Failed to persist diagnostics:', chrome.runtime.lastError.message);
-    } else {
-      console.log('[SourceCheck/SW] persisted transcriptFetchLog entries', transcriptFetchLog.length);
-    }
-  });
+
+  enqueueStorageWrite(payload, 'diagnostics');
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2679,7 +2672,7 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
   }
 
   const startIndex = lastProcessedIndex + 1;
-  const endIndex = Math.min(currentIndex, startIndex + getChunkBatchSize());
+  const endIndex = Math.min(currentIndex, startIndex + getChunkBatchSize() - 1);
   const chunksToProcess = currentTranscript.slice(startIndex, endIndex + 1);
   if (chunksToProcess.length === 0) return;
 
