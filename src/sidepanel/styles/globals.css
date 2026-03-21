@@ -2275,7 +2275,6 @@ body::before {
 .feed-card-scanning {
   padding: 12px 14px;
   background: linear-gradient(180deg, rgba(var(--sc-surface-0-rgb), 0.8), rgba(var(--sc-surface-0-rgb), 0.6));
-  border-style: dashed;
   opacity: 0.85;
 }
 
