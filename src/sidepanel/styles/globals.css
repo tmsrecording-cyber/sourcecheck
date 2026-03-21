@@ -1153,31 +1153,32 @@ body::before {
   .verifying-pips {
     display: flex;
     align-items: center;
-    gap: 4px;
-    margin-bottom: 7px;
+    gap: 5px;
+    margin-bottom: 8px;
   }
 
   .verifying-pip {
     height: 2px;
     border-radius: 999px;
-    width: 18px;
-    background: rgba(var(--sc-muted-rgb), 0.16);
-    transition: width 0.4s ease, background 0.4s ease;
+    width: 20px;
+    background: rgba(255, 255, 255, 0.10);
+    transition: width 0.4s ease, background 0.4s ease, box-shadow 0.4s ease;
   }
 
   .verifying-pip[data-state="done"] {
-    background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.38);
+    background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.45);
   }
 
   .verifying-pip[data-state="active"] {
-    width: 26px;
-    background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.76);
+    width: 28px;
+    background: var(--model-accent-solid, var(--sc-accent));
+    box-shadow: 0 0 6px rgba(var(--model-accent-rgb, 138, 180, 248), 0.50);
   }
 
   .verifying-thought {
     font-size: 11px;
     line-height: 1.5;
-    color: rgba(var(--sc-text-soft-rgb), 0.66);
+    color: var(--sc-text-soft);
     letter-spacing: 0.01em;
   }
   
@@ -2915,10 +2916,7 @@ body::before {
 
 /* Thinking stream (verifying state) */
 .thinking-stream {
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 6px;
-  border-left: 2px solid rgba(var(--sc-accent-rgb), 0.4);
+  padding-top: 12px;
 }
 
 .verifying-pips {
@@ -2931,25 +2929,26 @@ body::before {
 .verifying-pip {
   height: 2px;
   border-radius: 999px;
-  width: 18px;
-  background: rgba(255, 255, 255, 0.12);
-  transition: width 0.4s ease, background 0.4s ease;
+  width: 20px;
+  background: rgba(255, 255, 255, 0.10);
+  transition: width 0.4s ease, background 0.4s ease, box-shadow 0.4s ease;
 }
 
 .verifying-pip[data-state="done"] {
-  background: rgba(var(--sc-accent-rgb), 0.42);
+  background: rgba(var(--sc-accent-rgb), 0.45);
 }
 
 .verifying-pip[data-state="active"] {
-  width: 26px;
+  width: 28px;
   background: var(--sc-accent);
+  box-shadow: 0 0 6px rgba(var(--sc-accent-rgb), 0.50);
 }
 
 .verifying-thought {
   font-size: 11px;
   line-height: 1.5;
   letter-spacing: 0.01em;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--sc-text-soft);
 }
 
 /* kept for any legacy references */
