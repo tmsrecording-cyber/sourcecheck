@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type {
   AskQuestionSource,
   AnalysisStatus,
-  PendingClaimPreview,
   SourceCard,
 } from '../../../shared/types';
 import { BYOK_DEFAULT_MODEL } from '../../../shared/types';
@@ -16,7 +15,6 @@ import {
   DURATION,
 } from '../styles/motionTokens';
 import {
-  getClaimKey,
   getCardClaimKey,
   type LivePhase,
   type ReadingVariant,
@@ -65,8 +63,6 @@ const FEED_RAIL_LAYOUT = {
   '--rail-left': '46px',
 } as CSSProperties;
 
-const MAX_HISTORY_ROWS = 20;
-void MAX_HISTORY_ROWS; // referenced for future pagination
 
 const STATUS_RGB: Record<string, string> = {
   supported: '129, 201, 149',
@@ -91,7 +87,6 @@ export const CardFeed = ({
   chunksScanned = 0,
   livePhase = 'idle',
   readingVariant = null,
-  readingPreview = null,
   readingTimestamp = null,
   stageEntries = [],
   dockedKeys,
@@ -135,7 +130,12 @@ export const CardFeed = ({
     (recentChecks.length > 0 || livePhase !== 'idle');
 
   const showStateCard = status === 'no-transcript' || status === 'error';
-  const showAmbientWaiting = !isInitialLoading && !showStateCard && livePhase === 'idle';
+  const showAmbientWaiting =
+    !isInitialLoading &&
+    !showStateCard &&
+    livePhase === 'idle' &&
+    !stageEntries[0] &&
+    !anyDocking;
   const stageShellMinHeight = isInitialLoading
     ? STAGE_SHELL_MIN_HEIGHT.checking
     : anyDocking
