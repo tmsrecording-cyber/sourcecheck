@@ -141,8 +141,11 @@ const resolveStatusWithoutMatchedSource = (params: {
     return params.parsedStatus;
   }
 
+  // Model returned unverifiable — but if Gemini actually found grounding sources
+  // (the search returned relevant pages, just couldn't match a URL to the title),
+  // downgrade to partial rather than keeping unverifiable. Something was found.
   if (params.parsedStatus === 'unverifiable') {
-    return 'unverifiable';
+    return params.hasGroundingSources ? 'partial' : 'unverifiable';
   }
 
   return params.hasGroundingSources ? 'partial' : 'unverifiable';
@@ -584,11 +587,15 @@ export async function POST(request: NextRequest) {
           });
           
           usedFallback = true;
+          // Use "partial" not "unverifiable" — the claim likely IS about a real topic
+          // but automated verification was blocked (often by safety filters on
+          // geopolitical/military content). "Partial" is honest: the claim exists
+          // in a real domain but we couldn't assess the specifics.
           rawVerification = {
-            status: 'unverifiable',
-            sourceTitle: 'Verification unavailable',
+            status: 'partial',
+            sourceTitle: 'Automated check incomplete',
             sourceType: 'other',
-            nuance: 'Verification temporarily unavailable.',
+            nuance: 'Automated verification could not complete; verify this claim independently.',
             evidenceSnippet: null,
           };
           inputTokens = 0;

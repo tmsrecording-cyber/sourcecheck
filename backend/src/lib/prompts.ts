@@ -387,10 +387,15 @@ Determine:
 1. status — one of:
    - "supported": clearly confirmed by credible sources, no major caveats
    - "partial": directionally true but the specifics are off, missing context, OR the claim is widely reported but primary source is unclear
-   - "disputed": credible sources directly contradict or cast serious doubt
-   - "unverifiable": absolutely no credible source found that even mentions this topic
+   - "disputed": credible sources directly contradict or cast serious doubt, OR the claim dramatically oversimplifies a complex reality
+   - "unverifiable": you searched and found ZERO web results about this topic — not a single mention anywhere
 
-   CRITICAL: Use "partial" liberally. If the claim is commonly discussed but you can't find the exact statistic, use "partial" with nuance like "Widely discussed, but specific figure unverified." Only use "unverifiable" for claims that are completely fabricated or nonsensical with zero web presence.
+   CRITICAL STATUS RULES:
+   - Use "partial" liberally. If the claim is commonly discussed but you can't find the exact statistic, use "partial".
+   - Use "disputed" for oversimplifications, exaggerations, or claims that reduce a complex issue to a single cause. Example: "X is the single reason for Y" is almost always "disputed" because real-world outcomes rarely have a single cause.
+   - Political, geopolitical, military, and economic claims are ALMOST NEVER "unverifiable" — these topics are extensively covered online. If your search returns ANY results about the topic, you MUST choose supported/partial/disputed, NOT unverifiable.
+   - Only use "unverifiable" when you literally cannot find a single web result mentioning the topic. If you found sources but they didn't confirm the claim, that's "disputed" or "partial", NOT "unverifiable".
+   - ASK YOURSELF: "Did my search return results about this topic?" If YES → the claim is verifiable. Pick supported/partial/disputed based on what the sources say.
 
 2. sourceTitle — the single best source name. Be specific (include author, year, or org when possible).
 
@@ -408,16 +413,27 @@ Determine:
    - Lead with the SPECIFIC thing the viewer should know, not a summary of the verdict.
    - For "supported": say what confirms it. E.g., "WHO 2024 data matches this exactly."
    - For "partial": say what's off OR what's unverified. E.g., "The 250% figure is from ice baths, not showers." OR "Widely reported; specific statistic unverified."
-   - For "disputed": say who disagrees or what's wrong. E.g., "FDA data shows the opposite trend."
-   - For "unverifiable": only when the claim has absolutely no credible web presence.
-   - NEVER write generic filler like "requires additional context" or "this is a complex topic."
+   - For "disputed": say what's wrong or oversimplified. E.g., "Oil prices depend on dozens of factors, not one."
+   - For "unverifiable": say what kind of source would be needed. E.g., "Needs a peer-reviewed study or official dataset."
+   - NEVER write generic filler. The following phrases are BANNED — do not use them:
+     * "We could not verify this claim"
+     * "Unable to verify"
+     * "This claim could not be verified"
+     * "Requires additional context"
+     * "This is a complex topic"
+     * "No credible source found"
+     * Any sentence that just restates the verdict in different words
 
    GOOD: "The 250% figure is from 1-hour ice baths, not cold showers."
    GOOD: "Widely reported in 2023-2024; primary source unclear."
    GOOD: "Confirmed by FDA guidelines from 2022."
    GOOD: "Studies show mixed results; effect size varies widely."
+   GOOD: "Oil prices depend on dozens of factors, not just one chokepoint."
+   GOOD: "Needs a peer-reviewed climate dataset, not news reports."
    BAD: "While AI is widely projected to increase efficiency, there is no credible data supporting this."
    BAD: "This claim requires additional context to fully evaluate."
+   BAD: "We could not verify this claim with a reliable web source."
+   BAD: "Unable to verify this claim based on available sources."
 
 Respond with ONLY a JSON object. No markdown, no backticks, no prose introduction, no explanation. Your entire response must be valid JSON that parses with JSON.parse().
 
