@@ -33,7 +33,7 @@ describe('model policy UI guards', () => {
     );
 
     expect(html).toContain('2.5 Flash');
-    expect(html).not.toContain('3.1 Lite');
+    expect(html).not.toContain('Dual');
   });
 
   it('shows the stored BYOK model when a custom key is present', () => {
@@ -46,6 +46,6 @@ describe('model policy UI guards', () => {
       />,
     );
 
-    expect(html).toContain('3.1 Lite');
+    expect(html).toContain('Dual');
   });
 });

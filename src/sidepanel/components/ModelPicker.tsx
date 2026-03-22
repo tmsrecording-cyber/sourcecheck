@@ -34,21 +34,21 @@ const ModelIcon = ({ model, size = 12 }: { model: GeminiModelOption; size?: numb
 
 /** Full display labels */
 const MODEL_LABELS: Record<GeminiModelOption, string> = {
-  'gemini-3.1-flash-lite-preview': 'Flash 3.1 Lite',
+  'gemini-3.1-flash-lite-preview': 'Dual',
   'gemini-2.5-flash': 'Flash 2.5',
 };
 
 /** Compact labels for header - short enough to fit the side panel comfortably */
 const COMPACT_LABELS: Record<GeminiModelOption, string> = {
-  'gemini-3.1-flash-lite-preview': '3.1 Lite',
+  'gemini-3.1-flash-lite-preview': 'Dual',
   'gemini-2.5-flash': '2.5 Flash',
 };
 
 /** Simple speed tags */
 const SPEED_TAGS: Record<'fast' | 'standard' | 'deep', string> = {
-  fast: 'Quick',
-  standard: 'Balanced',
-  deep: 'Thorough',
+  fast: 'scan fast · verify deep',
+  standard: 'balanced',
+  deep: 'thorough',
 };
 
 export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false, compact = false }: ModelPickerProps) => {
