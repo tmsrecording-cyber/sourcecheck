@@ -288,9 +288,11 @@ export const expandReveal = {
   initial: { height: 0, opacity: 0 },
   animate: { height: 'auto', opacity: 1 },
   exit: { height: 0, opacity: 0 },
+  // height and opacity on separate schedules: height leads, opacity fades in after.
+  // overflow: hidden must be set on the motion.div to clip content during height animation.
   transition: {
-    duration: DURATION.micro,
-    ease: SOFT_SPRING,
+    height: { duration: DURATION.standard, ease: SOFT_SPRING },
+    opacity: { duration: DURATION.fast02, delay: 0.08 },
   },
 };
 

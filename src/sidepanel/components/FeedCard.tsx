@@ -28,18 +28,32 @@ import {
   chevronRotate,
 } from '../styles/motionTokens';
 
-// Backend placeholder strings that should not be displayed as real source titles
-const BACKEND_SOURCE_PLACEHOLDERS = new Set(['Needs primary source', 'No strong web match', 'Not found', 'N/A', 'None']);
+// Backend placeholder strings that should not be displayed as real source titles.
+// "Not found" is intentionally excluded — the new backend uses it as a meaningful category label.
+const BACKEND_SOURCE_PLACEHOLDERS = new Set(['Needs primary source', 'No strong web match', 'N/A', 'None']);
 const resolveSourceTitle = (raw: string | undefined | null): string | null => {
   const trimmed = raw?.trim();
   return (trimmed && !BACKEND_SOURCE_PLACEHOLDERS.has(trimmed)) ? trimmed : null;
 };
 
+// Domains from Google's grounding infrastructure — not useful to show users.
+const GROUNDING_NOISE_DOMAINS = new Set([
+  'vertexaisearch.cloud.google.com',
+  'generativelanguage.googleapis.com',
+  'googleapis.com',
+  'ai.google.dev',
+  'cloud.google.com',
+]);
+const isGroundingNoiseDomain = (hostname: string) =>
+  GROUNDING_NOISE_DOMAINS.has(hostname) || hostname.endsWith('.googleapis.com');
+
 // B1: Extract domain from URL for source chip (e.g. "https://nature.com/..." → "nature.com")
 const extractDomain = (url: string): string | null => {
   try {
     const { hostname } = new URL(url);
-    return hostname.replace(/^www\./, '');
+    const domain = hostname.replace(/^www\./, '');
+    if (isGroundingNoiseDomain(hostname)) return null;
+    return domain;
   } catch {
     return null;
   }
@@ -442,6 +456,7 @@ const CompactContent = ({
               animate={expandReveal.animate}
               exit={expandReveal.exit}
               transition={expandReveal.transition}
+              style={{ overflow: 'hidden' }}
               className="compact-expanded-panel"
             >
               {/* Only show claim quote if it differs from the reasoning text above */}

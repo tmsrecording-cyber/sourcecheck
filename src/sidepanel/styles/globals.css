@@ -2358,10 +2358,10 @@ body::before {
 
 .rail-node {
   position: absolute;
-  left: 35px;   /* center = 35+5 = 40px — same axis as rail-line */
-  top: 12px;
-  width: 10px;
-  height: 10px;
+  left: 36px;   /* center = 36+4 = 40px — same axis as rail-line */
+  top: 13px;
+  width: 8px;
+  height: 8px;
   transform: rotate(45deg);
   z-index: 10;
   border: 2px solid;
