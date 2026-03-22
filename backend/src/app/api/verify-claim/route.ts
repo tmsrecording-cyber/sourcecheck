@@ -441,8 +441,9 @@ export async function POST(request: NextRequest) {
         wordingRegenerated: cachedVersion !== WORDING_VERSION,
       });
       
-      const response = NextResponse.json<VerifyClaimResponse>({ 
+      const response = NextResponse.json<VerifyClaimResponse>({
         sourceCard: cachedSourceCard,
+        usedFallback: false,
         similarClaims: [{
           id: similarClaim.id,
           claimText: similarClaim.metadata.claimText,
@@ -760,7 +761,10 @@ export async function POST(request: NextRequest) {
       ...downgradeInfo,
     });
 
-    const response = NextResponse.json<VerifyClaimResponse>({ sourceCard });
+    const response = NextResponse.json<VerifyClaimResponse>({
+      sourceCard,
+      usedFallback,
+    });
     Object.entries(getCorsHeaders(request)).forEach(([key, value]) => response.headers.set(key, value));
     return response;
 

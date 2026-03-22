@@ -160,12 +160,15 @@ export const initPlaybackTracking = () => {
 
   let lastUpdate = 0;
   let lastReportedTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  let lastPausedState = video.paused;
   timeUpdateListener = () => {
     const now = Date.now();
     const rawCurrentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
     const currentTime = Math.floor(rawCurrentTime);
     const delta = rawCurrentTime - lastReportedTime;
+    const pausedChanged = video.paused !== lastPausedState;
 
+    // Detect seeks (large time jumps)
     if (
       delta <= -SEEK_BACKWARD_THRESHOLD_SECONDS ||
       delta >= SEEK_FORWARD_THRESHOLD_SECONDS
@@ -176,17 +179,29 @@ export const initPlaybackTracking = () => {
       });
       lastReportedTime = rawCurrentTime;
       lastUpdate = now;
+      lastPausedState = video.paused;
       sendPlaybackUpdate(video);
       return;
     }
 
+    // Throttle updates: max once per 2 seconds
     if (now - lastUpdate <= 2000) {
+      return;
+    }
+
+    // MILESTONE 2: Skip update if time hasn't changed meaningfully and paused state is same
+    // This reduces message passing during video playback when time advances smoothly
+    const timeDelta = Math.abs(rawCurrentTime - lastReportedTime);
+    if (!pausedChanged && timeDelta < 1.0) {
+      // Still update lastUpdate to prevent checking every frame, but don't send message
+      lastUpdate = now;
       return;
     }
 
     sendPlaybackUpdate(video);
     lastUpdate = now;
     lastReportedTime = rawCurrentTime;
+    lastPausedState = video.paused;
   };
 
   seekedListener = () => {

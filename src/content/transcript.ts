@@ -125,7 +125,18 @@ class SmartTranscriptBuffer {
   }
 }
 
-// Global buffer instance (reset per video)
+// Extraction context - created fresh per extraction to avoid race conditions
+interface ExtractionContext {
+  buffer: SmartTranscriptBuffer;
+  latch: { videoId: string; transcript: TranscriptChunk[] } | null;
+}
+
+export const createExtractionContext = (): ExtractionContext => ({
+  buffer: new SmartTranscriptBuffer(),
+  latch: null,
+});
+
+// Deprecated: Use createExtractionContext() for new extractions
 let activeTranscriptBuffer: SmartTranscriptBuffer | null = null;
 
 export const resetTranscriptBuffer = (): void => {
@@ -707,10 +718,12 @@ const parseFirstPlayerResponseFromText = (
 };
 
 const parsePlayerResponseFromScripts = (): Record<string, any> | null => {
-  const scripts = Array.from(document.getElementsByTagName('script'));
+  const scripts = document.getElementsByTagName('script');
 
   for (const script of scripts) {
     const content = script.textContent || '';
+    // Skip tiny scripts that can't contain player response (avoids loading huge inline scripts)
+    if (content.length < 100) continue;
     if (!content.includes('ytInitialPlayerResponse')) continue;
 
     const { playerResponse } = parseFirstPlayerResponseFromText(content);
@@ -1226,12 +1239,14 @@ const parseTimestampToMs = (rawValue: string) => {
 
 const getTranscriptSegmentElements = () => {
   const fromRoots: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>(); // O(1) lookup instead of O(n) includes()
   for (const root of getTranscriptRoots()) {
     for (const node of root.querySelectorAll<HTMLElement>([
       'ytd-transcript-segment-renderer',
       'transcript-segment-view-model',
     ].join(', '))) {
-      if (!fromRoots.includes(node)) {
+      if (!seen.has(node)) {
+        seen.add(node);
         fromRoots.push(node);
       }
     }
@@ -1269,18 +1284,18 @@ const getTranscriptRoots = () => {
 
 const parseTranscriptSegmentElement = (segment: HTMLElement): TranscriptChunk | null => {
   const textCandidate =
-    segment.querySelector<HTMLElement>('.segment-text')?.innerText ||
-    segment.querySelector<HTMLElement>('yt-formatted-string.segment-text')?.innerText ||
-    segment.querySelector<HTMLElement>('#segment-text')?.innerText ||
-    segment.querySelector<HTMLElement>('.ytwTranscriptSegmentViewModelText')?.innerText ||
-    segment.querySelector<HTMLElement>('.yt-core-attributed-string')?.innerText ||
+    segment.querySelector<HTMLElement>('.segment-text')?.textContent ||
+    segment.querySelector<HTMLElement>('yt-formatted-string.segment-text')?.textContent ||
+    segment.querySelector<HTMLElement>('#segment-text')?.textContent ||
+    segment.querySelector<HTMLElement>('.ytwTranscriptSegmentViewModelText')?.textContent ||
+    segment.querySelector<HTMLElement>('.yt-core-attributed-string')?.textContent ||
     '';
 
   const timeCandidate =
-    segment.querySelector<HTMLElement>('.segment-timestamp')?.innerText ||
-    segment.querySelector<HTMLElement>('.segment-start-offset')?.innerText ||
-    segment.querySelector<HTMLElement>('#start-offset')?.innerText ||
-    segment.querySelector<HTMLElement>('.ytwTranscriptSegmentViewModelTimestamp')?.innerText ||
+    segment.querySelector<HTMLElement>('.segment-timestamp')?.textContent ||
+    segment.querySelector<HTMLElement>('.segment-start-offset')?.textContent ||
+    segment.querySelector<HTMLElement>('#start-offset')?.textContent ||
+    segment.querySelector<HTMLElement>('.ytwTranscriptSegmentViewModelTimestamp')?.textContent ||
     '';
 
   const lines = splitTranscriptLines(getElementTextSafe(segment));
@@ -1352,6 +1367,49 @@ const findTranscriptOpenButton = () => {
   );
 
   return menuItems.find((item) => isTranscriptOpenControl(item, true)) || null;
+};
+
+/** Finds the "Hide transcript" close button (only visible when panel is open). */
+const findTranscriptCloseButton = (): HTMLElement | null => {
+  for (const selector of TRANSCRIPT_BUTTON_SELECTORS) {
+    const candidates = Array.from(document.querySelectorAll<HTMLElement>(selector));
+    const button = candidates.find((el) => {
+      const label = getElementLabel(el);
+      return label ? TRANSCRIPT_HIDE_TEXT_PATTERN.test(label) : false;
+    });
+    if (button) return button;
+  }
+  return null;
+};
+
+/**
+ * Closes the YouTube transcript panel if it is currently open.
+ * Best-effort — silently ignores failures. Only call when SourceCheck opened the panel.
+ */
+const closeTranscriptPanelIfOpen = () => {
+  try {
+    // Method 1: "Hide transcript" button in the description area
+    const btn = findTranscriptCloseButton();
+    if (btn && isElementActionable(btn)) {
+      btn.click();
+      return;
+    }
+
+    // Method 2: Engagement panel close/X button (top-right of the panel)
+    const engagementPanel = document.querySelector<HTMLElement>(
+      'ytd-engagement-panel-section-list-renderer[target-id*="transcript"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
+    );
+    if (engagementPanel) {
+      const closeBtn = engagementPanel.querySelector<HTMLElement>(
+        '#visibility-button button, ytd-engagement-panel-title-header-renderer button[aria-label*="Close" i], button[aria-label*="close" i]'
+      );
+      if (closeBtn) {
+        closeBtn.click();
+      }
+    }
+  } catch {
+    // Never throw — closing is cosmetic cleanup
+  }
 };
 
 const findTranscriptMenuButton = () => {
@@ -1586,58 +1644,57 @@ const loadTranscriptFromPanel = async (
   }
 
   // Try direct transcript affordances first, then the overflow menu if needed.
-  let lastFailureReason: TranscriptPanelLoadResult['reason'] = 'panel-open-exhausted';
-  for (let clickAttempt = 0; clickAttempt < 3; clickAttempt += 1) {
-    // If transcript rows or an existing transcript root are already present, do NOT
-    // click the toggle button again — that could close it. Just wait for rows.
-    if (hasTranscriptDataInDom() || getTranscriptRoots().length > 0) {
-      const alreadyOpenSegments = await waitForTranscriptPanel(30, 250, signal);
-      if (alreadyOpenSegments?.length) {
-        console.log(`[SourceCheck] Transcript panel loaded ${alreadyOpenSegments.length} segments after open.`);
-        logTranscriptLookup('panel', 'caption-tracks-found', { segments: alreadyOpenSegments.length });
-        return { transcript: alreadyOpenSegments, reason: 'caption-tracks-found' };
-      }
-      console.warn('[SourceCheck] Transcript panel root present but no segments rendered.');
-      logTranscriptLookup('panel', 'panel-root-present-no-segments');
-      return { transcript: null, reason: 'panel-root-present-no-segments' };
+  // Only one click attempt — re-clicking if the user dismissed the panel is disruptive.
+  // If transcript rows or an existing transcript root are already present, do NOT
+  // click the toggle button — that could close it. Just wait for rows.
+  if (hasTranscriptDataInDom() || getTranscriptRoots().length > 0) {
+    const alreadyOpenSegments = await waitForTranscriptPanel(30, 250, signal);
+    if (alreadyOpenSegments?.length) {
+      console.log(`[SourceCheck] Transcript panel loaded ${alreadyOpenSegments.length} segments after open.`);
+      logTranscriptLookup('panel', 'caption-tracks-found', { segments: alreadyOpenSegments.length });
+      // Panel was already open — don't auto-close, user opened it intentionally
+      return { transcript: alreadyOpenSegments, reason: 'caption-tracks-found' };
     }
-
-    const transcriptButton = findTranscriptOpenButton();
-    if (!transcriptButton) {
-      const overflowSegments = await openTranscriptFromOverflowMenu(signal);
-      if (overflowSegments.transcript?.length) {
-        console.log(`[SourceCheck] Transcript panel fallback loaded ${overflowSegments.transcript.length} segments via overflow menu.`);
-        return overflowSegments;
-      }
-
-      lastFailureReason = overflowSegments.reason;
-      await sleep(clickAttempt === 0 ? 1500 : 1000, signal);
-      continue;
-    }
-
-    const transcriptButtonClicked = clickElement(transcriptButton);
-
-    const panelSegments = await waitForTranscriptPanel(20, 250, signal);
-    if (panelSegments?.length) {
-      console.log(`[SourceCheck] Transcript panel fallback loaded ${panelSegments.length} segments.`);
-      logTranscriptLookup('panel', 'caption-tracks-found', { segments: panelSegments.length });
-      return { transcript: panelSegments, reason: 'caption-tracks-found' };
-    }
-
-    lastFailureReason = transcriptButtonClicked ? 'panel-scrape-empty' : 'panel-open-click-failed';
-    logTranscriptLookup('panel', lastFailureReason, { attempt: clickAttempt + 1 });
-    console.warn(`[SourceCheck] Transcript panel click attempt ${clickAttempt + 1} did not render segments.`);
+    console.warn('[SourceCheck] Transcript panel root present but no segments rendered.');
+    logTranscriptLookup('panel', 'panel-root-present-no-segments');
+    return { transcript: null, reason: 'panel-root-present-no-segments' };
   }
 
-  console.warn('[SourceCheck] Transcript panel fallback exhausted all attempts.');
-  logTranscriptLookup('panel', 'panel-open-exhausted');
-  return {
-    transcript: null,
-    reason: lastFailureReason,
-  };
+  const transcriptButton = findTranscriptOpenButton();
+  if (!transcriptButton) {
+    const overflowSegments = await openTranscriptFromOverflowMenu(signal);
+    if (overflowSegments.transcript?.length) {
+      console.log(`[SourceCheck] Transcript panel fallback loaded ${overflowSegments.transcript.length} segments via overflow menu.`);
+      // We opened it via overflow — close it after scraping
+      closeTranscriptPanelIfOpen();
+      return overflowSegments;
+    }
+    return overflowSegments;
+  }
+
+  const transcriptButtonClicked = clickElement(transcriptButton);
+  const panelSegments = await waitForTranscriptPanel(20, 250, signal);
+  if (panelSegments?.length) {
+    console.log(`[SourceCheck] Transcript panel fallback loaded ${panelSegments.length} segments.`);
+    logTranscriptLookup('panel', 'caption-tracks-found', { segments: panelSegments.length });
+    // We opened it — close it so it doesn't stay open after scraping
+    closeTranscriptPanelIfOpen();
+    return { transcript: panelSegments, reason: 'caption-tracks-found' };
+  }
+
+  const failReason = transcriptButtonClicked ? 'panel-scrape-empty' : 'panel-open-click-failed';
+  logTranscriptLookup('panel', failReason, { attempt: 1 });
+  console.warn(`[SourceCheck] Transcript panel click did not render segments (${failReason}).`);
+  // Panel may still be open but empty — close it to clean up
+  closeTranscriptPanelIfOpen();
+  return { transcript: null, reason: failReason };
 };
 
 const parseXmlTranscript = (xmlText: string): TranscriptChunk[] => {
+  // Early guard: empty/whitespace-only input
+  if (!xmlText || !xmlText.trim()) {
+    return [];
+  }
   try {
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
@@ -1675,6 +1732,14 @@ const parseXmlTranscript = (xmlText: string): TranscriptChunk[] => {
 };
 
 const analyzeXmlTranscript = (xmlText: string) => {
+  // Early guard: empty/whitespace-only input
+  if (!xmlText || !xmlText.trim()) {
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'fetch-empty-body',
+    };
+  }
   let xmlDoc: Document;
   try {
     const parser = new DOMParser();
@@ -1735,6 +1800,14 @@ const parseJson3Transcript = (jsonText: string): TranscriptChunk[] => {
 };
 
 const analyzeJson3Transcript = (jsonText: string) => {
+  // Early guard: empty/whitespace-only input
+  if (!jsonText || !jsonText.trim()) {
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'fetch-empty-body',
+    };
+  }
   let payload: Json3TranscriptResponse;
   try {
     payload = JSON.parse(jsonText) as Json3TranscriptResponse;
@@ -1774,6 +1847,10 @@ const analyzeJson3Transcript = (jsonText: string) => {
 };
 
 const parseSrv3Transcript = (xmlText: string): TranscriptChunk[] => {
+  // Early guard: empty/whitespace-only input
+  if (!xmlText || !xmlText.trim()) {
+    return [];
+  }
   try {
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
@@ -1817,6 +1894,14 @@ const parseSrv3Transcript = (xmlText: string): TranscriptChunk[] => {
 };
 
 const analyzeSrv3Transcript = (xmlText: string) => {
+  // Early guard: empty/whitespace-only input
+  if (!xmlText || !xmlText.trim()) {
+    return {
+      rawCount: 0,
+      chunks: [] as TranscriptChunk[],
+      emptyReason: 'fetch-empty-body',
+    };
+  }
   let xmlDoc: Document;
   try {
     const parser = new DOMParser();
@@ -1919,11 +2004,14 @@ const fetchTranscriptChunks = async (
   const candidates = [
     // Try the original URL first — YouTube may serve a valid format by default
     // without any &fmt override. Deduped later if it matches a variant URL.
-    { format: 'xml' as const, url: transcriptUrl },
-    { format: 'xml' as const, url: withCaptionFormat(transcriptUrl, 'xml') },
-    { format: 'json3' as const, url: withCaptionFormat(transcriptUrl, 'json3') },
-    { format: 'srv3' as const, url: withCaptionFormat(transcriptUrl, 'srv3') },
-  ].filter((c, i, arr) => arr.findIndex((x) => x.url === c.url) === i); // dedupe identical URLs
+    { format: 'xml' as const, url: transcriptUrl, credentials: 'include' as RequestCredentials },
+    { format: 'xml' as const, url: withCaptionFormat(transcriptUrl, 'xml'), credentials: 'include' as RequestCredentials },
+    { format: 'json3' as const, url: withCaptionFormat(transcriptUrl, 'json3'), credentials: 'include' as RequestCredentials },
+    { format: 'srv3' as const, url: withCaptionFormat(transcriptUrl, 'srv3'), credentials: 'include' as RequestCredentials },
+    // Fallback: retry json3 without credentials — some videos return empty body
+    // when cookies are sent (CDN/auth interaction). The URL signature is sufficient.
+    { format: 'json3' as const, url: withCaptionFormat(transcriptUrl, 'json3'), credentials: 'omit' as RequestCredentials },
+  ].filter((() => { const seen = new Set<string>(); return (c: { format: string; url: string; credentials: RequestCredentials }) => { const key = `${c.url}::${c.credentials}`; if (seen.has(key)) return false; seen.add(key); return true; }; })()); // dedupe identical URL+credential combos
 
   let bestFailure: TranscriptFetchAttemptResult = {
     chunks: null,
@@ -1940,9 +2028,8 @@ const fetchTranscriptChunks = async (
     emitTranscriptFetchDebug(onFetchDebug, 'html', 'fetch_started', `${candidate.format} ${candidate.url}`);
 
     try {
-      // Use credentials for caption requests - YouTube now requires auth
       const response = await fetch(candidate.url, {
-        credentials: 'include', 
+        credentials: candidate.credentials,
         signal
       });
       

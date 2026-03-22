@@ -1,8 +1,21 @@
 import { initPlaybackTracking, setPlaybackVideoId, stopPlaybackTracking, stopVideoElementObserver } from './playback';
 import { resetTranscriptExtractionState } from './transcript';
 import { youTubeAdapter } from './adapters/youtube';
+import { meetAdapter } from './adapters/meet';
+import type { TranscriptAdapter } from './adapters/transcript-adapter';
 import type { TranscriptDebugState, TranscriptFetchDebugEntry } from '../../shared/types';
 import './remote-logger'; // Auto-starts remote logging if SC_LOG_ENDPOINT is set
+
+// ---------------------------------------------------------------------------
+// Adapter registry — ordered, first match wins
+// ---------------------------------------------------------------------------
+const ADAPTERS: TranscriptAdapter[] = [youTubeAdapter, meetAdapter];
+
+const resolveAdapter = (location: Location): TranscriptAdapter | null =>
+  ADAPTERS.find((a) => a.canHandle(location)) ?? null;
+
+/** The adapter for the current page. Set in checkVideoState, cleared on navigation away. */
+let activeAdapter: TranscriptAdapter | null = null;
 
 let currentVideoId: string | null = null;
 const createPageSessionId = () => {
@@ -20,6 +33,7 @@ let transcriptDeadlineTimer: number | null = null;
 let hasClearedInactiveState = false;
 let hasReportedTranscriptUnavailable = false;
 let transcriptExtractionController: AbortController | null = null;
+let liveCaptureController: AbortController | null = null;
 let transcriptDeadlineAt: number | null = null;
 let transcriptAttemptCount = 0;
 let panelFallbackAttempted = false;
@@ -35,6 +49,8 @@ let lastTranscriptDebug: TranscriptDebugState = {
 const TRANSCRIPT_ATTEMPT_TIMEOUT_MS = 24_000;
 const MAX_TRANSCRIPT_ATTEMPTS = 12;
 const TRANSCRIPT_LOAD_DEADLINE_MS = 65_000;
+/** How long to wait for the first caption before reporting transcript unavailable on a Meet call. */
+const LIVE_CAPTION_TIMEOUT_MS = 45_000;
 const MESSAGE_SEND_RETRIES = 4;
 const MESSAGE_SEND_RETRY_DELAY_MS = 350;
 const TRANSCRIPT_FAILURE_DELIVERY_RETRIES = 12;
@@ -140,6 +156,9 @@ const clearPendingWork = () => {
   clearRetryTimer(transcriptDeadlineTimer);
   transcriptExtractionController?.abort();
   transcriptExtractionController = null;
+  liveCaptureController?.abort();
+  liveCaptureController = null;
+  activeAdapter = null;
   metadataRetryTimer = null;
   transcriptRetryTimer = null;
   playbackRetryTimer = null;
@@ -400,6 +419,18 @@ const deliverTranscriptFailure = async (
   return null;
 };
 
+/** Sends a single live caption chunk directly to the service worker for immediate processing. */
+const deliverLiveChunk = async (
+  videoId: string,
+  chunk: { text: string; startMs: number; durationMs: number }
+): Promise<void> => {
+  if (isStaleVideoWork(videoId)) return;
+  await safeSendMessage({
+    type: 'TRANSCRIPT_CHUNK_LIVE',
+    payload: { videoId, chunk },
+  }).catch(silentCatch);
+};
+
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -431,7 +462,7 @@ const withTimeout = async <T>(
 };
 
 const sendVideoChanged = async (videoId: string) => {
-  const metadata = youTubeAdapter.extractMetadata(document);
+  const metadata = (activeAdapter ?? youTubeAdapter).extractMetadata(document);
 
   const result = await sendMessageWithRetry({
     type: 'VIDEO_CHANGED',
@@ -440,7 +471,7 @@ const sendVideoChanged = async (videoId: string) => {
       title: metadata.title,
       channel: metadata.channel,
       pageSessionId,
-      sourceContext: youTubeAdapter.buildSourceContext(videoId, metadata.title),
+      sourceContext: (activeAdapter ?? youTubeAdapter).buildSourceContext(videoId, metadata.title),
     },
   });
 
@@ -560,7 +591,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
       !panelFallbackSucceeded &&
       !autoPanelOpenDisabledAfterFailure;
     const extractionResult = await withTimeout(
-      youTubeAdapter.extractTranscript(videoId, signal, (entry) => {
+      (activeAdapter ?? youTubeAdapter).extractTranscript(videoId, signal, (entry) => {
         void deliverTranscriptFetchDebug(videoId, {
           at: Date.now(),
           ...entry,
@@ -759,12 +790,13 @@ const checkVideoState = async () => {
     pathname: window.location.pathname,
     currentVideoId,
   });
-  if (!youTubeAdapter.canHandle(window.location)) {
+  const resolvedAdapter = resolveAdapter(window.location);
+  if (!resolvedAdapter) {
     await clearActiveVideo();
     return;
   }
 
-  const videoId = youTubeAdapter.getVideoId(window.location);
+  const videoId = resolvedAdapter.getVideoId(window.location);
 
   if (!videoId) {
     await clearActiveVideo();
@@ -780,17 +812,16 @@ const checkVideoState = async () => {
   hasClearedInactiveState = false;
   hasReportedTranscriptUnavailable = false;
   transcriptSuccessLockedForVideo = false;
+  activeAdapter = resolvedAdapter;
   currentVideoId = videoId;
   setPlaybackVideoId(videoId);
   resetTranscriptExtractionState();
-  transcriptDeadlineAt = Date.now() + TRANSCRIPT_LOAD_DEADLINE_MS;
-  transcriptAttemptCount = 0;
   lastTranscriptDebug = {
     source: null,
     reason: 'pending',
     attemptCount: 0,
   };
-  console.log(`[SourceCheck] New video detected: ${videoId}`);
+  console.log(`[SourceCheck] New video detected: ${videoId} (${resolvedAdapter.sourceType})`);
 
   await sendVideoChanged(videoId);
   logContentTranscript('POST_VIDEO_CHANGED', {
@@ -804,9 +835,42 @@ const checkVideoState = async () => {
 
   scheduleMetadataRetries(videoId, 0);
 
+  // Live-caption adapters (e.g. Meet) use startLiveCapture instead of the
+  // static transcript fetch/retry pipeline. Playback tracking is also skipped
+  // since Meet has no meaningful video currentTime (the <video> is a camera feed).
+  if (resolvedAdapter.startLiveCapture) {
+    const controller = new AbortController();
+    liveCaptureController = controller;
+
+    // Arm a timeout: if no caption chunk arrives within LIVE_CAPTION_TIMEOUT_MS
+    // (captions disabled, DOM selectors stale, or user never spoke) surface a
+    // transcript-unavailable state so the sidepanel doesn't sit silent forever.
+    let captionReceived = false;
+    const noCaptionsTimer = window.setTimeout(() => {
+      if (!captionReceived && !controller.signal.aborted) {
+        void deliverTranscriptFailure(videoId, { source: null, reason: 'timeout', attemptCount: 1 }).catch(silentCatch);
+      }
+    }, LIVE_CAPTION_TIMEOUT_MS);
+    controller.signal.addEventListener('abort', () => window.clearTimeout(noCaptionsTimer), { once: true });
+
+    resolvedAdapter.startLiveCapture(
+      videoId,
+      controller.signal,
+      (chunk) => {
+        captionReceived = true;
+        window.clearTimeout(noCaptionsTimer);
+        void deliverLiveChunk(videoId, chunk);
+      },
+      (entry) => { void deliverTranscriptFetchDebug(videoId, { at: Date.now(), ...entry }).catch(silentCatch); },
+    );
+    return;
+  }
+
   logContentTranscript('BEFORE_SCHEDULE_PLAYBACK_INIT', {
     videoId,
   });
+  transcriptDeadlineAt = Date.now() + TRANSCRIPT_LOAD_DEADLINE_MS;
+  transcriptAttemptCount = 0;
   schedulePlaybackInit();
   logContentTranscript('BEFORE_SCHEDULE_TRANSCRIPT_DEADLINE', {
     videoId,
@@ -826,18 +890,21 @@ window.addEventListener('yt-navigate-finish', ytNavigateListener);
 window.addEventListener('load', loadListener);
 void checkVideoState().catch(silentCatch);
 
-// Cleanup function for extension reload
-if (chrome.runtime?.id) {
-  chrome.runtime.onMessage.addListener((message) => {
+// Single message listener for all runtime messages (prevents duplicate registration on hot reload)
+let runtimeMessageListenerRegistered = false;
+
+if (chrome.runtime?.id && !runtimeMessageListenerRegistered) {
+  runtimeMessageListenerRegistered = true;
+  
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    // Handle cleanup message
     if (message?.type === 'CONTENT_SCRIPT_CLEANUP') {
       window.removeEventListener('yt-navigate-finish', ytNavigateListener);
       window.removeEventListener('load', loadListener);
+      return false;
     }
-  });
-}
-
-if (chrome.runtime?.id) {
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    
+    // Handle retry transcript
     if (message?.type === 'RETRY_TRANSCRIPT') {
       const videoId = typeof message.payload?.videoId === 'string' ? message.payload.videoId : null;
       if (!videoId) {
@@ -850,6 +917,7 @@ if (chrome.runtime?.id) {
       return false;
     }
 
+    // Handle reannounce video context
     if (message?.type === 'REANNOUNCE_VIDEO_CONTEXT') {
       const videoId = typeof message.payload?.videoId === 'string' ? message.payload.videoId : null;
       if (!videoId) {

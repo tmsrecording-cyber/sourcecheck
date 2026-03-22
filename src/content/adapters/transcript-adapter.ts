@@ -12,7 +12,7 @@ import type {
   TranscriptSourceVisibility,
   TranscriptFetchDebugEntry,
 } from '../../../shared/types';
-import type { TranscriptExtractionResult } from '../transcript';
+import type { TranscriptChunk, TranscriptExtractionResult } from '../transcript';
 
 export interface TranscriptAdapter {
   /** Identifies which source platform this adapter handles */
@@ -37,6 +37,9 @@ export interface TranscriptAdapter {
    * Fetches and parses the full transcript for the given source.
    * Returns null only on a clean "no transcript available" signal;
    * throws on unexpected errors.
+   *
+   * Live-caption sources (e.g. Meet) return null immediately and use
+   * startLiveCapture instead of this method.
    */
   extractTranscript(
     videoId: string,
@@ -44,4 +47,19 @@ export interface TranscriptAdapter {
     onFetchDebug: (entry: Omit<TranscriptFetchDebugEntry, 'at'>) => void,
     options: { allowPanelAutoOpen?: boolean },
   ): Promise<TranscriptExtractionResult | null>;
+
+  /**
+   * Optional: live-caption adapters implement this instead of (or in addition to)
+   * extractTranscript. When present, the content-script orchestrator bypasses the
+   * static-fetch retry loop and drives ingestion via the onChunk callback.
+   *
+   * The adapter is responsible for calling onChunk whenever a flush-worthy chunk
+   * of caption text is ready. It must stop producing chunks when the signal fires.
+   */
+  startLiveCapture?: (
+    meetingId: string,
+    signal: AbortSignal,
+    onChunk: (chunk: TranscriptChunk) => void,
+    onFetchDebug: (entry: Omit<TranscriptFetchDebugEntry, 'at'>) => void,
+  ) => void;
 }

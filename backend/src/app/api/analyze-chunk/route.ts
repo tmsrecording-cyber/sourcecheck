@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSON, generateEmbedding, isGeminiError } from '@/lib/gemini';
-import { buildClaimExtractionPrompt } from '@/lib/prompts';
+import { buildClaimExtractionPrompt, buildMeetingClaimExtractionPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { verifyBearerSessionToken } from '@/proxy';
@@ -340,7 +340,7 @@ async function normalizeClaimResult(
 
     // Score and rank candidates by quality (verifiability × value × speaker_confidence)
     // Apply strict quality filter as backend safety net
-    let candidatesFilteredByQuality = 0;
+    // Note: Uses outer candidatesFilteredByQuality declared at line 325
     
     const scoredBeforeVerifiability = validCandidates.map((candidate) => {
       const verifiability = typeof candidate.verifiability === 'number' 
@@ -441,7 +441,7 @@ async function normalizeClaimResult(
   // Generate embedding for semantic deduplication
   let claimEmbedding: number[] | undefined;
   if (hasClaim && claimText) {
-    claimEmbedding = await generateEmbedding(claimText, customApiKey);
+    claimEmbedding = await generateEmbedding(claimText, customApiKey, 'SEMANTIC_SIMILARITY');
   }
 
   const claims: ExtractedClaim[] =
@@ -641,7 +641,6 @@ export async function POST(request: NextRequest) {
       videoId: parsedBody.videoId,
       model: parsedBody.model,
       hasCustomKey: !!customApiKey,
-      customKeyLength: customApiKey?.length || 0,
       chunkCount: parsedBody.chunks.length,
     });
 
@@ -651,12 +650,19 @@ export async function POST(request: NextRequest) {
     const combinedText = parsedBody.chunks.map((chunk) => chunk.text).join('\n\n');
     const approximateTimestamp = parsedBody.chunks[0].startTime;
 
-    const prompt = buildClaimExtractionPrompt(
-      combinedText,
-      parsedBody.videoTitle || 'Unknown Video',
-      parsedBody.channelName || 'Unknown Channel',
-      approximateTimestamp
-    );
+    const prompt = parsedBody.sourceType === 'meet'
+      ? buildMeetingClaimExtractionPrompt(
+          combinedText,
+          parsedBody.videoTitle || 'Meeting',
+          parsedBody.channelName || 'Google Meet',
+          approximateTimestamp
+        )
+      : buildClaimExtractionPrompt(
+          combinedText,
+          parsedBody.videoTitle || 'Unknown Video',
+          parsedBody.channelName || 'Unknown Channel',
+          approximateTimestamp
+        );
 
     // -------------------------------------------------------------------------
     // PHASE 6: Call Gemini

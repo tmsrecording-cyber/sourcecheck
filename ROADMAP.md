@@ -263,10 +263,21 @@ All exit criteria met. Additional hardening completed during close-out:
 - `src/sidepanel/hooks/useExtensionStorage.ts`
 
 **Exit Criteria**
-- [ ] YouTube still works exactly as before through the new adapter path.
-- [ ] Runtime state exposes transcript source metadata.
-- [ ] No source-specific logic leaks into backend verification APIs.
-- [ ] Adapter layer is documented and ready for a second source.
+- [x] YouTube still works exactly as before through the new adapter path.
+- [x] Runtime state exposes transcript source metadata.
+- [x] No source-specific logic leaks into backend verification APIs.
+- [x] Adapter layer is documented and ready for a second source.
+
+**M4 Completion Notes (2026-03-21)**
+All exit criteria met. Zero behavior change to YouTube flow.
+- `TranscriptSourceType`, `TranscriptSourceVisibility`, `TranscriptSourceContext` added to `shared/types.ts`
+- `TranscriptAdapter` interface defined in `src/content/adapters/transcript-adapter.ts`
+- `youTubeAdapter` wraps all existing YouTube logic with no code duplication (`extractTranscript` delegates directly to `transcript.ts`)
+- `ActiveVideoContext.sourceContext` carries source metadata through service worker
+- `mergeVideoMetadata` preserves `sourceContext` across page-session updates
+- `content/index.ts` routes through adapter for `canHandle`, `getVideoId`, `extractMetadata`, `buildSourceContext`
+- Backend `verify-claim` and `analyze-chunk` remain fully source-agnostic
+- Extension unit: 83/83 ✅ | tsc: clean ✅ | build: clean ✅
 
 ## Milestone 5 — Google Meet Web Caption Adapter
 **Goal:** Prove meeting support via captions without taking on tab-audio complexity yet.
@@ -294,11 +305,22 @@ All exit criteria met. Additional hardening completed during close-out:
 - `backend/src/lib/prompts.ts`
 
 **Exit Criteria**
-- [ ] Meet captions can drive the existing claim pipeline end-to-end.
-- [ ] Meeting sessions are marked private in runtime state and UI.
-- [ ] No meeting transcript or memory data persists across session end by default.
-- [ ] YouTube behavior is unchanged.
-- [ ] Manual QA confirms meeting claims are more conservative than YouTube claims.
+- [x] Meet captions can drive the existing claim pipeline end-to-end.
+- [x] Meeting sessions are marked private in runtime state and UI.
+- [x] No meeting transcript or memory data persists across session end by default.
+- [x] YouTube behavior is unchanged.
+- [x] Manual QA confirms meeting claims are more conservative than YouTube claims.
+
+**M5 Completion Notes (2026-03-21)**
+All exit criteria met.
+- `src/content/adapters/meet.ts`: `MeetCaptionBuffer` + `MutationObserver` DOM capture, delta dedup, speaker-change flushing, `visibility: 'private'`
+- `src/content/index.ts`: `meetAdapter` registered in `ADAPTERS`, live capture path routed via `startLiveCapture`
+- `src/manifest.ts`: `meet.google.com` in `host_permissions` and `content_scripts`
+- `backend/src/lib/prompts.ts`: `MEETING_EXTRACTION_SYSTEM_PROMPT` — verifiability ≥ 0.80, hedging rejection, 12-word minimum, 0.85× value multiplier
+- `backend/src/app/api/analyze-chunk/route.ts`: routes to meeting prompt when `sourceType === 'meet'`
+- `backend/src/app/api/verify-claim/route.ts`: `isPrivate` gates both `findSimilarClaim` lookup and `upsertClaimVector` save
+- Private session badge rendered in `App.tsx` when `sourceContext.visibility === 'private'`
+- Extension unit: 112/112 ✅ | tsc: clean ✅ | build: clean ✅
 
 ## Post-Milestone Backlog — Not Before Milestone 5
 These stay parked until the above is complete.

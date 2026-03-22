@@ -3,6 +3,7 @@ import { issueSessionToken } from '@/proxy';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { logSessionInitFailure } from '@/lib/observability';
 import { validateClientSecretAuth } from '@/lib/client-secret-auth';
+import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 
 // POST /api/session/init
 //
@@ -30,6 +31,13 @@ export async function POST(request: NextRequest) {
   const clientSecretAuth = validateClientSecretAuth(request);
   if (!clientSecretAuth.authorized) {
     return clientSecretAuth.response;
+  }
+
+  // Rate limit: 20 requests per minute per IP for session init
+  // This prevents token issuance flooding attacks
+  const rateLimitResult = await checkRateLimit(request, 'session-init');
+  if (!rateLimitResult.allowed) {
+    return createRateLimitResponse(request, rateLimitResult.retryAfter);
   }
 
   const body = await request.json().catch(() => null);

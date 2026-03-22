@@ -6,19 +6,18 @@
 // MODEL POLICY - HARD LOCK
 // ============================================
 // Freemium/trial/managed path: gemini-2.5-flash ONLY
-// BYOK path: may use gemini-2.5-flash, gemini-3.1-flash-lite-preview, or gemini-3-flash-preview
+// BYOK path: may use gemini-2.5-flash or gemini-3.1-flash-lite-preview
 // ANY other model names are INVALID and will be normalized to the freemium default
 // ============================================
 
-/** 
+/**
  * Canonical allowed Gemini model options.
  * This is the SINGLE SOURCE OF TRUTH for valid models across the entire app.
  * DO NOT add models here without explicit policy approval.
  */
 export const ALLOWED_MODELS = [
-  'gemini-2.5-flash',           // Freemium/trial/managed default (stable)
-  'gemini-3.1-flash-lite-preview',  // BYOK alternative
-  'gemini-3-flash-preview',     // BYOK alternative
+  'gemini-2.5-flash',               // Freemium/managed default (stable)
+  'gemini-3.1-flash-lite-preview',  // BYOK alternative (fast)
 ] as const;
 
 /** Type for model options - derived from ALLOWED_MODELS */
@@ -41,7 +40,8 @@ export const BYOK_DEFAULT_MODEL: GeminiModelOption = 'gemini-2.5-flash';
  * These are automatically migrated during normalization.
  */
 const MODEL_MIGRATION_MAP: Record<string, string> = {
-  'gemini-3-preview': 'gemini-3-flash-preview',
+  'gemini-3-flash-preview': 'gemini-2.5-flash',  // removed — was unstable preview
+  'gemini-3-preview': 'gemini-2.5-flash',         // legacy alias → same
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
   'gemini-2.5-flash-lite': 'gemini-2.5-flash',
 };
@@ -86,22 +86,16 @@ export interface ModelConfig {
  */
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
+    id: 'gemini-2.5-flash',
+    label: 'Flash 2.5',
+    description: 'Balanced, reliable',
+    speed: 'standard',
+  },
+  {
     id: 'gemini-3.1-flash-lite-preview',
     label: 'Flash 3.1 Lite',
     description: 'Fastest, lightest',
     speed: 'fast',
-  },
-  {
-    id: 'gemini-2.5-flash',
-    label: 'Flash 2.5',
-    description: 'Reliable standard',
-    speed: 'standard',
-  },
-  {
-    id: 'gemini-3-flash-preview',
-    label: 'Flash 3 Preview',
-    description: 'Most capable',
-    speed: 'deep',
   },
 ];
 
@@ -253,6 +247,8 @@ export interface AnalyzeChunkRequest {
   chunks: TranscriptChunk[];        // batched: 2-4 chunks (~30-60s of content)
   currentTimestamp: number;          // current playback position in seconds
   model?: GeminiModelOption;         // optional model selection (validated server-side)
+  sourceType?: TranscriptSourceType; // 'youtube' | 'meet' — selects extraction profile
+  isPrivate?: boolean;               // mirrors VerifyClaimRequest; extraction-time signal
 }
 
 // PARSE_ERROR: model output failed JSON parsing or schema validation.
@@ -310,6 +306,8 @@ export interface VerifyClaimRequest {
   model?: GeminiModelOption;         // optional model selection (validated server-side)
   /** Surrounding transcript context to help verify ambiguous claims */
   contextTranscript?: string;
+  /** When true, backend must not store claim in cross-video memory or return similarClaims */
+  isPrivate?: boolean;
 }
 
 /** Verification status levels */
@@ -333,11 +331,17 @@ export interface SourceCard {
   similarClaims?: SimilarClaim[];
   /** Embedding vector for similarity search (not sent to client, stored server-side) */
   embedding?: number[];
+  /** True when the card was created due to a transient verification failure (network, quota, etc).
+   *  These cards do NOT block re-verification — hasCardForClaim() skips them so the same claim
+   *  can be retried in future processing cycles. */
+  isTransientFailure?: boolean;
 }
 
 /** What /api/verify-claim returns */
 export interface VerifyClaimResponse {
   sourceCard: SourceCard;
+  /** True when the backend had to synthesize a temporary fallback card */
+  usedFallback?: boolean;
   /** Similar claims from this user's history */
   similarClaims?: SimilarClaim[];
 }

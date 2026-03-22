@@ -749,7 +749,7 @@ async function callGemini(
       ],
       generationConfig: {
         maxOutputTokens: maxTokens,
-        temperature: 0.2,
+        temperature: model === 'gemini-3.1-flash-lite-preview' ? 0 : 0.2,
         // Thinking mode suppresses Google Search grounding — the model answers from
         // training data instead of searching. Only apply thinkingConfig on non-grounded calls.
         ...(!useGrounding && thinkingBudget !== null ? { thinkingConfig: { thinkingBudget } } : {}),
@@ -1016,7 +1016,8 @@ const EMBEDDING_TIMEOUT_MS = 15_000;
  */
 export async function generateEmbedding(
   text: string,
-  customApiKey?: string
+  customApiKey?: string,
+  taskType?: 'RETRIEVAL_QUERY' | 'RETRIEVAL_DOCUMENT' | 'SEMANTIC_SIMILARITY',
 ): Promise<number[]> {
   // Validate input
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -1049,6 +1050,10 @@ export async function generateEmbedding(
         content: {
           parts: [{ text: truncatedText }],
         },
+        // Native dimensionality reduction — better than post-hoc averaging.
+        // Matryoshka-trained models preserve semantic meaning at lower dimensions.
+        outputDimensionality: 768,
+        ...(taskType ? { taskType } : {}),
       }),
       signal: controller.signal,
     });
