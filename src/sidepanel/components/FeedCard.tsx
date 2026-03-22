@@ -35,6 +35,25 @@ const resolveSourceTitle = (raw: string | undefined | null): string | null => {
   return (trimmed && !BACKEND_SOURCE_PLACEHOLDERS.has(trimmed)) ? trimmed : null;
 };
 
+// B1: Extract domain from URL for source chip (e.g. "https://nature.com/..." → "nature.com")
+const extractDomain = (url: string): string | null => {
+  try {
+    const { hostname } = new URL(url);
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+};
+
+// B1: Source type icon map
+const SOURCE_TYPE_ICON: Record<string, string> = {
+  academic_paper: '📄',
+  news_article: '📰',
+  official_source: '🏛',
+  wikipedia: '📖',
+  other: '🔗',
+};
+
 // M3.5: SAFE_SCAN_REASONS whitelist - only these reasons are user-safe to display
 // Raw AI rationale strings are blocked from UI unless explicitly allowed here
 const SAFE_SCAN_REASONS = new Set([
@@ -390,8 +409,8 @@ const CompactContent = ({
             {reasoningText}
           </p>
           
-          {/* Source - always visible for verified cards.
-              For unverifiable: show link if URL exists, skip text-only source (category chip handles it) */}
+          {/* Source chip — shown for verified cards and unverifiable cards with URL.
+              B1: domain pill with source-type icon, compact for quick scanning */}
           {resolvedSourceTitleCompact && (!isUnverifiable || hasSourceLink) && (
             <p className="compact-source-line">
               {hasSourceLink ? (
@@ -399,12 +418,15 @@ const CompactContent = ({
                   href={safeSourceUrlCompact!}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="compact-source-link"
+                  className="compact-source-chip-link"
                   onClick={stopSourceLinkPropagation}
                   onKeyDown={stopSourceLinkPropagation}
                 >
-                  <span>{resolvedSourceTitleCompact}</span>
-                  <span aria-hidden="true">↗</span>
+                  <span aria-hidden="true">{SOURCE_TYPE_ICON[card.sourceType] ?? '🔗'}</span>
+                  <span className="compact-source-chip-domain">
+                    {extractDomain(safeSourceUrlCompact!) ?? resolvedSourceTitleCompact}
+                  </span>
+                  <span aria-hidden="true" className="compact-source-chip-arrow">↗</span>
                 </a>
               ) : (
                 <span className="compact-source-text">{resolvedSourceTitleCompact}</span>
@@ -678,7 +700,9 @@ export const FeedCard = (props: FeedCardProps) => {
               'rail-node',
               isCompact ? 'rail-node-compact' : '',
               !isCompact && glow ? 'rail-node-glow' : '',
-            ].join(' ').trim()}
+              // B4: Pulse ring when card is actively being verified
+              !isCompact && size === 'verifying' ? 'rail-node-active' : '',
+            ].filter(Boolean).join(' ')}
             style={isCompact ? {
               // Compact: small solid-fill verdict dot
               backgroundColor: `rgba(${accentRgb}, 0.9)`,
@@ -714,6 +738,7 @@ export const FeedCard = (props: FeedCardProps) => {
         data-size={size}
         data-status={status}
         data-tone={tone}
+        data-action={size === 'scanning' && props.size === 'scanning' ? (props.actionState ?? undefined) : undefined}
         data-testid={size === 'compact' || size === 'hero' ? 'source-card' : undefined}
         initial={prefersReducedMotion || isCompact || suppressEntry ? false : { y: DISTANCE.enterY, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}

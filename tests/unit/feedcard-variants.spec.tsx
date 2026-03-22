@@ -118,8 +118,8 @@ describe('FeedCard variants', () => {
     expect(heroHtml).toContain('noopener noreferrer');
     expect(heroHtml).toContain('↗');
 
-    // Compact card now shows source always visible (not just expanded), with compact-source-link class
-    expect(compactHtml).toContain('compact-source-link');
+    // Compact card shows source as chip pill (B1 redesign)
+    expect(compactHtml).toContain('compact-source-chip-link');
     expect(compactHtml).toContain('href="https://www.federalregister.gov/example"');
     expect(compactHtml).toContain('↗');
   });

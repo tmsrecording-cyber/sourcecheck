@@ -2374,11 +2374,40 @@ body::before {
 }
 
 .feed-card-wrapper:hover .rail-node {
-  transform: rotate(45deg) scale(1.15);
+  /* B4: Hover expands to 12px equivalent via scale */
+  transform: rotate(45deg) scale(1.2);
 }
 
 .rail-node-glow {
   animation: railNodeBreathe 3s ease-in-out infinite;
+}
+
+/* B4: Active node — expanding ring pulse for cards being verified */
+.rail-node-active {
+  animation: railNodeBreathe 3s ease-in-out infinite;
+}
+.rail-node-active::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 1px;
+  border: 1.5px solid rgba(var(--model-accent-rgb, 138, 180, 248), 0.48);
+  animation: railNodeRingPulse 2s ease-out infinite;
+}
+
+@keyframes railNodeRingPulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  60% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
 }
 
 /* Compact card: small verdict-colored diamond on the timeline */
@@ -2529,6 +2558,21 @@ body::before {
   /* No opacity: 0.85 — scanning is an active state, not a ghost */
 }
 
+/* B5: Scanning card brightens when VERIFYING — "found something" signal */
+.feed-card-scanning[data-action="VERIFYING"] {
+  border-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.52);
+  box-shadow:
+    inset 0 1px 0 rgba(var(--model-accent-rgb, 138, 180, 248), 0.18),
+    0 4px 20px rgba(0, 0, 0, 0.20),
+    0 0 20px rgba(var(--model-accent-rgb, 138, 180, 248), 0.06);
+  background: linear-gradient(
+    160deg,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.09) 0%,
+    rgba(var(--sc-surface-0-rgb), 0.88) 35%,
+    rgba(var(--sc-surface-0-rgb), 0.72) 100%
+  );
+}
+
 .feed-card-verifying {
   padding: 16px;
   background: linear-gradient(
@@ -2548,17 +2592,22 @@ body::before {
 
 .feed-card-hero {
   padding: 18px 18px 16px;
-  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.88), rgba(var(--sc-surface-0-rgb), 0.98));
-  border-color: var(--sc-border);
+  /* B3: Strong surface — premium depth with inner glass highlight */
+  background: linear-gradient(160deg, rgba(var(--sc-surface-1-rgb), 0.94), rgba(var(--sc-surface-0-rgb), 0.99));
+  border-color: rgba(var(--sc-border-rgb), 0.28);
   box-shadow:
-    0 10px 26px rgba(0, 0, 0, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    0 4px 12px rgba(0, 0, 0, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
 .feed-card-hero:hover {
   box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    0 16px 40px rgba(0, 0, 0, 0.32),
+    0 4px 12px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
 .feed-card-claim-summary {
@@ -2641,19 +2690,24 @@ body::before {
 
 .feed-card-compact {
   padding: 8px 12px 9px 14px;
-  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.36), rgba(var(--sc-surface-0-rgb), 0.52));
-  border: 1px solid rgba(var(--sc-border-rgb), 0.16);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.10);
+  /* B3: Deeper glass — more visible surface, inner light edge */
+  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.58), rgba(var(--sc-surface-0-rgb), 0.72));
+  border: 1px solid rgba(var(--sc-border-rgb), 0.20);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
   border-radius: 10px;
   min-height: 48px;
   margin-left: 18px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
 .feed-card-compact:hover {
-  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.46), rgba(var(--sc-surface-0-rgb), 0.60));
-  border-color: rgba(var(--sc-border-rgb), 0.30);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.16);
+  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.68), rgba(var(--sc-surface-0-rgb), 0.80));
+  border-color: rgba(var(--sc-border-rgb), 0.34);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.20),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 .feed-card-compact::before {
@@ -2671,21 +2725,21 @@ body::before {
   background: rgba(var(--sc-supported-rgb), 0.80);
 }
 .feed-card-compact[data-status="supported"] {
-  background: linear-gradient(180deg, rgba(var(--sc-supported-rgb), 0.035), rgba(var(--sc-surface-0-rgb), 0.52));
+  background: linear-gradient(160deg, rgba(var(--sc-supported-rgb), 0.04) 0%, rgba(var(--sc-surface-1-rgb), 0.58) 40%, rgba(var(--sc-surface-0-rgb), 0.72) 100%);
 }
 
 .feed-card-compact[data-status="partial"]::before {
   background: rgba(var(--sc-partial-rgb), 0.84);
 }
 .feed-card-compact[data-status="partial"] {
-  background: linear-gradient(180deg, rgba(var(--sc-partial-rgb), 0.035), rgba(var(--sc-surface-0-rgb), 0.52));
+  background: linear-gradient(160deg, rgba(var(--sc-partial-rgb), 0.04) 0%, rgba(var(--sc-surface-1-rgb), 0.58) 40%, rgba(var(--sc-surface-0-rgb), 0.72) 100%);
 }
 
 .feed-card-compact[data-status="disputed"]::before {
   background: rgba(var(--sc-disputed-rgb), 0.84);
 }
 .feed-card-compact[data-status="disputed"] {
-  background: linear-gradient(180deg, rgba(var(--sc-disputed-rgb), 0.045), rgba(var(--sc-surface-0-rgb), 0.52));
+  background: linear-gradient(160deg, rgba(var(--sc-disputed-rgb), 0.05) 0%, rgba(var(--sc-surface-1-rgb), 0.58) 40%, rgba(var(--sc-surface-0-rgb), 0.72) 100%);
 }
 
 .feed-card-compact[data-status="unverifiable"]::before {
@@ -3448,50 +3502,77 @@ body::before {
   overflow: hidden;
 }
 
-/* New compact card layout - reasoning + source prominent */
+/* B2: Typography — compact card reasoning is secondary, clearly lighter than claim text */
 .compact-reasoning-text {
-  margin-top: 5px;
-  font-size: 13px;
+  margin-top: 4px;
+  font-size: 12.5px;
   line-height: 1.44;
   hyphens: auto;
-  font-weight: 500;
-  letter-spacing: -0.008em;
-  color: rgba(var(--sc-text-rgb), 0.94);
+  font-weight: 400;
+  letter-spacing: -0.004em;
+  color: rgba(var(--sc-text-rgb), 0.78);
 }
 
 .compact-source-line {
   margin-top: 5px;
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
 .compact-source-text {
-  color: rgba(var(--sc-text-soft-rgb), 0.78);
+  color: rgba(var(--sc-text-soft-rgb), 0.56);
+  font-size: 11px;
 }
 
+/* B1: Source chip — pill format with icon + domain + arrow */
+.compact-source-chip-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--model-accent-rgb, 138, 180, 248), 0.18);
+  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.06);
+  color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.72);
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+}
+
+.compact-source-chip-domain {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.compact-source-chip-arrow {
+  opacity: 0.7;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.compact-source-chip-link:hover,
+.compact-source-chip-link:focus-visible {
+  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.14);
+  border-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.38);
+  color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.94);
+  outline: none;
+}
+
+/* Legacy class — keep for test compatibility */
 .compact-source-link {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  color: var(--model-accent-solid, var(--sc-accent));
-  transition:
-    color var(--motion-fast-02) var(--motion-soft-spring),
-    opacity var(--motion-fast-02) var(--motion-soft-spring),
-    text-decoration-color var(--motion-fast-02) var(--motion-soft-spring);
-  text-decoration: underline;
-  text-decoration-thickness: 0.06em;
-  text-underline-offset: 0.14em;
-  text-decoration-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.22);
-}
-
-.compact-source-link:hover,
-.compact-source-link:focus-visible {
-  color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.94);
-  text-decoration-color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.68);
-  text-shadow: 0 0 10px rgba(var(--model-accent-rgb, 138, 180, 248), 0.30);
-  outline: none;
-  transform: translateY(-1px);
-  transition: transform 0.15s ease, color 0.15s ease, text-shadow 0.15s ease;
+  color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.72);
+  text-decoration: none;
+  font-size: 10px;
 }
 
 /* Verdict-tinted hover glows for feed cards */
