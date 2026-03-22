@@ -174,12 +174,17 @@ export const VideoHeader = ({
         <div className="min-w-0 flex-1">
           <h1
             className={[
-              'font-semibold tracking-[-0.011em] leading-[1.4] text-sc-text line-clamp-2 text-balance',
-              isLiveTab ? 'text-[12.75px] opacity-95' : 'text-[13.5px]',
+              'font-bold tracking-[-0.02em] leading-[1.3] text-sc-text line-clamp-2',
+              isLiveTab ? 'text-[15px]' : 'text-[13.5px] font-semibold tracking-[-0.011em] leading-[1.4]',
             ].join(' ')}
           >
             {title}
           </h1>
+          {isLiveTab && (
+            <p className="mt-0.5 text-[11px] text-sc-muted/50 tracking-[0.005em] truncate">
+              {channel}
+            </p>
+          )}
         </div>
 
         {!isLiveTab && (

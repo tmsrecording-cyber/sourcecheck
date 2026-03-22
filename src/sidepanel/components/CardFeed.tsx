@@ -185,83 +185,100 @@ export const CardFeed = ({
                       </motion.div>
                     )}
 
-                    {!isInitialLoading && livePhase === 'reading' && readingVariant && (
+                    {/* Unified live card — scanning and verifying share one persistent shell.
+                        key="live-primary" never changes while the stage is active, so the
+                        outer wrapper stays mounted. Only the inner content crossfades.
+                        This gives the "one card morphing" feel instead of a sequential swap. */}
+                    {!isInitialLoading && ((livePhase === 'reading' && readingVariant != null) || !!stageEntries[0]) && (
                       <motion.div
-                        key="reading"
+                        key="live-primary"
+                        layout={enableListLayoutAnimations}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: DURATION.fast02 }}
+                        exit={{ opacity: 0, transition: { duration: 0.22, ease: SOFT_SPRING } }}
+                        transition={{ duration: 0.28, ease: SOFT_SPRING }}
                       >
-                        <FeedCard
-                          size="scanning"
-                          previewText=""
-                          timestampSeconds={readingTimestamp}
-                          accentRgb="var(--model-accent-rgb)"
-                          suppressEntry
-                          chunksScanned={chunksScanned}
-                        />
-                      </motion.div>
-                    )}
+                        {/* Inner content crossfades between scanning → checking → resolved.
+                            mode="popLayout" lets entering and exiting content overlap briefly
+                            so the card feels like it changes content, not swaps. */}
+                        <AnimatePresence mode="popLayout" initial={false}>
+                          {livePhase === 'reading' && readingVariant != null && !stageEntries[0] && (
+                            <motion.div
+                              key="scanning"
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0, transition: { duration: 0.2, ease: SOFT_SPRING } }}
+                              transition={{ duration: 0.28, ease: SOFT_SPRING }}
+                            >
+                              <FeedCard
+                                size="scanning"
+                                previewText=""
+                                timestampSeconds={readingTimestamp}
+                                accentRgb="var(--model-accent-rgb)"
+                                suppressEntry
+                                chunksScanned={chunksScanned}
+                              />
+                            </motion.div>
+                          )}
 
-                    {/* Primary stage entry — inside mode="wait" to keep reading↔claim transition sequential */}
-                    {!isInitialLoading && stageEntries[0] && (() => {
-                      const entry = stageEntries[0];
-                      const entryPhase = entry.resolvedCard ? 'resolved' : (entry.checkingClaim ? 'checking' : null);
-                      if (!entryPhase) return null;
-                      return (
-                        <motion.div
-                          key={entry.claimKey}
-                          // CALM: Only use layoutId when NOT exiting - prevents morph collision
-                          layoutId={enableListLayoutAnimations ? `claim-${entry.claimKey}` : undefined}
-                          layout={enableListLayoutAnimations}
-                          initial={prefersReducedMotion ? false : { opacity: 0, y: -8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          // CALM EXIT: Simple opacity fade only - was scale+y+opacity chaos
-                          exit={{ opacity: 0, transition: { duration: 0.25, ease: SOFT_SPRING } }}
-                          transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
-                        >
-                          <AnimatePresence mode="wait" initial={false}>
-                            {entryPhase === 'checking' && entry.checkingClaim && (
+                          {stageEntries[0] && (() => {
+                            const entry = stageEntries[0];
+                            const entryPhase = entry.resolvedCard ? 'resolved' : (entry.checkingClaim ? 'checking' : null);
+                            if (!entryPhase) return null;
+                            return (
                               <motion.div
-                                key="checking"
+                                key={entry.claimKey}
+                                layoutId={enableListLayoutAnimations ? `claim-${entry.claimKey}` : undefined}
+                                layout={enableListLayoutAnimations}
                                 initial={{ opacity: 0 }}
                                 animate={{ opacity: 1 }}
-                                exit={{ opacity: 0, transition: { duration: 0.16, ease: SOFT_SPRING } }}
-                                transition={{ duration: DURATION.micro }}
+                                exit={{ opacity: 0, transition: { duration: 0.22, ease: SOFT_SPRING } }}
+                                transition={{ duration: 0.3, ease: SOFT_SPRING }}
                               >
-                                <FeedCard
-                                  size="verifying"
-                                  claimText={entry.checkingClaim.claimText || 'Checking that claim…'}
-                                  claimType={entry.checkingClaim.claimType}
-                                  timestampSeconds={entry.checkingClaim.timestampSeconds}
-                                  accentRgb="var(--model-accent-rgb)"
-                                  glow
-                                  suppressEntry
-                                />
+                                <AnimatePresence mode="wait" initial={false}>
+                                  {entryPhase === 'checking' && entry.checkingClaim && (
+                                    <motion.div
+                                      key="checking"
+                                      initial={{ opacity: 0 }}
+                                      animate={{ opacity: 1 }}
+                                      exit={{ opacity: 0, transition: { duration: 0.18, ease: SOFT_SPRING } }}
+                                      transition={{ duration: 0.24, ease: SOFT_SPRING }}
+                                    >
+                                      <FeedCard
+                                        size="verifying"
+                                        claimText={entry.checkingClaim.claimText || 'Checking that claim…'}
+                                        claimType={entry.checkingClaim.claimType}
+                                        timestampSeconds={entry.checkingClaim.timestampSeconds}
+                                        accentRgb="var(--model-accent-rgb)"
+                                        glow
+                                        suppressEntry
+                                      />
+                                    </motion.div>
+                                  )}
+                                  {entryPhase === 'resolved' && entry.resolvedCard && (
+                                    <motion.div
+                                      key="resolved"
+                                      initial={{ opacity: 0, scale: 1.01 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
+                                      transition={{ duration: 0.24, ease: SOFT_SPRING }}
+                                    >
+                                      <FeedCard
+                                        size="compact"
+                                        card={entry.resolvedCard}
+                                        timestampSeconds={entry.resolvedCard.timestampSeconds}
+                                        accentRgb={STATUS_RGB[entry.resolvedCard.status] ?? '154, 160, 166'}
+                                        suppressEntry
+                                      />
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
                               </motion.div>
-                            )}
-                            {entryPhase === 'resolved' && entry.resolvedCard && (
-                              <motion.div
-                                key="resolved"
-                                initial={{ opacity: 0, scale: 1.01 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
-                                transition={{ duration: DURATION.micro }}
-                              >
-                                <FeedCard
-                                  size="compact"
-                                  card={entry.resolvedCard}
-                                  timestampSeconds={entry.resolvedCard.timestampSeconds}
-                                  accentRgb={STATUS_RGB[entry.resolvedCard.status] ?? '154, 160, 166'}
-                                  suppressEntry
-                                />
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
-                      );
-                    })()}
+                            );
+                          })()}
+                        </AnimatePresence>
+                      </motion.div>
+                    )}
 
                     {!isInitialLoading && showStateCard && (
                       <motion.div
