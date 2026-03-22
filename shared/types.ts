@@ -93,8 +93,8 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
   },
   {
     id: 'gemini-3.1-flash-lite-preview',
-    label: 'Flash 3.1 Lite',
-    description: 'Fastest, lightest',
+    label: 'Dual',
+    description: 'Fast scan · Deep verify',
     speed: 'fast',
   },
 ];

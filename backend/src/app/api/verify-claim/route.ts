@@ -470,7 +470,12 @@ export async function POST(request: NextRequest) {
     const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType, contextTranscript);
 
     // BYOK: Use header model if provided (from x-custom-model), else fall back to body
-    const effectiveModel = customApiKey && headerModel ? headerModel : body.model;
+    const rawModel = customApiKey && headerModel ? headerModel : body.model;
+    // Dual mode: 3.1-flash-lite is used for fast extraction (analyze-chunk) but
+    // verification always uses 2.5-flash for better reasoning quality.
+    const effectiveModel = rawModel === 'gemini-3.1-flash-lite-preview'
+      ? 'gemini-2.5-flash'
+      : rawModel;
     
     console.log('[verify-claim] Calling Gemini with grounding:', {
       requestId: crypto.randomUUID(),
