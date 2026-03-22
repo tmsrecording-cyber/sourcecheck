@@ -205,8 +205,9 @@ const computeStateSnapshot = (options: {
     currentVideoInfo?.videoId ?? 'null',
     currentPlaybackState?.currentTime ?? 0,
     currentPlaybackState?.paused ? 1 : 0,
+    runtimeState.lastProviderError?.code ?? 'none',
   ];
-  
+
   if (options.includeCards) {
     parts.push(
       runtimeState.sourceCards.map(c => c.id).join(','),

@@ -32,6 +32,11 @@ export const useCardHistory = (incomingCards: SourceCard[]) => {
     const newCards = incomingCards.filter((c) => !mergedIdsRef.current.has(c.id));
     if (newCards.length === 0) return;
     for (const c of newCards) mergedIdsRef.current.add(c.id);
+    // Trim dedup set to match the visible history window — prevents unbounded growth in long sessions
+    if (mergedIdsRef.current.size > MAX_CARD_HISTORY * 2) {
+      const ids = Array.from(mergedIdsRef.current);
+      mergedIdsRef.current = new Set(ids.slice(-MAX_CARD_HISTORY));
+    }
     setCardHistory((prev) => {
       const existingIds = new Set(prev.map((c) => c.id));
       const toAdd = newCards.filter((c) => !existingIds.has(c.id));

@@ -225,7 +225,7 @@ export const App = () => {
     liveFlow.isDocking,
   ]);
 
-  const { scrollRef: feedScrollRef, handleScroll: handleFeedScroll, isPinned: isFeedPinned, pinToTop: pinFeedToTop } =
+  const { scrollRef: feedScrollRef, isPinned: isFeedPinned, pinToTop: pinFeedToTop } =
     usePinnedTopScroll<HTMLDivElement>(feedScrollKey);
   const historyItemCount = cardHistory.length + askHistory.length;
   const headerCards = activeTab === 'history' ? cardHistory : runtimeState.allSourceCards;
@@ -408,7 +408,7 @@ export const App = () => {
           </div>
         </div>
 
-        <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col" onScroll={handleFeedScroll}>
+        <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
           {SHOW_DEBUG && (
             <>
               <DebugStatusPanel runtimeState={runtimeState} analysisStatus={displayAnalysisStatus} />
