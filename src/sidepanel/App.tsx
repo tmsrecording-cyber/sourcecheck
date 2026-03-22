@@ -1,26 +1,28 @@
-import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
 import { AlertTriangle, KeyRound } from 'lucide-react';
 import { FREEMIUM_MODEL } from '../../shared/types';
-import { PROVIDER_SETTINGS_KEY, hasStoredProviderApiKey } from '../background/providers/types';
+import { useProviderSettings } from './hooks/useProviderSettings';
+import { useNoticeQueue } from './hooks/useNoticeQueue';
+import { useProviderErrorGate } from './hooks/useProviderErrorGate';
+import { useAskFocusShortcut } from './hooks/useAskFocusShortcut';
+import { useLiveStageFlow } from './hooks/useLiveStageFlow';
 import { VideoHeader } from './components/VideoHeader';
-import { CardFeed, type HeroSlotState } from './components/CardFeed';
-import { AskBox, ASK_INPUT_ID } from './components/AskBox';
+import { CardFeed } from './components/CardFeed';
+import { AskBox } from './components/AskBox';
 import { ModelPicker } from './components/ModelPicker';
 import { SettingsPanel } from './components/SettingsPanel';
 import { NoticeStack } from './components/NoticeStack';
 import { SourceCheckLogo } from './components/SourceCheckLogo';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useExtensionStorage } from './hooks/useExtensionStorage';
-import { shouldHandleAskShortcut } from './utils/askShortcut';
+import { useCardHistory } from './hooks/useCardHistory';
+import { useAskHistory } from './hooks/useAskHistory';
 import {
-  buildAskReadyNotice,
   buildModelChangedNotice,
   buildSettingsSavedNotice,
   getLatestTranscriptFallbackNotice,
-  type PendingSidepanelNotice,
-  type SidepanelNotice,
 } from './utils/notices';
 import { getPressSettle } from './styles/motionTokens';
 import { lifecycleToAnalysisStatus } from './utils/state';
@@ -29,21 +31,12 @@ import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel } from './comp
 import { hardenStorageAccessLevels } from '../utils/storageAccess';
 import type {
   AskQuestionResponse,
-  AskQuestionSource,
   AnalysisStatus,
-  ProviderErrorState,
 } from '../../shared/types';
 
 const SHOW_DEBUG =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('debug') === '1';
-
-interface AskHistoryEntry {
-  query: string;
-  answer: string;
-  timestampSeconds: number;
-  sources: AskQuestionSource[];
-}
 
 type AskQuestionResult =
   | ({ status: 'ok' } & AskQuestionResponse)
@@ -59,18 +52,6 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return fallback;
 };
 
-const MAX_ASK_HISTORY = 50;
-
-const useLiveRef = <T,>(value: T) => {
-  const ref = useRef(value);
-
-  useLayoutEffect(() => {
-    ref.current = value;
-  }, [value]);
-
-  return ref;
-};
-
 const PanelShell = ({
   label,
   subcopy,
@@ -82,25 +63,23 @@ const PanelShell = ({
   error?: boolean;
   disclosureNote?: string;
 }) => (
-  <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
+  <div role="status" aria-live="polite" className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
     <div className="w-full max-w-[320px]">
-        <div className="instrument-shell px-5 py-5 border border-sc-border shadow-sc-main bg-sc-surface-glass backdrop-blur-md">
-          <div className="signal-rail" style={{ left: '24px', top: '18px', bottom: '18px' }} />
-          <div className="relative pl-[42px]">
-            <span
-              className={`rail-node ${error ? 'bg-sc-disputed animate-pulse' : 'bg-sc-accent animate-rail-node-pulse'}`}
-              style={{
-                top: '10px',
-                boxShadow: error
-                  ? '0 0 0 4px rgba(var(--sc-disputed-rgb), 0.16), 0 0 10px rgba(var(--sc-disputed-rgb), 0.20)'
-                  : '0 0 0 4px rgba(var(--sc-model-blue-rgb), 0.12), 0 0 10px rgba(var(--sc-model-blue-rgb), 0.18)',
-              }}
-            />
-            <span
-              className={`rail-connector absolute left-[26px] h-[1px] w-[14px] bg-gradient-to-r to-transparent opacity-80 ${error ? 'from-sc-disputed' : 'from-sc-accent'}`}
-              style={{
-                top: '14px',
-              }}
+      <div className="instrument-shell px-5 py-5 border border-sc-border shadow-sc-main bg-sc-surface-glass backdrop-blur-md">
+        <div className="signal-rail" style={{ left: '24px', top: '18px', bottom: '18px' }} />
+        <div className="relative pl-[42px]">
+          <span
+            className={`rail-node ${error ? 'bg-sc-disputed animate-pulse' : 'bg-sc-accent animate-rail-node-pulse'}`}
+            style={{
+              top: '10px',
+              boxShadow: error
+                ? '0 0 0 4px rgba(var(--sc-disputed-rgb), 0.16), 0 0 10px rgba(var(--sc-disputed-rgb), 0.20)'
+                : '0 0 0 4px rgba(var(--sc-model-blue-rgb), 0.12), 0 0 10px rgba(var(--sc-model-blue-rgb), 0.18)',
+            }}
+          />
+          <span
+            className={`rail-connector absolute left-[26px] h-[1px] w-[14px] bg-gradient-to-r to-transparent opacity-80 ${error ? 'from-sc-disputed' : 'from-sc-accent'}`}
+            style={{ top: '14px' }}
           />
           <div className="capture-plate ml-1 px-4 py-4 border border-sc-border-soft bg-sc-surface-0 shadow-sc-soft">
             <div className={`font-mono text-[9px] font-bold tracking-[0.2em] uppercase ${error ? 'text-sc-disputed' : 'text-sc-accent-soft'}`}>
@@ -125,158 +104,52 @@ export const App = () => {
   const { isStorageReady, runtimeState, transcript, currentVideoIdRef } = useExtensionStorage();
   const prefersReducedMotion = useReducedMotion();
   const [askDraft, setAskDraft] = useState('');
-  const [askHistory, setAskHistory] = useState<AskHistoryEntry[]>([]);
+  const { askHistory, addEntry: addAskEntry, resetForVideo: resetAskForVideo } = useAskHistory();
+  const { cardHistory, clearHistory: clearCardHistory } = useCardHistory(runtimeState.allSourceCards);
   const [isThinking, setIsThinking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [showSettings, setShowSettings] = useState(false);
-  const [lastProviderError, setLastProviderError] = useState<ProviderErrorState | null>(null);
-  const [hasCustomKey, setHasCustomKey] = useState(false);
+  const { hasCustomKey } = useProviderSettings();
   const [isRetryingTranscript, setIsRetryingTranscript] = useState(false);
-  const [notices, setNotices] = useState<SidepanelNotice[]>([]);
-  // Hero slot state for header sync - keeps header aligned with promoted card dwell
-  const [heroState, setHeroState] = useState<HeroSlotState>({ mode: 'idle' });
+  const { notices, enqueueNotice, dismissNotice } = useNoticeQueue();
   const isMountedRef = useRef(true);
-  const pendingAskFocusRef = useRef(false);
-  const lastSettingsSaveAtRef = useRef(0);
-  const hydratedProviderErrorSignatureRef = useRef<string | null>(null);
-  const noticeTimersRef = useRef<Map<string, number>>(new Map());
   const lastTranscriptFallbackNoticeAtRef = useRef(0);
-  
-  // Refs to avoid stale closures in message listeners
-  const hasCustomKeyRef = useLiveRef(hasCustomKey);
-  const lastProviderErrorRef = useLiveRef(lastProviderError);
-
-  const dismissNotice = useCallback((id: string) => {
-    const timerId = noticeTimersRef.current.get(id);
-    if (timerId !== undefined) {
-      window.clearTimeout(timerId);
-      noticeTimersRef.current.delete(id);
-    }
-
-    setNotices((currentNotices) => currentNotices.filter((notice) => notice.id !== id));
-  }, []);
-
-  const enqueueNotice = useCallback((notice: PendingSidepanelNotice) => {
-    setNotices((currentNotices) => {
-      const nextNotice: SidepanelNotice = {
-        ...notice,
-        id: notice.dedupeKey,
-      };
-      const withoutDuplicate = currentNotices.filter((entry) => entry.id !== notice.dedupeKey);
-      return [nextNotice, ...withoutDuplicate].slice(0, 3);
-    });
-
-    const existingTimerId = noticeTimersRef.current.get(notice.dedupeKey);
-    if (existingTimerId !== undefined) {
-      window.clearTimeout(existingTimerId);
-    }
-
-    const timerId = window.setTimeout(() => {
-      dismissNotice(notice.dedupeKey);
-    }, 3600);
-
-    noticeTimersRef.current.set(notice.dedupeKey, timerId);
-  }, [dismissNotice]);
 
   useEffect(() => () => {
     isMountedRef.current = false;
   }, []);
 
-  useEffect(() => () => {
-    noticeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
-    noticeTimersRef.current.clear();
+  useEffect(() => {
+    void hardenStorageAccessLevels().catch(() => {});
   }, []);
 
+  const { lastProviderError, setLastProviderError, recordSettingsSave } = useProviderErrorGate({
+    hasCustomKey,
+    runtimeProviderError: runtimeState.lastProviderError,
+    showSettings,
+    onOpenSettings: () => setShowSettings(true),
+  });
+
+  // Reset per-video state; ask history restore is handled by the hook
   useEffect(() => {
-    void hardenStorageAccessLevels();
-  }, []);
-
-  useEffect(() => {
-    setLastProviderError(runtimeState.lastProviderError ?? null);
-  }, [runtimeState.lastProviderError]);
-
-  useEffect(() => {
-    const code = runtimeState.lastProviderError?.code;
-    const message = runtimeState.lastProviderError?.message;
-    const signature = code || message ? `${code ?? ''}::${message ?? ''}` : null;
-
-    if (!signature) {
-      hydratedProviderErrorSignatureRef.current = null;
-      return;
-    }
-
-    const isHydratedUserKeyError = hasCustomKey && (
-      code === 'AUTH_ERROR' ||
-      code === 'INVALID_API_KEY' ||
-      code === 'QUOTA_EXHAUSTED'
-    );
-
-    if (
-      isHydratedUserKeyError &&
-      !showSettings &&
-      hydratedProviderErrorSignatureRef.current !== signature
-    ) {
-      hydratedProviderErrorSignatureRef.current = signature;
-      setShowSettings(true);
-    }
-  }, [hasCustomKey, runtimeState.lastProviderError, showSettings]);
-
-  // Check BYOK status from storage
-  useEffect(() => {
-    let cancelled = false;
-
-    const checkByokStatus = async () => {
-      try {
-        const result = await chrome.storage.local.get([PROVIDER_SETTINGS_KEY]);
-        if (cancelled || !isMountedRef.current) {
-          return;
-        }
-
-        setHasCustomKey(hasStoredProviderApiKey(result[PROVIDER_SETTINGS_KEY]));
-      } catch {
-        // Ignore transient storage read failures; the onChanged listener will retry.
-      }
-    };
-
-    void checkByokStatus();
-
-    // Listen for storage changes to update BYOK status in real-time
-    const storageListener = (
-      changes: Record<string, chrome.storage.StorageChange>,
-      areaName: string,
-    ) => {
-      if (areaName === 'local' && changes[PROVIDER_SETTINGS_KEY]) {
-        void checkByokStatus();
-      }
-    };
-
-    chrome.storage.onChanged.addListener(storageListener);
-    return () => {
-      cancelled = true;
-      chrome.storage.onChanged.removeListener(storageListener);
-    };
-  }, []);
-
-  useEffect(() => {
+    const videoId = runtimeState.currentVideo?.videoId ?? null;
+    // M5 PRIVACY: Check if this is a private session (e.g., Google Meet)
+    const isPrivate = runtimeState.currentVideo?.sourceContext?.visibility === 'private';
     setAskDraft('');
-    setAskHistory([]);
     setAskError(null);
     setIsThinking(false);
     setActiveTab('live');
-    // Clear stale provider errors when switching videos
     setLastProviderError(null);
     setIsRetryingTranscript(false);
     lastTranscriptFallbackNoticeAtRef.current = 0;
-  }, [runtimeState.currentVideo?.videoId]);
+    resetAskForVideo(videoId, isPrivate);
+  }, [runtimeState.currentVideo?.videoId, runtimeState.currentVideo?.sourceContext?.visibility, resetAskForVideo]);
 
   const analysisStatus = lifecycleToAnalysisStatus(runtimeState.lifecycle);
   const effectiveSelectedModel = hasCustomKey ? runtimeState.selectedModel : FREEMIUM_MODEL;
   const hasAskContext = (transcript?.length ?? 0) > 0 || runtimeState.sourceCards.length > 0;
   const canFocusAsk = hasAskContext && !isThinking;
-  const activeTabRef = useLiveRef(activeTab);
-  const canFocusAskRef = useLiveRef(canFocusAsk);
-  const showSettingsRef = useLiveRef(showSettings);
   const pressFeedback = getPressSettle(prefersReducedMotion);
   const previousDisplayAnalysisStatusRef = useRef<AnalysisStatus>(analysisStatus);
   const resolvedDisplayAnalysisStatus = resolveDisplayAnalysisStatus({
@@ -290,22 +163,21 @@ export const App = () => {
     isRetryingTranscript && analysisStatus === 'no-transcript'
       ? 'loading'
       : resolvedDisplayAnalysisStatus;
+  const liveFlow = useLiveStageFlow({
+    activeTab,
+    currentVideoId: runtimeState.currentVideo?.videoId ?? null,
+    status: displayAnalysisStatus,
+    playbackState: runtimeState.playbackState,
+    cards: runtimeState.sourceCards,
+    pendingClaims: runtimeState.pendingClaims,
+    currentScanPreview: runtimeState.currentScanPreview,
+    currentScanEntities: runtimeState.currentScanEntities,
+    currentScanActionState: runtimeState.currentScanActionState,
+    currentScanReason: runtimeState.currentScanReason,
+    lastScannedTimestamp: runtimeState.lastScannedTimestamp,
+  });
 
-  const focusAskInput = useCallback(() => {
-    if (typeof document === 'undefined') {
-      return false;
-    }
-
-    const input = document.getElementById(ASK_INPUT_ID);
-    if (!(input instanceof HTMLInputElement) || input.disabled) {
-      return false;
-    }
-
-    input.focus();
-    const caretPosition = input.value.length;
-    input.setSelectionRange?.(caretPosition, caretPosition);
-    return document.activeElement === input;
-  }, []);
+  useAskFocusShortcut({ activeTab, setActiveTab, canFocusAsk, showSettings });
 
   useLayoutEffect(() => {
     previousDisplayAnalysisStatusRef.current = displayAnalysisStatus;
@@ -331,87 +203,36 @@ export const App = () => {
     enqueueNotice(fallbackNotice.notice);
   }, [enqueueNotice, runtimeState.transcriptFetchLog]);
 
-  useEffect(() => {
-    if (!pendingAskFocusRef.current || showSettings || activeTab !== 'live' || !canFocusAsk) {
-      return;
-    }
-
-    const timerId = window.setTimeout(() => {
-      if (focusAskInput()) {
-        pendingAskFocusRef.current = false;
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timerId);
-  }, [activeTab, canFocusAsk, focusAskInput, showSettings]);
-
-  useEffect(() => {
-    const handleShortcut = (event: KeyboardEvent) => {
-      if (
-        !shouldHandleAskShortcut({
-          key: event.key,
-          metaKey: event.metaKey,
-          ctrlKey: event.ctrlKey,
-          altKey: event.altKey,
-          shiftKey: event.shiftKey,
-          defaultPrevented: event.defaultPrevented,
-          target: event.target,
-          hasContext: canFocusAskRef.current,
-          showSettings: showSettingsRef.current,
-        })
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      pendingAskFocusRef.current = true;
-
-      if (activeTabRef.current !== 'live') {
-        startTransition(() => {
-          setActiveTab('live');
-        });
-        return;
-      }
-
-      if (focusAskInput()) {
-        pendingAskFocusRef.current = false;
-      }
-    };
-
-    document.addEventListener('keydown', handleShortcut);
-    return () => {
-      document.removeEventListener('keydown', handleShortcut);
-    };
-  }, [focusAskInput]);
-
   const feedScrollKey = useMemo(() => {
     return [
       displayAnalysisStatus,
       runtimeState.lastScannedTimestamp ?? 'none',
       runtimeState.chunksScanned,
-      runtimeState.currentScanPreview ?? '',
       askHistory.length,
       runtimeState.sourceCards.length,
       runtimeState.pendingClaims.length,
+      liveFlow.livePhase,
+      liveFlow.stageEntries.length,
+      liveFlow.dockedKeys.size,
+      liveFlow.isDocking ? 'docking' : 'steady',
     ].join('::');
   }, [
     displayAnalysisStatus,
     runtimeState.lastScannedTimestamp,
     runtimeState.chunksScanned,
-    runtimeState.currentScanPreview,
     askHistory.length,
     runtimeState.sourceCards.length,
-    runtimeState.pendingClaims.length
+    runtimeState.pendingClaims.length,
+    liveFlow.livePhase,
+    liveFlow.stageEntries.length,
+    liveFlow.dockedKeys.size,
+    liveFlow.isDocking,
   ]);
 
   const { scrollRef: feedScrollRef, handleScroll: handleFeedScroll, isPinned: isFeedPinned, pinToTop: pinFeedToTop } =
     usePinnedTopScroll<HTMLDivElement>(feedScrollKey);
-
-  const handleEntitySelect = (entityLabel: string) => {
-    const trimmedLabel = entityLabel.trim();
-    if (!trimmedLabel) return;
-    setAskDraft(`What did they say about ${trimmedLabel}?`);
-  };
+  const historyItemCount = cardHistory.length + askHistory.length;
+  const headerCards = activeTab === 'history' ? cardHistory : runtimeState.allSourceCards;
 
   const handleAskSubmit = async (query: string) => {
     const trimmedQuery = query.trim();
@@ -438,18 +259,13 @@ export const App = () => {
       }
 
       setAskDraft('');
-      setAskHistory((currentHistory) => ([
-        ...currentHistory.slice(-(MAX_ASK_HISTORY - 1)),
-        {
-          query: trimmedQuery,
-          answer: result.answer,
-          timestampSeconds: submittedTimestamp,
-          sources: result.sources ?? [],
-        },
-      ]));
-      if (activeTab === 'live') {
-        enqueueNotice(buildAskReadyNotice());
-      }
+      addAskEntry({
+        query: trimmedQuery,
+        answer: result.answer,
+        timestampSeconds: submittedTimestamp,
+        sources: result.sources ?? [],
+      });
+      setActiveTab('history');
     } catch (askSubmitError: unknown) {
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
         setAskError(getErrorMessage(askSubmitError, 'Could not answer that yet.'));
@@ -482,54 +298,17 @@ export const App = () => {
     }
   };
 
-  // Listen for provider errors - UNIFIED ERROR HANDLING
-  // All errors now flow through classifyError() in background/utils/api.ts
-  useEffect(() => {
-    const listener = (msgRaw: unknown) => {
-      if (typeof msgRaw === 'object' && msgRaw !== null) {
-        const msg = msgRaw as Record<string, unknown>;
-        if (msg.type === 'PROVIDER_ERROR' && typeof msg.payload === 'object' && msg.payload !== null) {
-          const payload = msg.payload as Record<string, unknown>;
-          const code = typeof payload.code === 'string' ? payload.code : undefined;
-          const message = typeof payload.message === 'string' ? payload.message : undefined;
-          const shouldOpenSettings = typeof payload.showSettings === 'boolean' ? payload.showSettings : false;
-          
-          // Gate: suppress only stale duplicate errors shortly after settings save.
-          // This prevents delayed *old* error messages from reopening settings,
-          // but allows genuine new errors caused by the just-saved settings to show.
-          const timeSinceSave = Date.now() - lastSettingsSaveAtRef.current;
-          const isStaleDuplicate = timeSinceSave < 1500 && lastProviderErrorRef.current?.code === code && lastProviderErrorRef.current?.message === message;
-          if (isStaleDuplicate) {
-            return;
-          }
-          
-          setLastProviderError({ code, message });
-          
-          // Auto-open settings only for BYOK (user-entered key) flows.
-          // Managed-key auth/quota errors should not yank users out of the live view.
-          const isUserKeyError = hasCustomKeyRef.current && (code === 'AUTH_ERROR' || code === 'QUOTA_EXHAUSTED' || code === 'INVALID_API_KEY');
-          if (shouldOpenSettings || isUserKeyError) {
-            setShowSettings(true);
-          }
-        }
-      }
-    };
-    chrome.runtime.onMessage.addListener(listener);
-    return () => chrome.runtime.onMessage.removeListener(listener);
-  }, []);
-
   if (showSettings) {
     return (
-        <SettingsPanel 
+        <SettingsPanel
         onSaved={() => {
-          lastSettingsSaveAtRef.current = Date.now();
+          recordSettingsSave();
           setShowSettings(false);
           setLastProviderError(null);
           enqueueNotice(buildSettingsSavedNotice());
           void chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' }).catch(() => {});
         }} 
         lastError={lastProviderError}
-        effectiveModel={effectiveSelectedModel}
       />
     );
   }
@@ -557,7 +336,7 @@ export const App = () => {
     return (
       <PanelShell
         label="SourceCheck"
-        subcopy="Open a YouTube watch page to start checking claims from the video."
+        subcopy="Open a YouTube video to start fact-checking. Claims are checked automatically as you watch — no setup required."
         disclosureNote="Transcript text and questions you ask are processed server-side using Gemini AI. No account or identity data is collected."
       />
     );
@@ -565,8 +344,6 @@ export const App = () => {
 
   return (
     <div className="hud-shell font-sc">
-      <div className="hud-grid" aria-hidden="true" />
-      <div className="hud-circuit" aria-hidden="true" />
       <div className="flex h-full min-h-0 w-full flex-col bg-sc-bg-0 relative">
         <div className="tactile-header hud-header z-20 grid h-[52px] flex-shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -592,7 +369,14 @@ export const App = () => {
                 aria-selected={activeTab === 'history'}
                 whileTap={pressFeedback}
               >
+                <span className="flex items-center gap-1.5">
                 HISTORY
+                {historyItemCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[16px] h-[14px] px-1 rounded-[3px] bg-sc-surface-1 border border-sc-border-soft/60 font-mono text-[8px] font-semibold text-sc-muted/60 tabular-nums">
+                    {historyItemCount}
+                  </span>
+                )}
+              </span>
                 <span className={`tab-indicator ${activeTab === 'history' ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
               </motion.button>
           </nav>
@@ -647,45 +431,50 @@ export const App = () => {
             activeTab={activeTab}
             status={displayAnalysisStatus}
             playbackState={runtimeState.playbackState}
-            chunksScanned={runtimeState.chunksScanned}
             lastScannedTimestamp={runtimeState.lastScannedTimestamp}
-            cards={runtimeState.allSourceCards}
+            cards={headerCards}
             selectedModel={effectiveSelectedModel}
-            heroState={heroState}
+            livePhase={liveFlow.livePhase}
+            liveStripCopy={liveFlow.headerStripCopy}
           />
+          {runtimeState.currentVideo.sourceContext?.visibility === 'private' && (
+            <div className="mx-3 mt-2 flex items-center gap-2 rounded-md border border-sc-border-soft/60 bg-sc-surface-1/50 px-3 py-2">
+              <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-sc-muted/70">Private session</span>
+              <span className="text-[10px] text-sc-muted/60">— claims and captions are not saved.</span>
+            </div>
+          )}
           <CardFeed
             cards={runtimeState.sourceCards}
-            allCards={runtimeState.allSourceCards}
-            pendingClaims={runtimeState.pendingClaims}
+            allCards={cardHistory}
             status={displayAnalysisStatus}
+            livePhase={liveFlow.livePhase}
+            readingVariant={liveFlow.readingVariant}
+            readingPreview={liveFlow.readingPreview}
+            readingTimestamp={liveFlow.readingTimestamp}
+            stageEntries={liveFlow.stageEntries}
+            dockedKeys={liveFlow.dockedKeys}
+            recentChecks={liveFlow.recentChecks}
+            queuedCount={liveFlow.queuedCount}
+            showLiveCheckLabel={liveFlow.showLiveCheckLabel}
             isPinned={isFeedPinned}
             pinToTop={pinFeedToTop}
             chunksScanned={runtimeState.chunksScanned}
-            lastScannedTimestamp={runtimeState.lastScannedTimestamp}
-            currentScanPreview={runtimeState.currentScanPreview}
-            scanEntities={runtimeState.currentScanEntities}
-            scanActionState={runtimeState.currentScanActionState}
-            scanReason={runtimeState.currentScanReason}
-            liveTimestampSeconds={runtimeState.playbackState?.currentTime ?? null}
             askHistory={askHistory}
-            onEntitySelect={handleEntitySelect}
             onRetryTranscript={handleRetryTranscript}
+            onClearHistory={clearCardHistory}
             activeTab={activeTab}
             selectedModel={effectiveSelectedModel}
-            onHeroStateChange={setHeroState}
           />
         </div>
-        {activeTab === 'live' && (
-          <AskBox
-            transcript={transcript}
-            cards={runtimeState.sourceCards}
-            queryDraft={askDraft}
-            onQueryDraftChange={setAskDraft}
-            isThinking={isThinking}
-            onSubmit={handleAskSubmit}
-            error={askError}
-          />
-        )}
+        <AskBox
+          transcript={transcript}
+          cards={runtimeState.sourceCards}
+          queryDraft={askDraft}
+          onQueryDraftChange={(v) => { setAskDraft(v); if (askError) setAskError(null); }}
+          isThinking={isThinking}
+          onSubmit={handleAskSubmit}
+          error={askError}
+        />
       </div>
     </div>
   );

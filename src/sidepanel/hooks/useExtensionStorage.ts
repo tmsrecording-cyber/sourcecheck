@@ -114,7 +114,8 @@ export const useExtensionStorage = () => {
     // against the latest React state, without dropping unmodified keys.
     const pendingUpdates = {
       runtimeStateUpdaters: [] as Array<(prev: WorkerRuntimeState) => WorkerRuntimeState>,
-      transcript: null as TranscriptChunk[] | null,
+      // undefined = no pending update; null = pending clear; T[] = pending set
+      transcript: undefined as TranscriptChunk[] | null | undefined,
     };
 
     let debounceTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -133,9 +134,9 @@ export const useExtensionStorage = () => {
         pendingUpdates.runtimeStateUpdaters = [];
       }
       
-      if (pendingUpdates.transcript !== null) {
+      if (pendingUpdates.transcript !== undefined) {
         setTranscript(pendingUpdates.transcript);
-        pendingUpdates.transcript = null;
+        pendingUpdates.transcript = undefined;
       }
       
       debounceTimeout = null;
@@ -208,12 +209,9 @@ export const useExtensionStorage = () => {
     chrome.storage.onChanged.addListener(listener);
 
     return () => {
-      didDispose = true;
       chrome.storage.onChanged.removeListener(listener);
-      if (debounceTimeout !== null) {
-        clearTimeout(debounceTimeout);
-        flushPendingUpdates();
-      }
+      if (debounceTimeout !== null) clearTimeout(debounceTimeout);
+      didDispose = true;
     };
   }, []);
 

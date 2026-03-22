@@ -74,7 +74,7 @@ export const AskResponseCard = ({
                 ) : (
                   <p
                     key={`${source.title}-${index}`}
-                    className="ask-card-source-copy truncate text-[11px] text-textMuted/78"
+                    className="ask-card-source-copy truncate text-[11px] text-sc-muted/78"
                   >
                     {source.title}
                   </p>

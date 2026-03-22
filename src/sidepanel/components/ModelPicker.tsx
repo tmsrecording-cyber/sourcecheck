@@ -23,20 +23,11 @@ const ModelIcon = ({ model, size = 12 }: { model: GeminiModelOption; size?: numb
       </svg>
     );
   }
-  if (model === 'gemini-2.5-flash') {
-    // Hexagon — solid, reliable, the dependable standard
-    return (
-      <svg width={size} height={size} viewBox="0 0 12 12" fill="none" aria-hidden="true">
-        <path d="M6 1.5L9.8 3.75V8.25L6 10.5L2.2 8.25V3.75L6 1.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-        <circle cx="6" cy="6" r="1.2" fill="currentColor" />
-      </svg>
-    );
-  }
-  // gemini-3-flash-preview — 4-point star (Gemini mark), most capable / experimental
+  // gemini-2.5-flash — Hexagon: solid, reliable, the dependable standard
   return (
     <svg width={size} height={size} viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path d="M6 1C6 1 6.6 4.4 9 6C6.6 7.6 6 11 6 11C6 11 5.4 7.6 3 6C5.4 4.4 6 1 6 1Z" fill="currentColor" />
-      <path d="M1 6C1 6 4.4 6.6 6 9C7.6 6.6 11 6 11 6C11 6 7.6 5.4 6 3C4.4 5.4 1 6 1 6Z" fill="currentColor" />
+      <path d="M6 1.5L9.8 3.75V8.25L6 10.5L2.2 8.25V3.75L6 1.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <circle cx="6" cy="6" r="1.2" fill="currentColor" />
     </svg>
   );
 };
@@ -45,14 +36,12 @@ const ModelIcon = ({ model, size = 12 }: { model: GeminiModelOption; size?: numb
 const MODEL_LABELS: Record<GeminiModelOption, string> = {
   'gemini-3.1-flash-lite-preview': 'Flash 3.1 Lite',
   'gemini-2.5-flash': 'Flash 2.5',
-  'gemini-3-flash-preview': 'Flash 3 Preview',
 };
 
 /** Compact labels for header - short enough to fit the side panel comfortably */
 const COMPACT_LABELS: Record<GeminiModelOption, string> = {
   'gemini-3.1-flash-lite-preview': '3.1 Lite',
   'gemini-2.5-flash': '2.5 Flash',
-  'gemini-3-flash-preview': '3 Preview',
 };
 
 /** Simple speed tags */
@@ -108,8 +97,33 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
     setIsOpen(false);
   }, [onModelChange]);
 
+  // Freemium users: static badge — no dropdown, no false choice
+  if (!hasCustomKey) {
+    return (
+      <div className={`relative ${compact ? 'w-[128px]' : ''}`} style={pickerStyle}>
+        <div
+          className={`flex items-center rounded-md border bg-sc-surface-1/30 ${compact ? 'h-7 w-full gap-1.5 px-2' : 'h-7 gap-1 px-2'}`}
+          style={{
+            borderColor: 'var(--sc-border-soft)',
+            borderLeftColor: `rgba(${currentTone.rgb}, 0.50)`,
+            borderLeftWidth: '2px',
+          }}
+          title="Add an API key in settings to choose a model"
+        >
+          <span className="flex-shrink-0 opacity-50" style={{ color: currentTone.hex }}>
+            <ModelIcon model={displayModelId} size={compact ? 10 : 11} />
+          </span>
+          <span className={`min-w-0 truncate text-sc-muted/60 ${compact ? 'flex-1 text-[10px] font-medium tracking-[0.02em]' : 'text-[11px]'}`}>
+            {compact ? COMPACT_LABELS[displayModelId] : MODEL_LABELS[displayModelId]}
+          </span>
+          <Lock size={8} className="shrink-0 text-sc-muted/30 ml-0.5" />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div ref={containerRef} className={`relative ${compact ? 'w-[88px]' : ''}`} style={pickerStyle}>
+    <div ref={containerRef} className={`relative ${compact ? 'w-[128px]' : ''}`} style={pickerStyle}>
       {/* Trigger - Compact for header, full for elsewhere */}
       <motion.button
         type="button"
@@ -121,6 +135,8 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
         aria-label="Select AI model"
         style={{
           borderColor: isOpen ? `rgba(${currentTone.rgb}, 0.32)` : 'var(--sc-border-soft)',
+          borderLeftColor: `rgba(${currentTone.rgb}, 0.72)`,
+          borderLeftWidth: '2px',
           background: isOpen
             ? `linear-gradient(180deg, rgba(${currentTone.rgb}, 0.14), rgba(var(--sc-surface-0-rgb), 0.94))`
             : undefined,
@@ -129,33 +145,20 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
             : undefined,
         }}
       >
-        <span
-          className="flex shrink-0 items-center justify-center rounded-md border"
-          style={{
-            width: compact ? '16px' : '18px',
-            height: compact ? '16px' : '18px',
-            borderColor: `rgba(${currentTone.rgb}, 0.24)`,
-            background: `rgba(${currentTone.rgb}, 0.10)`,
-            color: currentTone.hex,
-          }}
-        >
-          <ModelIcon model={displayModelId} size={compact ? 11 : 12} />
+        {/* Icon — no container, just the mark with model color */}
+        <span className="flex-shrink-0 opacity-75" style={{ color: currentTone.hex }}>
+          <ModelIcon model={displayModelId} size={compact ? 10 : 11} />
         </span>
         <span className={`min-w-0 truncate text-sc-text ${compact ? 'flex-1 text-[10px] font-medium tracking-[0.02em]' : 'text-[11px]'}`}>
           {compact ? COMPACT_LABELS[displayModelId] : MODEL_LABELS[displayModelId]}
         </span>
-        {!compact && (
-          <span className="text-[9px] uppercase tracking-wider text-sc-muted">
-            {currentModel?.speed ? SPEED_TAGS[currentModel.speed] : 'Balanced'}
-          </span>
-        )}
-        <ChevronDown size={compact ? 10 : 10} className={`model-picker-chevron shrink-0 text-sc-muted/60 ${isOpen ? 'rotate' : ''}`} />
+        <ChevronDown size={9} className={`model-picker-chevron shrink-0 text-sc-muted/50 ${isOpen ? 'rotate' : ''}`} />
       </motion.button>
 
-      {/* Simple Dropdown - Name + Tag only */}
+      {/* Dropdown */}
       {isOpen && (
         <div
-          className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-[200px] overflow-hidden rounded-lg border border-sc-border/60 bg-sc-surface-0 shadow-lg"
+          className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-[210px] overflow-hidden rounded-lg border border-sc-border/60 bg-sc-surface-0 shadow-lg"
           role="listbox"
           aria-label="Available models"
         >
@@ -172,56 +175,33 @@ export const ModelPicker = ({ selectedModel, onModelChange, hasCustomKey = false
                 aria-selected={isSelected}
                 aria-disabled={locked}
                 onClick={() => !locked && handleSelect(model.id)}
-                className={`flex w-full items-center justify-between gap-3 border-b border-sc-border-soft/60 px-3 py-2.5 text-left transition-colors last:border-b-0 ${locked ? 'cursor-default opacity-50' : 'hover:bg-sc-surface-1'}`}
+                className={`flex w-full items-center gap-3 border-b border-sc-border-soft/40 px-3 py-2 text-left transition-colors last:border-b-0 ${locked ? 'cursor-default opacity-40' : 'hover:bg-sc-surface-1/60'}`}
                 style={isSelected && !locked
                   ? {
-                      background: `linear-gradient(180deg, rgba(${tone.rgb}, 0.10), rgba(var(--sc-surface-0-rgb), 0.94))`,
-                      boxShadow: `inset 0 0 0 1px rgba(${tone.rgb}, 0.16)`,
+                      background: `linear-gradient(90deg, rgba(${tone.rgb}, 0.08), transparent 60%)`,
+                      borderLeft: `2px solid rgba(${tone.rgb}, 0.70)`,
                     }
-                  : undefined}
+                  : { borderLeft: '2px solid transparent' }}
               >
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <span
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: `rgba(${tone.rgb}, 0.24)`,
-                      background: `rgba(${tone.rgb}, 0.10)`,
-                      color: tone.hex,
-                    }}
-                  >
-                    <ModelIcon model={model.id} size={13} />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-[11px] font-medium text-sc-text">
-                      {MODEL_LABELS[model.id]}
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-1.5 text-[9px] uppercase tracking-[0.14em] text-sc-muted/70">
-                      {locked ? (
-                        <>
-                          <Lock size={8} className="shrink-0" />
-                          Requires API key
-                        </>
-                      ) : (
-                        <>
-                          <span
-                            className="h-1.5 w-1.5 rounded-full"
-                            style={{ backgroundColor: tone.hex }}
-                          />
-                          {model.description}
-                        </>
-                      )}
-                    </span>
-                  </span>
+                {/* Tiny icon — model identity mark, no container */}
+                <span className="flex-shrink-0 opacity-80" style={{ color: tone.hex }}>
+                  <ModelIcon model={model.id} size={11} />
                 </span>
-                <span className={`model-speed-badge ${
-                  model.speed === 'fast'
-                    ? 'speed-fast'
-                    : model.speed === 'deep'
-                      ? 'speed-deep'
-                      : 'speed-balanced'
-                }`}>
-                  {SPEED_TAGS[model.speed]}
+
+                {/* Name */}
+                <span className="flex-1 min-w-0 text-[12px] font-medium text-sc-text truncate">
+                  {MODEL_LABELS[model.id]}
+                  {locked && (
+                    <span className="ml-2 text-[9px] font-mono text-sc-muted/50 font-normal tracking-wide">key required</span>
+                  )}
                 </span>
+
+                {/* Speed — monospace, right-aligned, muted */}
+                {!locked && (
+                  <span className="flex-shrink-0 font-mono text-[9px] tracking-[0.06em] text-sc-muted/45">
+                    {SPEED_TAGS[model.speed].toLowerCase()}
+                  </span>
+                )}
               </button>
             );
           })}

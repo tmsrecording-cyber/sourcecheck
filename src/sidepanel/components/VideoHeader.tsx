@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import type { AnalysisStatus, PlaybackState, SourceCard } from '../../../shared/types';
+import type { LivePhase } from '../hooks/useLiveStageFlow';
 import { buildModelCssVars } from '../styles/modelTheme';
 import { formatTime } from '../utils/formatTime';
-import type { HeroSlotState } from './CardFeed';
 
 interface VideoHeaderProps {
   title: string;
@@ -10,12 +11,11 @@ interface VideoHeaderProps {
   activeTab?: 'live' | 'history';
   status?: AnalysisStatus;
   playbackState?: PlaybackState | null;
-  chunksScanned?: number;
   lastScannedTimestamp?: number | null;
   cards?: SourceCard[];
   selectedModel?: string;
-  /** Hero slot state for header sync - keeps header aligned with promoted card */
-  heroState?: HeroSlotState;
+  livePhase?: LivePhase;
+  liveStripCopy?: string | null;
 }
 
 export interface VerificationSummary {
@@ -59,7 +59,7 @@ export const buildVerificationSummary = (cards: SourceCard[]): VerificationSumma
 
   return {
     ...summary,
-    text: `Supported ${summary.supported} • Mixed ${summary.mixed} • Unsupported ${summary.unsupported} • Unverifiable ${summary.unresolved}`,
+    text: `Supported ${summary.supported} · Mixed ${summary.mixed} · Unsupported ${summary.unsupported} · Unverifiable ${summary.unresolved}`,
   };
 };
 
@@ -85,89 +85,51 @@ export const buildHeaderAnchorCopy = (
   }
 };
 
-export const buildStatusLineCopy = (
-  status: AnalysisStatus,
-  hasTranscriptContent: boolean,
-): string | null => {
-  switch (status) {
-    case 'monitoring':
-      return hasTranscriptContent
-        ? 'Listening for checkable claims.'
-        : 'Waiting for a claim worth checking.';
-    case 'verifying':
-      return 'Checking the latest claim.';
-    case 'ready':
-      return 'Checks are up to date.';
-    case 'loading':
-      return 'Loading transcript.';
-    case 'no-transcript':
-      return 'No usable captions were found for this video.';
-    case 'error':
-      return 'Something interrupted verification. Try refreshing the page.';
-    case 'idle':
-    default:
-      return null;
-  }
-};
-
-export const resolveVideoHeaderStatus = (
-  status: AnalysisStatus,
-  heroState?: HeroSlotState,
-): AnalysisStatus => {
-  if (heroState?.mode === 'resolved') {
-    return 'ready';
-  }
-
-  if (heroState?.mode === 'verifying') {
-    return 'verifying';
-  }
-
-  return status;
-};
-
 const STATUS_META: Record<
   AnalysisStatus,
-  {
-    label: string;
-    tone: string;
-    accentClass: string;
-  }
+  { label: string; tone: string }
 > = {
-  idle: {
-    label: 'Idle',
-    tone: 'text-sc-muted',
-    accentClass: 'text-sc-neutral',
-  },
-  loading: {
-    label: 'Loading',
-    tone: 'text-sc-accent-soft',
-    accentClass: 'text-sc-accent-soft',
-  },
-  monitoring: {
-    label: 'Listening',
-    tone: 'text-sc-accent',
-    accentClass: 'text-sc-accent',
-  },
-  verifying: {
-    label: 'Verifying',
-    tone: 'text-sc-partial',
-    accentClass: 'text-sc-partial',
-  },
-  ready: {
-    label: 'Caught up',
-    tone: 'text-sc-muted',
-    accentClass: 'text-sc-supported',
-  },
-  'no-transcript': {
-    label: 'Transcript unavailable',
-    tone: 'text-sc-partial',
-    accentClass: 'text-sc-partial',
-  },
-  error: {
-    label: 'Error',
-    tone: 'text-sc-disputed',
-    accentClass: 'text-sc-disputed',
-  },
+  idle: { label: 'Idle', tone: 'text-sc-muted' },
+  loading: { label: 'Loading', tone: 'text-sc-accent-soft' },
+  monitoring: { label: 'Listening', tone: 'text-sc-accent' },
+  verifying: { label: 'Verifying', tone: 'text-sc-partial' },
+  ready: { label: 'Caught up', tone: 'text-sc-muted' },
+  'no-transcript': { label: 'Unavailable', tone: 'text-sc-partial' },
+  error: { label: 'Error', tone: 'text-sc-disputed' },
+};
+
+const getStatusBadgeStyle = (status: AnalysisStatus) => {
+  const isModelDriven = status === 'loading' || status === 'monitoring' || status === 'verifying';
+
+  if (isModelDriven) {
+    return {
+      borderColor: 'rgba(var(--model-accent-rgb), 0.32)',
+      background: 'linear-gradient(180deg, var(--model-accent-10), rgba(var(--sc-surface-0-rgb), 0.92))',
+      color: 'var(--model-accent-solid)',
+    };
+  }
+  if (status === 'ready') {
+    return {
+      borderColor: 'rgba(var(--sc-supported-rgb), 0.24)',
+      background: 'rgba(var(--sc-supported-rgb), 0.10)',
+      color: 'var(--sc-supported)',
+    };
+  }
+  if (status === 'no-transcript') {
+    return {
+      borderColor: 'rgba(var(--sc-partial-rgb), 0.24)',
+      background: 'rgba(var(--sc-partial-rgb), 0.10)',
+      color: 'var(--sc-partial)',
+    };
+  }
+  if (status === 'error') {
+    return {
+      borderColor: 'rgba(var(--sc-disputed-rgb), 0.24)',
+      background: 'rgba(var(--sc-disputed-rgb), 0.10)',
+      color: 'var(--sc-disputed)',
+    };
+  }
+  return undefined;
 };
 
 export const VideoHeader = ({
@@ -176,81 +138,27 @@ export const VideoHeader = ({
   activeTab = 'live',
   status = 'idle',
   playbackState,
-  chunksScanned = 0,
   lastScannedTimestamp = null,
   cards = [],
   selectedModel,
-  heroState,
+  livePhase = 'idle',
+  liveStripCopy = null,
 }: VideoHeaderProps) => {
   const modelCssVars = buildModelCssVars(selectedModel);
-  const effectiveStatus = useMemo(
-    () => resolveVideoHeaderStatus(status, heroState),
-    [status, heroState],
-  );
-  const isResolvedHero = heroState?.mode === 'resolved';
   const isLiveTab = activeTab === 'live';
-  const displayStatus = effectiveStatus;
-  const statusMeta = STATUS_META[displayStatus];
-  const isModelDrivenStatus = displayStatus === 'loading' || displayStatus === 'monitoring' || displayStatus === 'verifying';
-  const statusBadgeStyle = isResolvedHero
-    ? {
-        borderColor: 'rgba(var(--sc-neutral-rgb), 0.18)',
-        background: 'rgba(var(--sc-surface-1-rgb), 0.72)',
-        color: 'var(--sc-text-soft)',
-      }
-    : isModelDrivenStatus
-    ? {
-        borderColor: 'rgba(var(--model-accent-rgb), 0.32)',
-        background: 'linear-gradient(180deg, var(--model-accent-10), rgba(var(--sc-surface-0-rgb), 0.92))',
-        color: 'var(--model-accent-solid)',
-      }
-    : displayStatus === 'ready'
-      ? {
-          borderColor: 'rgba(var(--sc-supported-rgb), 0.24)',
-          background: 'rgba(var(--sc-supported-rgb), 0.10)',
-          color: 'var(--sc-supported)',
-        }
-      : displayStatus === 'no-transcript'
-        ? {
-            borderColor: 'rgba(var(--sc-partial-rgb), 0.24)',
-            background: 'rgba(var(--sc-partial-rgb), 0.10)',
-            color: 'var(--sc-partial)',
-          }
-        : displayStatus === 'error'
-          ? {
-              borderColor: 'rgba(var(--sc-disputed-rgb), 0.24)',
-              background: 'rgba(var(--sc-disputed-rgb), 0.10)',
-              color: 'var(--sc-disputed)',
-            }
-          : undefined;
-  const verificationSummary = useMemo(() => buildVerificationSummary(cards), [cards]);
+  const statusMeta = STATUS_META[status];
+  const isScanning = status === 'monitoring' || status === 'verifying';
+  const statusBadgeStyle = getStatusBadgeStyle(status);
 
-  const isScanning = !isResolvedHero && (displayStatus === 'monitoring' || displayStatus === 'verifying');
-  const anchorTime = isResolvedHero
-    ? heroState.card.timestampSeconds
-    : isScanning
+  const verificationSummary = useMemo(() => buildVerificationSummary(cards), [cards]);
+  const showSummary = !isLiveTab && verificationSummary;
+
+  const anchorTime = isScanning
     ? playbackState?.currentTime ?? lastScannedTimestamp ?? null
     : lastScannedTimestamp ?? playbackState?.currentTime ?? null;
 
-  const heroAwareCopy = useMemo(() => {
-    if (heroState?.mode === 'resolved') {
-      return { anchor: `Checked at ${formatTime(heroState.card.timestampSeconds)}` };
-    }
-    if (heroState?.mode === 'verifying') {
-      return { anchor: anchorTime !== null ? `Checking at ${formatTime(anchorTime)}` : 'Checking now' };
-    }
-    return null;
-  }, [heroState, anchorTime]);
-
-  const anchorCopy = heroAwareCopy?.anchor ?? buildHeaderAnchorCopy(displayStatus, anchorTime);
-  const statusBadgeLabel = !isLiveTab
-    ? isResolvedHero
-      ? 'Just checked'
-      : heroState?.mode === 'verifying'
-        ? 'Verifying'
-        : statusMeta.label
-    : null;
-  const showSummary = !isLiveTab && verificationSummary;
+  const anchorCopy = buildHeaderAnchorCopy(status, anchorTime);
+  const stripCopy = liveStripCopy;
 
   return (
     <header
@@ -274,11 +182,10 @@ export const VideoHeader = ({
           </h1>
         </div>
 
-        {statusBadgeLabel && (
+        {!isLiveTab && (
           <div
             className={[
               'video-header-status-badge px-2 py-0.5 rounded font-mono text-[9px] font-bold tracking-[0.08em] uppercase bg-sc-surface-2 border border-sc-border-soft/80 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]',
-              isResolvedHero ? 'video-header-status-badge-resolved' : '',
               statusMeta.tone,
               isScanning ? 'animate-pulse-glow' : '',
             ].join(' ')}
@@ -287,16 +194,31 @@ export const VideoHeader = ({
               boxShadow: isScanning ? 'var(--model-accent-glow)' : undefined,
             }}
           >
-            {statusBadgeLabel}
+            {statusMeta.label}
           </div>
         )}
       </div>
 
+      {isLiveTab && (
+        <AnimatePresence mode="wait">
+          {stripCopy && (
+            <motion.p
+              key={`${livePhase}-${stripCopy}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="mt-0.5 text-[11px] text-sc-muted/55 tracking-[0.01em]"
+            >
+              {stripCopy}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      )}
+
       {!isLiveTab && (
         <div className="mt-1.5 flex items-center gap-2">
-          <p
-            className={`truncate font-mono uppercase tracking-[0.12em] text-sc-muted ${isResolvedHero ? 'opacity-60' : 'opacity-75'} text-[11px]`}
-          >
+          <p className="truncate font-mono uppercase tracking-[0.12em] text-sc-muted opacity-75 text-[11px]">
             {channel}
             <span className="mx-1.5 opacity-25">·</span>
             {anchorCopy}

@@ -1,0 +1,283 @@
+/**
+ * Visual Integrity Lock
+ *
+ * Guards the design system rules that were deliberately established and must not
+ * silently regress. Each assertion documents *why* the rule exists so future
+ * engineers understand what they are changing if they touch these files.
+ *
+ * Failures here mean a visual regression, not a logic bug — investigate before
+ * reverting. Update the test only when the design is intentionally changed.
+ */
+
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { describe, expect, it } from 'vitest';
+
+const CSS_PATH = resolve(__dirname, '../../src/sidepanel/styles/globals.css');
+const FEED_CARD_PATH = resolve(__dirname, '../../src/sidepanel/components/FeedCard.tsx');
+const MODEL_PICKER_PATH = resolve(__dirname, '../../src/sidepanel/components/ModelPicker.tsx');
+
+const css = readFileSync(CSS_PATH, 'utf8');
+const feedCard = readFileSync(FEED_CARD_PATH, 'utf8');
+const modelPicker = readFileSync(MODEL_PICKER_PATH, 'utf8');
+
+// ── Verifying card ─────────────────────────────────────────────────────────
+// The verifying card shows an elapsed time counter (honest, real signal)
+// instead of a fake step trace. No decorative fake progress steps.
+
+describe('verifying operation trace', () => {
+  it('verifying card uses elapsed timer, not fake step trace', () => {
+    expect(feedCard).toContain('elapsed');
+    expect(feedCard).toContain('status-badge-live');
+    expect(feedCard).not.toContain('verify-trace-step');
+    expect(feedCard).not.toContain('verifying-pips');
+    expect(feedCard).not.toContain('verifying-nodes');
+  });
+});
+
+// ── Rail line: model color + scan animation ────────────────────────────────
+// The vertical left rail uses the selected model's accent colour throughout,
+// making it a live indicator of which model is running. Scanning cards get
+// a travelling bright segment (railScanFlow). Verifying cards get a strong
+// static glow that pulses. Hero/state cards use the verdict colour inline.
+
+describe('rail line model color', () => {
+  it('scanning rail class uses model-accent-rgb CSS variable', () => {
+    const block = css.match(/\.rail-line-scan\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('model-accent-rgb');
+  });
+
+  it('scanning rail has the railScanFlow animation', () => {
+    const block = css.match(/\.rail-line-scan\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('railScanFlow');
+  });
+
+  it('verifying rail class uses model-accent-rgb CSS variable', () => {
+    const block = css.match(/\.rail-line-verify\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('model-accent-rgb');
+  });
+
+  it('verifying rail uses a flowing pipeline animation on ::after', () => {
+    expect(css).toContain('railDataFlow');
+    expect(css).toContain('.rail-line-verify::after');
+  });
+
+  it('FeedCard applies rail-line-scan to scanning cards', () => {
+    expect(feedCard).toContain("rail-line-scan");
+    expect(feedCard).toContain("rail-line-verify");
+  });
+
+  it('base rail-line has no hardcoded opacity that would suppress the colour', () => {
+    // The old opacity: 0.3 was killing the rail visibility.
+    // Gradient stops must control transparency, not a blanket opacity.
+    const railBlock = css.match(/^\.rail-line\s*\{[^}]+\}/ms)?.[0] ?? '';
+    expect(railBlock).not.toContain('opacity: 0.3');
+  });
+});
+
+// ── Verdict-tinted card hover glow ────────────────────────────────────────
+// Hero cards gain a status-coloured border glow on hover so the verdict
+// is communicated through colour before the user reads the text.
+
+describe('verdict-tinted card hover glow', () => {
+  it('applies supported-coloured hover glow', () => {
+    const block = css.match(/\.feed-card\[data-status="supported"\]:hover\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-supported-rgb');
+  });
+
+  it('applies partial-coloured hover glow', () => {
+    const block = css.match(/\.feed-card\[data-status="partial"\]:hover\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-partial-rgb');
+  });
+
+  it('applies disputed-coloured hover glow', () => {
+    const block = css.match(/\.feed-card\[data-status="disputed"\]:hover\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-disputed-rgb');
+  });
+
+  it('applies neutral hover glow for unverifiable', () => {
+    const block = css.match(/\.feed-card\[data-status="unverifiable"\]:hover\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-neutral-rgb');
+  });
+});
+
+// ── Status icon character ──────────────────────────────────────────────────
+// Each verdict icon must carry deliberate visual meaning:
+//   supported  — heavier checkmark (strokeWidth ≥ 2)
+//   partial    — two offset parallel lines (mixed-signal metaphor)
+//   disputed   — bold X
+//   unverifiable — dashed circle + slash (null/void symbol, not a plain dot)
+
+describe('status icon visual character', () => {
+  it('partial icon has two path elements (two offset lines)', () => {
+    // Two separate <path> elements inside the partial icon svg
+    const partialBlock = feedCard.match(/partial:\s*\(\s*<svg[^>]*>[\s\S]*?<\/svg>\s*\)/)?.[0] ?? '';
+    const pathCount = (partialBlock.match(/<path /g) ?? []).length;
+    expect(pathCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it('unverifiable icon has a circle and a slash, not just a filled dot', () => {
+    const uvBlock = feedCard.match(/unverifiable:\s*\(\s*<svg[^>]*>[\s\S]*?<\/svg>\s*\)/)?.[0] ?? '';
+    // Must have a circle element (the dashed ring)
+    expect(uvBlock).toContain('<circle');
+    // Must have a path element (the diagonal slash)
+    expect(uvBlock).toContain('<path');
+    // Must NOT be a plain filled circle (fill="currentColor" with no stroke)
+    expect(uvBlock).not.toMatch(/<circle[^>]+fill="currentColor"[^>]*\/>/);
+  });
+
+  it('supported icon uses a heavier stroke than the old baseline', () => {
+    const supportedBlock = feedCard.match(/supported:\s*\(\s*<svg[^>]*>[\s\S]*?<\/svg>\s*\)/)?.[0] ?? '';
+    const swMatch = supportedBlock.match(/strokeWidth=\{([^}]+)\}/);
+    // sw is a variable (sw), not a literal — check that sw is derived from size
+    // and the formula yields ≥ 2 for normal size
+    expect(supportedBlock).toContain('strokeWidth={sw}');
+    // Verify sw is defined as ≥ 2 for normal size
+    expect(feedCard).toMatch(/const sw = size === 'small' \? 1\.\d+ : 2\.\d+/);
+  });
+});
+
+// ── Scanning card hover ────────────────────────────────────────────────────
+// The scanning card participates in hover lift like hero/verifying cards.
+// It uses the compact (subtler) lift preset since it is not tappable.
+
+describe('scanning card hover', () => {
+  it('scanning size is not classified as a passive card', () => {
+    // isPassiveCard must not include 'scanning'
+    const passiveCardLine = feedCard.match(/const isPassiveCard = [^;]+;/)?.[0] ?? '';
+    expect(passiveCardLine).not.toContain("'scanning'");
+  });
+
+  it('scanning card gets the compact hover lift preset', () => {
+    // The whileHover branch must route scanning to hoverLiftCompact
+    const hoverBlock = feedCard.match(/whileHover=\{[\s\S]*?whileTap=/)?.[0] ?? '';
+    expect(hoverBlock).toContain('isScanning');
+    expect(hoverBlock).toContain('hoverLiftCompact');
+  });
+});
+
+// ── Model picker compact trigger ───────────────────────────────────────────
+// The compact trigger must be wide enough to display model labels without
+// truncation and must carry a left-border accent in the model's tone colour.
+
+describe('model picker compact trigger', () => {
+  it('compact container is at least 108px wide', () => {
+    const widthMatch = modelPicker.match(/w-\[(\d+)px\]/)?.[1] ?? '0';
+    expect(parseInt(widthMatch, 10)).toBeGreaterThanOrEqual(108);
+  });
+
+  it('compact trigger has a left-border accent in the model tone colour', () => {
+    expect(modelPicker).toContain('borderLeftColor');
+    expect(modelPicker).toContain('currentTone.rgb');
+  });
+});
+
+// ── Seen-before memory badge ───────────────────────────────────────────────
+// The memory badge is metadata, not live state. It must stay semantically
+// stable and must not inherit the current model accent or verdict colour.
+
+describe('seen-before memory badge', () => {
+  it('compact memory chip does not use model-accent-rgb', () => {
+    const block = css.match(/\.compact-memory-chip\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).not.toContain('model-accent-rgb');
+  });
+
+  it('compact memory chip uses neutral surface and border tokens', () => {
+    const block = css.match(/\.compact-memory-chip\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-border-rgb');
+    expect(block).toContain('sc-surface-1-rgb');
+    expect(block).toContain('sc-surface-0-rgb');
+  });
+});
+
+// ── M6: Scanning card activity pulse bar ─────────────────────────────────
+// The scanning card uses animated pulse bars to visualize data-stream activity.
+// Each bar represents a segment being processed. This is the "alive" signal.
+
+describe('scanning card activity visualization', () => {
+  it('FeedCard contains ScanPulseBar component with pulse segments', () => {
+    expect(feedCard).toContain('scan-pulse-bar');
+    expect(feedCard).toContain('scan-pulse-segment');
+  });
+
+  it('CSS defines scanPulseWave keyframe animation', () => {
+    expect(css).toContain('@keyframes scanPulseWave');
+    expect(css).toContain('.scan-pulse-segment');
+  });
+
+  it('scanPulseWave uses scaleY (compositor-only) not height (layout-triggering)', () => {
+    const keyframeBlock = css.match(/@keyframes scanPulseWave\s*\{[^}]+\}/s)?.[0] ?? '';
+    // Must use transform: scaleY — height animation triggers layout + paint on every frame
+    expect(keyframeBlock).toContain('scaleY');
+    expect(keyframeBlock).not.toMatch(/\bheight\b/);
+  });
+
+  it('pulse bar has an active variant for VERIFYING state', () => {
+    expect(css).toContain('.scan-pulse-bar-active');
+    expect(feedCard).toContain('scan-pulse-bar-active');
+  });
+});
+
+// ── M6: Verdict-tinted compact card backgrounds ──────────────────────────
+// Compact cards carry a subtle background tint from their verdict colour.
+// This creates a colour-coded hierarchy when scanning multiple cards.
+
+describe('verdict-tinted compact card backgrounds', () => {
+  it('supported compact cards have a green-tinted background', () => {
+    const block = css.match(/\.feed-card-compact\[data-status="supported"\]\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-supported-rgb');
+  });
+
+  it('partial compact cards have a yellow-tinted background', () => {
+    const block = css.match(/\.feed-card-compact\[data-status="partial"\]\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-partial-rgb');
+  });
+
+  it('disputed compact cards have a red-tinted background', () => {
+    const block = css.match(/\.feed-card-compact\[data-status="disputed"\]\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('sc-disputed-rgb');
+  });
+});
+
+// ── M6: Section label structural anchoring ───────────────────────────────
+// Section labels ("Live Check", "Recent checks") have a horizontal rule
+// prefix that visually connects them to the rail system.
+
+describe('section label anchoring', () => {
+  it('CSS defines stage-section-rule structural element', () => {
+    const block = css.match(/\.stage-section-rule\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('width');
+    expect(block).toContain('height');
+  });
+
+  it('CSS defines stage-section-row flex container', () => {
+    const block = css.match(/\.stage-section-row\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('display');
+    expect(block).toContain('flex');
+  });
+});
+
+// ── M6: Ambient heartbeat animation ──────────────────────────────────────
+// The idle/waiting state shows a breathing heartbeat animation so the panel
+// never looks dead when monitoring is active but no claim is being checked.
+
+describe('ambient heartbeat animation', () => {
+  it('CSS defines ambientHeartbeat keyframe', () => {
+    expect(css).toContain('@keyframes ambientHeartbeat');
+  });
+
+  it('CSS defines animate-heartbeat utility class', () => {
+    expect(css).toContain('.animate-heartbeat');
+  });
+});
+
+// ── M6: Rail node baseline glow ──────────────────────────────────────────
+// All rail nodes have a subtle baseline glow so they are visible on the
+// dark background without requiring the glow variant.
+
+describe('rail node visibility', () => {
+  it('rail nodes scale on card hover', () => {
+    expect(css).toContain('.feed-card-wrapper:hover .rail-node');
+    expect(css).toContain('scale(1.15)');
+  });
+});

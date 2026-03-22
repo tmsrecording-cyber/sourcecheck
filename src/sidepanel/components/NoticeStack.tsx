@@ -15,7 +15,7 @@ const NOTICE_TONES = {
     icon: CheckCircle2,
   },
   warning: {
-    rgb: '242, 201, 76',
+    rgb: '253, 226, 147',
     icon: Info,
   },
 } as const;

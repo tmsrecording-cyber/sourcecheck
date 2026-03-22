@@ -1,12 +1,18 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Key, Eye, EyeOff, CheckCircle2, AlertCircle, ExternalLink, ArrowLeft } from 'lucide-react';
-import { PROVIDER_SETTINGS_KEY, GEMINI_MODELS, DEFAULT_GEMINI_MODEL, FREEMIUM_MODEL, getStoredProviderApiKey, normalizeModel, type GeminiModelOption } from '../../background/providers/types';
-import { getModelTone } from '../styles/modelTheme';
+import { 
+  PROVIDER_SETTINGS_KEY,
+  PROVIDER_SETTINGS_SESSION_KEY, 
+  PROVIDER_SETTINGS_LOCAL_KEY, 
+  PROVIDER_REMEMBER_KEY,
+  FREEMIUM_MODEL, 
+  getStoredProviderApiKey,
+  getRememberKeyPreference,
+} from '../../background/providers/types';
 
 interface SettingsPanelProps {
   onSaved: () => void;
   lastError?: { code?: string; message?: string } | null;
-  effectiveModel?: string;
 }
 
 type KeyStatus = 'missing' | 'present' | 'invalid' | 'quota_exhausted';
@@ -22,15 +28,6 @@ interface TroubleshootingGuide {
   link?: { text: string; url: string };
 }
 
-/** 
- * Display labels for BYOK model selector.
- * These are the three allowed models for Bring Your Own Key mode.
- */
-const MODEL_LABELS: Record<GeminiModelOption, string> = {
-  'gemini-2.5-flash': 'Gemini 2.5 Flash',
-  'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite',
-  'gemini-3-flash-preview': 'Gemini 3 Flash Preview',
-};
 
 const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; rgb: string; icon: React.ReactNode }> = {
   missing: {
@@ -59,14 +56,14 @@ const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; rgb: stri
   },
 };
 
-export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPanelProps) => {
+export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<GeminiModelOption>(DEFAULT_GEMINI_MODEL);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
   const [storedKeyLast4, setStoredKeyLast4] = useState<string | null>(null);
+  const [rememberKey, setRememberKey] = useState(false);
 
   // Derive keyStatus from hasStoredKey + lastError (always fresh, never stale)
   const keyStatus: KeyStatus = useMemo(() => {
@@ -148,28 +145,60 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
   };
 
   useEffect(() => {
-    // CANONICAL: Read API key from local, model from sync (single source of truth)
+    // Session-first storage: read from session, fallback to local
     Promise.all([
       new Promise<void>((resolve) => {
-        chrome.storage.local.get([PROVIDER_SETTINGS_KEY], (result) => {
+        // Check session first (current browser session)
+        chrome.storage.session.get([PROVIDER_SETTINGS_SESSION_KEY], (sessionResult) => {
           if (chrome.runtime.lastError) {
-            resolve();
+            // Fallback to local on error
+            checkLocalStorage();
             return;
           }
-          const stored = result[PROVIDER_SETTINGS_KEY];
-          if (!stored || typeof stored !== 'object') {
-            resolve();
-            return;
-          }
-
-          const key = getStoredProviderApiKey(stored);
-          if (key) {
-            setStoredKeyLast4(key.slice(-4));
+          
+          const sessionStored = sessionResult[PROVIDER_SETTINGS_SESSION_KEY];
+          const sessionKey = getStoredProviderApiKey(sessionStored);
+          
+          if (sessionKey) {
+            setStoredKeyLast4(sessionKey.slice(-4));
             setHasStoredKey(true);
+            // Also load remember preference
+            void getRememberKeyPreference().then(setRememberKey);
+            resolve();
           } else {
-            setHasStoredKey(false);
+            // Fallback to local storage
+            checkLocalStorage();
           }
-          resolve();
+          
+          function checkLocalStorage() {
+            chrome.storage.local.get([PROVIDER_SETTINGS_LOCAL_KEY, PROVIDER_SETTINGS_KEY], (localResult) => {
+              // Check new local key first
+              const localStored = localResult[PROVIDER_SETTINGS_LOCAL_KEY];
+              const localKey = getStoredProviderApiKey(localStored);
+              
+              if (localKey) {
+                setStoredKeyLast4(localKey.slice(-4));
+                setHasStoredKey(true);
+                void getRememberKeyPreference().then(setRememberKey);
+                resolve();
+                return;
+              }
+              
+              // Legacy fallback: old key format
+              const legacyStored = localResult[PROVIDER_SETTINGS_KEY];
+              const legacyKey = getStoredProviderApiKey(legacyStored);
+              
+              if (legacyKey) {
+                setStoredKeyLast4(legacyKey.slice(-4));
+                setHasStoredKey(true);
+                setRememberKey(true); // Legacy assumed remember=true
+              } else {
+                setHasStoredKey(false);
+                setRememberKey(false);
+              }
+              resolve();
+            });
+          }
         });
       }),
       // Note: Model is now passed via effectiveModel prop from runtimeState
@@ -196,10 +225,28 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
     setError(null);
 
     try {
-      // CANONICAL: Write API key to local (model is managed from header picker)
-      await chrome.storage.local.set({
-        [PROVIDER_SETTINGS_KEY]: { provider: 'gemini', apiKey: trimmed },
+      // Session-first storage: always write to session, conditionally to local
+      const settings = { provider: 'gemini', apiKey: trimmed };
+      
+      // Always save to session (current browser session)
+      await chrome.storage.session.set({
+        [PROVIDER_SETTINGS_SESSION_KEY]: settings,
       });
+      
+      // Save to local only if "Remember key" is enabled
+      if (rememberKey) {
+        await chrome.storage.local.set({
+          [PROVIDER_SETTINGS_LOCAL_KEY]: settings,
+          [PROVIDER_REMEMBER_KEY]: true,
+        });
+      } else {
+        // If not remembering, clear any existing local copy
+        await chrome.storage.local.remove([PROVIDER_SETTINGS_LOCAL_KEY, PROVIDER_REMEMBER_KEY]);
+      }
+      
+      // Clean up legacy key if present
+      await chrome.storage.local.remove(PROVIDER_SETTINGS_KEY);
+      
       setHasStoredKey(true);
       setStoredKeyLast4(trimmed.slice(-4));
       setApiKey('');
@@ -214,12 +261,14 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
 
   const handleClearKey = async () => {
     try {
-      await chrome.storage.local.remove(PROVIDER_SETTINGS_KEY);
+      // Clear from both session and local storage
+      await chrome.storage.session.remove(PROVIDER_SETTINGS_SESSION_KEY);
+      await chrome.storage.local.remove([PROVIDER_SETTINGS_LOCAL_KEY, PROVIDER_REMEMBER_KEY, PROVIDER_SETTINGS_KEY]);
       await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model: FREEMIUM_MODEL }).catch(() => {});
       setHasStoredKey(false);
       setStoredKeyLast4(null);
-      setSelectedModel(FREEMIUM_MODEL);
       setApiKey('');
+      setRememberKey(false);
     } catch (err) {
       console.error('[SourceCheck/UI] Failed to clear provider settings:', err);
     }
@@ -231,7 +280,6 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
 
   const currentStatus = keyStatus;
   const statusConfig = STATUS_CONFIG[currentStatus];
-  const effectiveModelTone = getModelTone(effectiveModel || selectedModel);
 
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-sc-bg-0 px-5 font-sc">
@@ -276,7 +324,7 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
               </div>
               <p className="mt-2 text-[13px] leading-relaxed text-sc-text-soft">
                 {keyStatus === 'missing' 
-                  ? 'Add your Google AI Studio key to use your own Gemini quota and unlock model selection.'
+                  ? 'SourceCheck works without a key using managed quota. Add your own Google AI Studio key to use your own Gemini quota and unlock model selection.'
                   : keyStatus === 'present'
                   ? 'Your API key is saved. SourceCheck will use your Gemini quota for BYOK requests.'
                   : keyStatus === 'invalid'
@@ -323,30 +371,30 @@ export const SettingsPanel = ({ onSaved, lastError, effectiveModel }: SettingsPa
                   </button>
                 </div>
 
-                <div>
-                  <label className="mb-1 block text-[11px] font-medium text-sc-muted">Model</label>
-                  <div
-                    className="flex w-full items-center gap-2 rounded border bg-sc-surface-1 px-3 py-2 text-[13px] text-sc-text-soft"
-                    style={{ borderColor: `rgba(${effectiveModelTone.rgb}, 0.22)` }}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: effectiveModelTone.hex }}
-                    />
-                    {/* Show effective model (what server is actually using) */}
-                    {MODEL_LABELS[effectiveModel as GeminiModelOption] || MODEL_LABELS[selectedModel]}
-                  </div>
-                  <p className="mt-1 text-[11px] text-sc-muted">
-                    Change this from the top bar.
-                  </p>
-                </div>
-
                 {error && (
                   <div className="flex items-start gap-2 rounded border border-sc-disputed/30 bg-sc-disputed/10 px-3 py-2">
                     <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-sc-disputed" />
                     <p className="text-[12px] leading-relaxed text-sc-disputed">{error}</p>
                   </div>
                 )}
+                {/* Remember key toggle */}
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rememberKey}
+                    onChange={(e) => setRememberKey(e.target.checked)}
+                    className="rounded border-sc-border bg-sc-bg-1 text-sc-accent-soft focus:ring-sc-accent-soft"
+                  />
+                  <span className="text-[12px] text-sc-text-soft">
+                    Remember key across browser sessions
+                  </span>
+                </label>
+                <p className="text-[11px] text-sc-muted">
+                  {rememberKey 
+                    ? 'Key will persist after browser restarts.' 
+                    : 'Key is cleared when you close the browser (recommended).'}
+                </p>
+
                 <button
                   onClick={() => void handleSave()}
                   disabled={saving || !apiKey.trim()}

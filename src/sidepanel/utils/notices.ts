@@ -20,7 +20,6 @@ export interface PendingSidepanelNotice extends Omit<SidepanelNotice, 'id'> {
 const MODEL_LABELS: Record<GeminiModelOption, string> = {
   'gemini-2.5-flash': 'Flash 2.5',
   'gemini-3.1-flash-lite-preview': 'Flash 3.1 Lite',
-  'gemini-3-flash-preview': 'Flash 3 Preview',
 };
 
 export const buildSettingsSavedNotice = (): PendingSidepanelNotice => ({

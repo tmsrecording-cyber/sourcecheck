@@ -55,7 +55,7 @@ const evidenceCard: SourceCard = {
 };
 
 describe('FeedCard variants', () => {
-  it('renders compact cards with compressed secondary metadata', () => {
+  it('renders compact cards with reasoning and source visible', () => {
     const html = renderToStaticMarkup(
       <FeedCard
         size="compact"
@@ -65,10 +65,11 @@ describe('FeedCard variants', () => {
     );
 
     expect(html).toContain('feed-card-compact');
-    expect(html).toContain('compact-secondary-text');
-    // 'Needs primary source' is a backend placeholder — filtered out; compact fallback shows claim text
+    // Reasoning text element is always present
+    expect(html).toContain('compact-reasoning-text');
+    // Boilerplate nuance ("This likely needs a paper...") falls back to the actual claim text
     expect(html).toContain('Federal Records Act');
-    expect(html).toContain('Unverifiable');
+    expect(html).toContain('Cannot verify');
   });
 
   it('surfaces seen-before context when cross-video memory is available', () => {
@@ -117,7 +118,8 @@ describe('FeedCard variants', () => {
     expect(heroHtml).toContain('noopener noreferrer');
     expect(heroHtml).toContain('↗');
 
-    expect(compactHtml).toContain('compact-expanded-source-link');
+    // Compact card now shows source always visible (not just expanded), with compact-source-link class
+    expect(compactHtml).toContain('compact-source-link');
     expect(compactHtml).toContain('href="https://www.federalregister.gov/example"');
     expect(compactHtml).toContain('↗');
   });
@@ -177,44 +179,54 @@ describe('FeedCard variants', () => {
     expect(html).toContain('class="skeleton');
   });
 
-  it('keeps the passive stack tail scoped to live feed composition', () => {
-    const card2 = { ...baseCard, id: 'card-2', timestampSeconds: 120 };
-
-    // With only 1 card (hero) + ambient scan card and no older cards, the tail
-    // is suppressed to avoid dead space below the ambient scanning card.
-    const liveNoOlderCardsHtml = renderToStaticMarkup(
-      <CardFeed
-        cards={[baseCard]}
-        pendingClaims={[]}
-        status="ready"
-        activeTab="live"
-      />,
-    );
-    expect(liveNoOlderCardsHtml).not.toContain('feed-stack-tail');
-    // Ambient scanning card should appear instead
-    expect(liveNoOlderCardsHtml).toContain('feed-card-scanning');
-
-    // With older cards present the tail reappears to hint at depth.
-    const liveWithOlderCardsHtml = renderToStaticMarkup(
-      <CardFeed
-        cards={[baseCard, card2]}
-        pendingClaims={[]}
-        status="ready"
-        activeTab="live"
-      />,
-    );
-    expect(liveWithOlderCardsHtml).toContain('feed-stack-tail');
-
-    // History never shows the stack tail.
-    const historyHtml = renderToStaticMarkup(
+  it('live feed renders the quiet reading strip above recent checks', () => {
+    const html = renderToStaticMarkup(
       <CardFeed
         cards={[baseCard]}
         allCards={[baseCard]}
-        pendingClaims={[]}
+        recentChecks={[baseCard]}
+        status="monitoring"
+        livePhase="reading"
+        readingVariant="preview"
+        readingPreview="A pending claim being verified"
+        readingTimestamp={100}
+        activeTab="live"
+      />,
+    );
+    expect(html).toContain('feed-card-scanning');
+    // Scanning card contains pulse bar activity visualization
+    expect(html).toContain('scan-pulse-bar');
+    expect(html).toContain('scan-pulse-segment');
+    // preview text is intentionally suppressed in ambient reading mode (teleprompter fix)
+    expect(html).not.toContain('A pending claim being verified');
+    expect(html).toContain('feed-card-compact');
+    expect(html).not.toContain('feed-card-hero');
+  });
+
+  it('resolved cards appear in both live and history tabs', () => {
+    const card2 = { ...baseCard, id: 'card-2', timestampSeconds: 120 };
+
+    // Live tab shows resolved cards as compact — nothing vanishes
+    const liveHtml = renderToStaticMarkup(
+      <CardFeed
+        cards={[baseCard, card2]}
+        allCards={[baseCard, card2]}
+        recentChecks={[baseCard, card2]}
+        status="ready"
+        activeTab="live"
+      />,
+    );
+    expect(liveHtml).toContain('feed-card-compact');
+
+    // History tab shows the same cards
+    const historyHtml = renderToStaticMarkup(
+      <CardFeed
+        cards={[baseCard, card2]}
+        allCards={[baseCard, card2]}
         status="ready"
         activeTab="history"
       />,
     );
-    expect(historyHtml).not.toContain('feed-stack-tail');
+    expect(historyHtml).toContain('feed-card-compact');
   });
 });

@@ -40,7 +40,7 @@ import {
   shouldShowSettings,
   type ClassifiedError,
 } from './utils/api';
-import { PROVIDER_SETTINGS_KEY, getStoredProviderApiKey } from './providers/types';
+import { readProviderApiKey } from './providers/types';
 import {
   isMetadataOnlyVideoChange,
   shouldPreserveStateOnRefresh,
@@ -173,6 +173,54 @@ let lastAnalyzedAt = 0;
 let persistDebounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 let pendingPersistOptions: { includeTranscript?: boolean; includeCards?: boolean; includeQueue?: boolean } = {};
 const PERSIST_DEBOUNCE_MS = 250; // Batch rapid state changes into single write
+
+// MILESTONE 2: Dirty-checking to skip unnecessary persistence
+// Tracks last persisted state to avoid writing identical data
+let lastPersistedSnapshot: string | null = null;
+let persistSkipCount = 0;
+let persistWriteCount = 0;
+
+/**
+ * Compute a fast hash/snapshot of state that matters for persistence.
+ * Used to skip writes when nothing meaningful has changed.
+ */
+const computeStateSnapshot = (options: {
+  includeTranscript?: boolean;
+  includeCards?: boolean;
+  includeQueue?: boolean;
+} = {}): string => {
+  const parts: (string | number)[] = [
+    runtimeState.lifecycle,
+    runtimeState.currentVideo?.videoId ?? 'null',
+    runtimeState.transcriptChunkCount,
+    runtimeState.chunksScanned,
+    runtimeState.lastProcessedIndex,
+    runtimeState.pendingClaims.length,
+    runtimeState.sourceCards.length,
+    runtimeState.allSourceCards.length,
+    verificationQueue.length,
+    currentVideoInfo?.videoId ?? 'null',
+    currentPlaybackState?.currentTime ?? 0,
+    currentPlaybackState?.paused ? 1 : 0,
+  ];
+  
+  if (options.includeCards) {
+    parts.push(
+      runtimeState.sourceCards.map(c => c.id).join(','),
+      runtimeState.pendingClaims.map(p => p.id).join(',')
+    );
+  }
+  
+  if (options.includeQueue) {
+    parts.push(verificationQueue.map(v => v.key).join(','));
+  }
+  
+  if (options.includeTranscript) {
+    parts.push(currentTranscript.length);
+  }
+  
+  return parts.join('|');
+};
 
 // STORAGE WRITE SERIALIZATION: Chrome's LevelDB backend rejects concurrent writes.
 // All chrome.storage.session.set calls must go through this queue.
@@ -1261,7 +1309,8 @@ const syncVisibleTimelineState = (currentTime: number | null = currentPlaybackSt
 
 const hasCardForClaim = (claim: Pick<ExtractedClaim, 'claimText' | 'timestampSeconds'>) => {
   const key = getClaimKey(claim);
-  return allSourceCards.some((card) => getClaimKey(card.claim) === key);
+  // Skip transient failure cards — they should not block re-verification attempts.
+  return allSourceCards.some((card) => !card.isTransientFailure && getClaimKey(card.claim) === key);
 };
 
 const hasPendingClaim = (claim: Pick<ExtractedClaim, 'claimText' | 'timestampSeconds'>) => {
@@ -1698,6 +1747,12 @@ const dumpMetrics = () => {
     cardsAppended: metricsAccumulator.cardsAppended,
     finalVisibleCards: sourceCards.length,
     skipReasons: metricsAccumulator.skipReasons,
+    // MILESTONE 2: Persistence performance metrics
+    persistWriteCount,
+    persistSkipCount,
+    persistEfficiency: persistWriteCount + persistSkipCount > 0 
+      ? Math.round((persistSkipCount / (persistWriteCount + persistSkipCount)) * 100) 
+      : 0,
   }));
 };
 
@@ -1882,7 +1937,19 @@ const persistPanelState = (options: {
   }
   
   persistDebounceTimer = globalThis.setTimeout(() => {
+    // MILESTONE 2: Dirty-check before flushing
+    const currentSnapshot = computeStateSnapshot(pendingPersistOptions);
+    if (currentSnapshot === lastPersistedSnapshot) {
+      // State hasn't meaningfully changed - skip the write
+      persistSkipCount++;
+      pendingPersistOptions = {}; // Reset
+      persistDebounceTimer = null;
+      return;
+    }
+    
     flushPersistPanelState(pendingPersistOptions);
+    lastPersistedSnapshot = currentSnapshot;
+    persistWriteCount++;
     pendingPersistOptions = {}; // Reset after flush
     persistDebounceTimer = null;
   }, PERSIST_DEBOUNCE_MS);
@@ -1934,13 +2001,13 @@ const hydrateState = async () => {
       'transcriptFetchLog',
       'pendingTranscriptBuffer', 'pendingVerifications',
     ]),
-    chrome.storage.local.get([TRANSCRIPT_SNAPSHOT_KEY, PENDING_TRANSCRIPT_BUFFER_KEY, PROVIDER_SETTINGS_KEY]),
+    chrome.storage.local.get([TRANSCRIPT_SNAPSHOT_KEY, PENDING_TRANSCRIPT_BUFFER_KEY]),
     chrome.storage.sync.get(['selectedModel']),
+    readProviderApiKey(), // Session-first storage read
   ])
-    .then(([stored, localStored, syncStored]) => {
+    .then(([stored, localStored, syncStored, storedProviderApiKey]) => {
       const storedRuntime = stored[WORKER_RUNTIME_STATE_KEY] as Partial<WorkerRuntimeState> | null | undefined;
       const syncSelectedModel = syncStored?.selectedModel as string | undefined;
-      const storedProviderApiKey = getStoredProviderApiKey(localStored[PROVIDER_SETTINGS_KEY]);
 
       // Restore canonical state from stored WorkerRuntimeState
       if (storedRuntime && typeof storedRuntime === 'object') {
@@ -2197,7 +2264,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       .map((c) => c.text)
       .join(' ');
 
-    const { sourceCard: rawSourceCard, similarClaims = [] } = await fetchWithBYOK('/api/verify-claim', {
+    const { sourceCard: rawSourceCard, similarClaims = [], usedFallback = false } = await fetchWithBYOK('/api/verify-claim', {
       claim: item.claim,
       videoId: item.videoId,
       videoTitle: item.videoTitle,
@@ -2209,6 +2276,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     const sourceCard: SourceCard = similarClaims.length > 0
       ? {
           ...rawSourceCard,
+          ...(usedFallback && rawSourceCard.status === 'unverifiable' ? { isTransientFailure: true } : {}),
           similarClaims,
           relatedClaimIds: Array.from(
             new Set([
@@ -2217,7 +2285,10 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
             ]),
           ),
         }
-      : rawSourceCard;
+      : {
+          ...rawSourceCard,
+          ...(usedFallback && rawSourceCard.status === 'unverifiable' ? { isTransientFailure: true } : {}),
+        };
     console.log(
       `[SourceCheck/SW] verify-claim success video=${item.videoId} card=${sourceCard.status}`
     );
@@ -2330,6 +2401,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
         nuance: errorNuance,
         timestampSeconds: item.claim.timestampSeconds,
         verifiedAt: new Date().toISOString(),
+        isTransientFailure: true,
       };
       
       removePendingClaimByKey(item.key);
@@ -3197,8 +3269,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       let effectiveModel = normalizedModel;
 
       try {
-        const storedProvider = await chrome.storage.local.get([PROVIDER_SETTINGS_KEY]);
-        const storedProviderApiKey = getStoredProviderApiKey(storedProvider[PROVIDER_SETTINGS_KEY]);
+        // Session-first storage: use readProviderApiKey helper
+        const storedProviderApiKey = await readProviderApiKey();
         if (!storedProviderApiKey) {
           if (normalizedModel !== FREEMIUM_MODEL) {
             console.warn(

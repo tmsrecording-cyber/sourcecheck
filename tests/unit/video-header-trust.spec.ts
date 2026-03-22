@@ -2,11 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { SourceCard } from '../../shared/types';
 import {
-  buildHeaderAnchorCopy,
-  buildStatusLineCopy,
   buildVerificationSummary,
-  resolveVideoHeaderStatus,
 } from '../../src/sidepanel/components/VideoHeader';
+import { buildLiveStripCopy } from '../../src/sidepanel/hooks/useLiveStageFlow';
 
 const makeCard = (
   id: string,
@@ -40,14 +38,14 @@ describe('video header trust helpers', () => {
     ]);
 
     expect(summary).not.toBeNull();
-    expect(summary?.text).toBe('Supported 1 • Mixed 1 • Unsupported 1 • Unverifiable 1');
+    expect(summary?.text).toBe('Supported 1 · Mixed 1 · Unsupported 1 · Unverifiable 1');
     expect(summary?.total).toBe(4);
   });
 
   it('preserves zero-count buckets in the summary text', () => {
     const summary = buildVerificationSummary([makeCard('1', 'supported')]);
 
-    expect(summary?.text).toBe('Supported 1 • Mixed 0 • Unsupported 0 • Unverifiable 0');
+    expect(summary?.text).toBe('Supported 1 · Mixed 0 · Unsupported 0 · Unverifiable 0');
     expect(summary?.total).toBe(1);
   });
 
@@ -55,56 +53,34 @@ describe('video header trust helpers', () => {
     expect(buildVerificationSummary([])).toBeNull();
   });
 
-  it('uses "Checking at" for monitoring and verifying with a time', () => {
-    expect(buildHeaderAnchorCopy('monitoring', 125)).toBe('Checking at 2:05');
-    expect(buildHeaderAnchorCopy('verifying', 125)).toBe('Checking at 2:05');
-  });
+  describe('buildLiveStripCopy', () => {
+    it('returns Listening while the live surface is reading', () => {
+      expect(buildLiveStripCopy({ status: 'monitoring', livePhase: 'reading', anchorTime: null })).toBe('Listening');
+    });
 
-  it('uses "Checking now" for active states without a time', () => {
-    expect(buildHeaderAnchorCopy('monitoring', null)).toBe('Checking now');
-    expect(buildHeaderAnchorCopy('verifying', null)).toBe('Checking now');
-  });
+    it('returns Checking claim at time when checking with timestamp', () => {
+      expect(buildLiveStripCopy({ status: 'verifying', livePhase: 'checking', anchorTime: 125 })).toBe('Checking claim at 2:05');
+    });
 
-  it('uses "Last checked at" for ready with time', () => {
-    expect(buildHeaderAnchorCopy('ready', 125)).toBe('Last checked at 2:05');
-  });
+    it('returns Checking when checking without timestamp', () => {
+      expect(buildLiveStripCopy({ status: 'verifying', livePhase: 'checking', anchorTime: null })).toBe('Checking');
+    });
 
-  it('uses exact anchor copy for no-transcript, loading, error, idle, and ready without time', () => {
-    expect(buildHeaderAnchorCopy('no-transcript', null)).toBe('Transcript unavailable');
-    expect(buildHeaderAnchorCopy('loading', null)).toBe('Preparing transcript');
-    expect(buildHeaderAnchorCopy('error', null)).toBe('Could not verify right now');
-    expect(buildHeaderAnchorCopy('idle', null)).toBe('Waiting for video');
-    expect(buildHeaderAnchorCopy('ready', null)).toBe('Caught up');
-  });
+    it('returns null while a resolved card is still docking', () => {
+      expect(buildLiveStripCopy({ status: 'ready', livePhase: 'resolved', anchorTime: 140, isDocking: true })).toBeNull();
+    });
 
-  it('matches the exact status-line copy', () => {
-    expect(buildStatusLineCopy('monitoring', true)).toBe('Listening for checkable claims.');
-    expect(buildStatusLineCopy('monitoring', false)).toBe('Waiting for a claim worth checking.');
-    expect(buildStatusLineCopy('verifying', true)).toBe('Checking the latest claim.');
-    expect(buildStatusLineCopy('ready', true)).toBe('Checks are up to date.');
-    expect(buildStatusLineCopy('loading', false)).toBe('Loading transcript.');
-    expect(buildStatusLineCopy('no-transcript', false)).toBe('No usable captions were found for this video.');
-    expect(buildStatusLineCopy('error', true)).toBe('Something interrupted verification. Try refreshing the page.');
-    expect(buildStatusLineCopy('idle', true)).toBeNull();
-  });
+    it('returns Caught up only for true idle state', () => {
+      expect(buildLiveStripCopy({ status: 'ready', livePhase: 'idle', anchorTime: null })).toBe('Caught up');
+    });
 
-  it('keeps resolved hero dwell on a calm ready status instead of forcing verifying', () => {
-    expect(
-      resolveVideoHeaderStatus('verifying', {
-        mode: 'resolved',
-        card: makeCard('resolved', 'unverifiable'),
-        dwellUntil: Date.now() + 1500,
-      }),
-    ).toBe('ready');
-  });
+    it('returns Loading transcript for loading status', () => {
+      expect(buildLiveStripCopy({ status: 'loading', livePhase: 'idle', anchorTime: null })).toBe('Loading transcript');
+    });
 
-  it('keeps verifying status when the promoted hero is actively verifying', () => {
-    expect(
-      resolveVideoHeaderStatus('ready', {
-        mode: 'verifying',
-        claimText: 'Claim in flight',
-        timestampSeconds: 42,
-      }),
-    ).toBe('verifying');
+    it('returns null for no-transcript and error statuses', () => {
+      expect(buildLiveStripCopy({ status: 'no-transcript', livePhase: 'idle', anchorTime: null })).toBeNull();
+      expect(buildLiveStripCopy({ status: 'error', livePhase: 'idle', anchorTime: null })).toBeNull();
+    });
   });
 });

@@ -14,6 +14,8 @@ import { Fragment, useEffect, useState, type CSSProperties, type KeyboardEvent a
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { formatTime } from '../utils/formatTime';
 import { stripLegacyCachePrefix } from '../utils/trustCopy';
+import { normalizeTranscriptPreview } from '../utils/normalizeTranscriptPreview';
+import { sanitizeUrl } from '../utils/sanitizeUrl';
 import type { SimilarClaim, SourceCard as SourceCardRecord, VerificationStatus } from '../../../shared/types';
 import {
   SOFT_SPRING,
@@ -27,10 +29,30 @@ import {
 } from '../styles/motionTokens';
 
 // Backend placeholder strings that should not be displayed as real source titles
-const BACKEND_SOURCE_PLACEHOLDERS = new Set(['Needs primary source', 'No strong web match']);
+const BACKEND_SOURCE_PLACEHOLDERS = new Set(['Needs primary source', 'No strong web match', 'Not found', 'N/A', 'None']);
 const resolveSourceTitle = (raw: string | undefined | null): string | null => {
   const trimmed = raw?.trim();
   return (trimmed && !BACKEND_SOURCE_PLACEHOLDERS.has(trimmed)) ? trimmed : null;
+};
+
+// M3.5: SAFE_SCAN_REASONS whitelist - only these reasons are user-safe to display
+// Raw AI rationale strings are blocked from UI unless explicitly allowed here
+const SAFE_SCAN_REASONS = new Set([
+  'Catching up to current playback position…',
+  'Waiting for next claim...',
+  'Analyzing transcript...',
+]);
+
+/**
+ * Filter raw AI rationale through whitelist.
+ * Returns null if the reason is not user-safe to display.
+ */
+const sanitizeScanReason = (reason: string | null | undefined): string | null => {
+  if (!reason) return null;
+  // Exact match whitelist
+  if (SAFE_SCAN_REASONS.has(reason)) return reason;
+  // Block all other reasons (raw AI rationale)
+  return null;
 };
 
 // Card size variants
@@ -53,12 +75,14 @@ interface ScanningProps extends FeedCardBaseProps {
   entities?: string[];
   actionState?: 'VERIFYING' | 'REJECTED' | 'BUFFERING' | 'PARSE_ERROR' | null;
   reason?: string | null;
+  chunksScanned?: number;
 }
 
 // Verifying state: active verification
 interface VerifyingProps extends FeedCardBaseProps {
   size: 'verifying';
   claimText: string;
+  claimType?: string;
 }
 
 // Hero state: resolved claim
@@ -102,7 +126,7 @@ const STATUS_META: Record<VerificationStatus, { label: string; rgb: string }> = 
   supported: { label: 'Supported', rgb: '129, 201, 149' },
   partial: { label: 'Mixed', rgb: '253, 226, 147' },
   disputed: { label: 'Unsupported', rgb: '242, 139, 130' },
-  unverifiable: { label: 'Unverifiable', rgb: '154, 160, 166' },
+  unverifiable: { label: 'Cannot verify', rgb: '154, 160, 166' },
 };
 
 const buildSimilarClaimSummary = (similarClaims: SimilarClaim[]): string | null => {
@@ -165,8 +189,17 @@ const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; s
   );
 };
 
+const CLAIM_TYPE_LABELS: Record<string, string> = {
+  factual: 'Factual claim',
+  statistical: 'Statistic',
+  historical: 'Historical claim',
+  prediction: 'Prediction',
+  causal: 'Causal claim',
+  quote: 'Quote check',
+};
+
 // Verifying card — shows elapsed time so the user knows something real is happening
-const VerifyingContent = ({ claimText }: { claimText: string }) => {
+const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimType?: string }) => {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -174,11 +207,18 @@ const VerifyingContent = ({ claimText }: { claimText: string }) => {
     return () => clearInterval(interval);
   }, []);
 
+  const claimTypeLabel = claimType ? (CLAIM_TYPE_LABELS[claimType] ?? null) : null;
+
   return (
     <>
       <div className="flex items-center gap-2">
         <span className="thinking-pulse-dot" />
         <span className="status-badge status-badge-live">Verifying</span>
+        {claimTypeLabel && (
+          <span className="text-[10px] font-medium text-sc-muted/50 tracking-[0.02em]">
+            {claimTypeLabel}
+          </span>
+        )}
       </div>
 
       <p className="mt-3 text-[17px] font-semibold leading-[1.42] tracking-[-0.016em] text-textMain">
@@ -201,7 +241,8 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
   const resolvedSourceTitle = resolveSourceTitle(card.sourceTitle);
   const source = resolvedSourceTitle || 'No reliable source found';
   const evidenceSnippet = card.evidenceSnippet?.trim() || '';
-  const hasSourceLink = Boolean(card.sourceUrl?.trim() && resolvedSourceTitle);
+  const safeSourceUrl = sanitizeUrl(card.sourceUrl);
+  const hasSourceLink = Boolean(safeSourceUrl && resolvedSourceTitle);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
 
   return (
@@ -236,7 +277,7 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
         <p className="feed-card-source-kicker">Source</p>
         {hasSourceLink ? (
           <a
-            href={card.sourceUrl}
+            href={safeSourceUrl!}
             target="_blank"
             rel="noopener noreferrer"
             className="feed-card-source-link feed-card-source-copy mt-1"
@@ -276,7 +317,8 @@ const CompactContent = ({
   const prefersReducedMotion = useReducedMotion();
   const resolvedSourceTitleCompact = resolveSourceTitle(card.sourceTitle);
   const evidenceSnippet = card.evidenceSnippet?.trim() || '';
-  const hasSourceLink = Boolean(card.sourceUrl?.trim() && resolvedSourceTitleCompact);
+  const safeSourceUrlCompact = sanitizeUrl(card.sourceUrl);
+  const hasSourceLink = Boolean(safeSourceUrlCompact && resolvedSourceTitleCompact);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
   const isInteractive = Boolean(onToggle);
   
@@ -284,7 +326,7 @@ const CompactContent = ({
   const nuanceFirstSentence = nuance ? nuance.split(/\.(\s|$)/)[0] + (nuance.includes('.') ? '.' : '') : '';
   
   // Filter generic evaluation/boilerplate phrases — they add no info beyond the verdict badge
-  const BOILERPLATE_RE = /^we could not verify|^this claim could not|^unable to verify|^this likely needs|^no verifiable|^this requires|^verifying this|^cannot be verified|^insufficient (public )?evidence|^there (is|are) no/i;
+  const BOILERPLATE_RE = /^we could not verify|^this claim could not|^unable to verify|^this likely needs|^no verifiable|^this requires|^verifying this|^cannot be verified|^insufficient (public )?evidence|^there (is|are) no|^no reliable source|^no (strong|credible|independent) (web|source)|^this (claim|statement) (cannot|could not)|^based on (available|the) (evidence|sources?|information)/i;
   const reasoningText = (nuanceFirstSentence && !BOILERPLATE_RE.test(nuanceFirstSentence))
     ? nuanceFirstSentence
     : card.claim.claimText;
@@ -327,7 +369,7 @@ const CompactContent = ({
           </div>
           
           {/* Primary reasoning - the "why" */}
-          <p className="compact-reasoning-text line-clamp-2">
+          <p className="compact-reasoning-text line-clamp-3">
             {reasoningText}
           </p>
           
@@ -336,7 +378,7 @@ const CompactContent = ({
             <p className="compact-source-line">
               {hasSourceLink ? (
                 <a
-                  href={card.sourceUrl}
+                  href={safeSourceUrlCompact!}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="compact-source-link"
@@ -362,10 +404,18 @@ const CompactContent = ({
               transition={expandReveal.transition}
               className="compact-expanded-panel"
             >
-              {/* Claim text moved to expanded panel */}
-              <p className="compact-expanded-quote">
-                "{card.claim.claimText}"
-              </p>
+              {/* Only show claim quote if it differs from the reasoning text above */}
+              {reasoningText !== card.claim.claimText && (
+                <p className="compact-expanded-quote">
+                  "{card.claim.claimText}"
+                </p>
+              )}
+              {/* Show full nuance when reasoning was truncated to first sentence */}
+              {nuance && nuanceFirstSentence !== nuance && !BOILERPLATE_RE.test(nuanceFirstSentence) && (
+                <p className="compact-expanded-nuance">
+                  {nuance}
+                </p>
+              )}
               {evidenceSnippet && (
                 <p className="compact-expanded-evidence">
                   "{evidenceSnippet}"
@@ -404,48 +454,50 @@ const CompactContent = ({
   );
 };
 
-/**
- * Normalize ALL CAPS transcript text for display.
- * YouTube auto-captions on news channels often arrive in uppercase.
- * Detects >60% uppercase letter ratio and converts to sentence case.
- */
-const normalizeCapsText = (text: string): string => {
-  const letters = text.match(/[A-Za-z]/g) ?? [];
-  if (letters.length === 0) return text;
-  const upperRatio = (text.match(/[A-Z]/g) ?? []).length / letters.length;
-  if (upperRatio < 0.6) return text;
-  // Convert to sentence case: lowercase all, capitalize after sentence boundaries
-  return text
-    .toLowerCase()
-    .replace(/(^\s*|[.!?]\s+)([a-z])/g, (_, boundary, char) => boundary + char.toUpperCase());
-};
+// Pulse bar — 5 thin bars representing data segments flowing through the pipeline
+const ScanPulseBar = ({ active }: { active?: boolean }) => (
+  <div className={`scan-pulse-bar ${active ? 'scan-pulse-bar-active' : ''}`}>
+    <span className="scan-pulse-segment" />
+    <span className="scan-pulse-segment" />
+    <span className="scan-pulse-segment" />
+    <span className="scan-pulse-segment" />
+    <span className="scan-pulse-segment" />
+  </div>
+);
 
 // Scanning/forming card
-const ScanningContent = ({ 
-  previewText, 
+const ScanningContent = ({
+  previewText,
   entities = [],
   actionState,
-  reason 
-}: { 
-  previewText: string; 
+  reason,
+  chunksScanned,
+}: {
+  previewText: string;
   entities?: string[];
   actionState?: 'VERIFYING' | 'REJECTED' | 'BUFFERING' | 'PARSE_ERROR' | null;
   reason?: string | null;
+  chunksScanned?: number;
 }) => {
   const isVerifying = actionState === 'VERIFYING';
-  
+
   return (
     <>
       <div className="flex items-center gap-2">
         <span className={`status-dot ${isVerifying ? 'status-dot-pulse' : 'status-dot-subtle'}`} />
-        <span className="text-[11px] text-sc-muted font-medium tracking-[0.02em]">
+        <span className={`text-[11px] font-medium tracking-[0.02em] ${isVerifying ? 'scanning-label-active' : 'text-sc-muted'}`}>
           {isVerifying ? 'Checking claim…' : 'Scanning'}
         </span>
+        <ScanPulseBar active={isVerifying} />
       </div>
 
       {previewText && (
-        <p className="mt-2.5 text-[14px] text-textMain/92 leading-relaxed line-clamp-2">
-          {normalizeCapsText(previewText)}
+        <p className={`mt-2.5 leading-relaxed line-clamp-2 ${
+          isVerifying
+            ? 'text-[15px] font-semibold text-textMain tracking-[-0.012em]'
+            : 'text-[14px] text-textMain/92'
+        }`}>
+          {normalizeTranscriptPreview(previewText)}
         </p>
       )}
 
@@ -457,8 +509,20 @@ const ScanningContent = ({
         </div>
       )}
 
+      {!isVerifying && !previewText && chunksScanned !== undefined && chunksScanned >= 5 && (
+        <p className="mt-1.5 text-[10px] font-mono tabular-nums text-sc-muted/30">
+          {chunksScanned} segments analyzed
+        </p>
+      )}
+
       {reason && actionState === 'BUFFERING' && (
-        <p className="mt-2 text-[11px] text-sc-muted/70">{reason}</p>
+        // M3.5: Filter through SAFE_SCAN_REASONS whitelist before displaying
+        (() => {
+          const safeReason = sanitizeScanReason(reason);
+          return safeReason ? (
+            <p className="mt-2 text-[11px] text-sc-muted/70">{safeReason}</p>
+          ) : null;
+        })()
       )}
     </>
   );
@@ -521,15 +585,16 @@ export const FeedCard = (props: FeedCardProps) => {
     switch (props.size) {
       case 'scanning':
         return (
-          <ScanningContent 
+          <ScanningContent
             previewText={props.previewText}
             entities={props.entities}
             actionState={props.actionState}
             reason={props.reason}
+            chunksScanned={props.chunksScanned}
           />
         );
       case 'verifying':
-        return <VerifyingContent claimText={props.claimText} />;
+        return <VerifyingContent claimText={props.claimText} claimType={props.claimType} />;
       case 'hero':
         return <HeroContent card={props.card} />;
       case 'compact':
@@ -570,12 +635,11 @@ export const FeedCard = (props: FeedCardProps) => {
   const isScanning = size === 'scanning';
   const isPassiveCard = size === 'state' || size === 'skeleton';
   const showRail = !isCompact;
-  const railLeft = isCompact ? 0 : 44; // Reduced from 72px
 
   return (
-    <div 
-      className={`feed-card-wrapper ${isCompact ? '' : 'feed-card-wrapper-rail'}`}
-      style={{ '--rail-left': `${railLeft}px` } as CSSProperties}
+    <div
+      className="feed-card-wrapper feed-card-wrapper-rail"
+      style={{ '--rail-left': '44px' } as CSSProperties}
     >
       {showRail && (
         <div className="feed-card-rail">
@@ -609,8 +673,8 @@ export const FeedCard = (props: FeedCardProps) => {
               backgroundColor: `rgba(${accentRgb}, 1)`,
               borderColor: `rgba(${accentRgb}, ${glow ? 0.5 : 0.34})`,
               boxShadow: glow
-                ? `0 0 10px rgba(${accentRgb}, 0.3), inset 0 0 2px rgba(255, 255, 255, 0.45)`
-                : `0 0 6px rgba(${accentRgb}, 0.18), inset 0 0 2px rgba(255, 255, 255, 0.3)`,
+                ? `0 0 10px rgba(${accentRgb}, 0.3), 0 0 4px rgba(${accentRgb}, 0.15), inset 0 0 2px rgba(255, 255, 255, 0.45)`
+                : `0 0 6px rgba(${accentRgb}, 0.22), 0 0 4px rgba(${accentRgb}, 0.12), inset 0 0 2px rgba(255, 255, 255, 0.3)`,
             }}
           />
           
@@ -630,6 +694,7 @@ export const FeedCard = (props: FeedCardProps) => {
         data-size={size}
         data-status={status}
         data-tone={tone}
+        data-testid={size === 'compact' || size === 'hero' ? 'source-card' : undefined}
         initial={prefersReducedMotion || isCompact || suppressEntry ? false : { y: DISTANCE.enterY, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}

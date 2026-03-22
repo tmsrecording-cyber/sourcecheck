@@ -45,7 +45,7 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
   minimum_chrome_version: '114',
   name: 'SourceCheck',
   version: '0.1.1',
-  description: 'Real-time fact-checking for YouTube videos using AI-powered claim verification.',
+  description: 'Live AI fact-checking as you watch YouTube. Spots claims, finds sources, and shows what\'s verified — in real time.',
   icons: {
     '16': 'icons/16.png',
     '32': 'icons/32.png',
@@ -55,6 +55,7 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
   permissions: ['sidePanel', 'storage', 'declarativeNetRequest', 'declarativeNetRequestWithHostAccess'],
   host_permissions: [
     '*://*.youtube.com/*',
+    '*://meet.google.com/*',
     getApiHostPermission(apiBase),
   ],
   declarative_net_request: {
@@ -75,12 +76,20 @@ export const createManifest = (apiBase = getDefaultDevApiBase()): ManifestV3Expo
       matches: ['*://*.youtube.com/watch*'],
       js: ['src/content/index.ts'],
     },
+    {
+      matches: ['*://meet.google.com/*'],
+      js: ['src/content/index.ts'],
+    },
   ],
   side_panel: {
     default_path: 'src/sidepanel.html',
   },
   action: {
     default_title: 'Open SourceCheck',
+  },
+  // Restrict extension page scripts to same-origin only; no eval, no inline scripts
+  content_security_policy: {
+    extension_pages: "script-src 'self'; object-src 'self';",
   },
   // Explicitly disable web_accessible_resources for security
   // The content script runs in isolated world; no page script injection needed

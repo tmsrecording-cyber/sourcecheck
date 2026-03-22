@@ -50,11 +50,17 @@ export const LORE_REGISTRY: Record<string, ContextSnippet> = {
   },
 };
 
+// Escape special regex characters to prevent ReDoS/injection
+const escapeRegExp = (string: string): string => {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 export const getContextForEntity = (text: string): ContextSnippet | null => {
   const normalized = text.toLowerCase();
 
   for (const [key, snippet] of Object.entries(LORE_REGISTRY)) {
-    if (new RegExp(`\\b${key}\\b`, 'i').test(normalized)) {
+    const safeKey = escapeRegExp(key);
+    if (new RegExp(`\\b${safeKey}\\b`, 'i').test(normalized)) {
       return snippet;
     }
   }

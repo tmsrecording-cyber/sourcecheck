@@ -121,11 +121,14 @@ const installYoutubeFixture = async (page: Page) => {
   });
 };
 
+const BACKEND_API_BASE = process.env.VITE_API_BASE || 'https://sourcecheck.vercel.app';
+
 const installBackendFixtures = async (context: BrowserContext) => {
   let analyzeCalls = 0;
   let verifyCalls = 0;
 
-  await context.route('http://localhost:3000/api/**', async (route: Route) => {
+  // Route both localhost (dev) and production API URLs
+  const routeBackendRequest = async (route: Route) => {
     const requestUrl = new URL(route.request().url());
 
     if (requestUrl.pathname === '/api/session/init') {
@@ -182,7 +185,12 @@ const installBackendFixtures = async (context: BrowserContext) => {
       contentType: 'application/json; charset=utf-8',
       body: JSON.stringify({ error: `Unhandled fixture route: ${requestUrl.pathname}` }),
     });
-  });
+  };
+
+  // Route localhost (dev builds)
+  await context.route('http://localhost:3000/api/**', routeBackendRequest);
+  // Route production URL (release builds)
+  await context.route('https://sourcecheck.vercel.app/api/**', routeBackendRequest);
 
   return {
     getAnalyzeCalls: () => analyzeCalls,

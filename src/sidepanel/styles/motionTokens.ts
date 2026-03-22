@@ -46,20 +46,20 @@ export const DURATION = {
   fast01: 0.07,
   /** 120ms - Fast feedback, hover states */
   fast02: 0.12,
-  /** 160ms - Compact expand/collapse, small reveals */
-  micro: 0.16,
-  /** 200ms - Standard component transitions */
-  standard: 0.2,
-  /** 220ms - Card entry, layout shifts */
-  layout: 0.22,
-  /** 250ms - Hero card entry */
-  heroEnter: 0.25,
-  /** 280ms - Stack entry, staggered items */
-  enter: 0.28,
-  /** 300ms - Tab transitions */
-  tab: 0.3,
-  /** 400ms - Ask response arrival (more deliberate) */
-  expressive: 0.4,
+  /** 220ms - Compact expand/collapse, small reveals */
+  micro: 0.22,
+  /** 280ms - Standard component transitions */
+  standard: 0.28,
+  /** 340ms - Card entry, layout shifts */
+  layout: 0.34,
+  /** 420ms - Hero card entry — deliberate milestone moment */
+  heroEnter: 0.42,
+  /** 460ms - Stack entry, staggered items */
+  enter: 0.46,
+  /** 380ms - Tab transitions */
+  tab: 0.38,
+  /** 560ms - Ask response arrival (most deliberate) */
+  expressive: 0.56,
 } as const;
 
 // =============================================================================
@@ -71,18 +71,18 @@ export const DISTANCE = {
   liftY: -1,
   /** Stronger lift for emphasis (-2px) */
   liftYStrong: -2,
-  /** Entry slide distance (8px) */
-  enterY: 8,
-  /** Exit slide distance (-6px) */
-  exitY: -6,
+  /** Entry slide distance (14px) */
+  enterY: 14,
+  /** Exit slide distance (-10px) */
+  exitY: -10,
   /** Subtle scale for card hover (1.006) */
   hoverScale: 1.006,
   /** Subtle scale for compact card hover (1.003) */
   hoverScaleCompact: 1.003,
   /** Press settle scale (0.996) */
   pressScale: 0.996,
-  /** Stagger step delay (30ms) */
-  staggerStep: 0.03,
+  /** Stagger step delay (50ms) */
+  staggerStep: 0.05,
   /** Max stagger items */
   staggerCap: 4,
 } as const;
@@ -90,6 +90,14 @@ export const DISTANCE = {
 // =============================================================================
 // SEMANTIC MOTION PRESETS
 // =============================================================================
+
+/**
+ * State transition preset for cross-phase fades (scanning→checking→resolved→docked).
+ */
+export const stateTransition: Transition = {
+  duration: DURATION.standard,
+  ease: SOFT_SPRING,
+};
 
 /**
  * Hover lift configuration for interactive cards.
@@ -236,7 +244,7 @@ export const askResponseEntryReduced = {
 export const heroCardEntry = {
   initial: { y: DISTANCE.enterY, opacity: 0 },
   animate: { y: 0, opacity: 1 },
-  exit: { y: -8, opacity: 0 },
+  exit: { y: -12, opacity: 0 },
   transition: {
     duration: DURATION.heroEnter,
     ease: SOFT_SPRING,
@@ -244,15 +252,31 @@ export const heroCardEntry = {
 };
 
 /**
+ * Conveyor entry — new cards arrive at top of feed and slide down into position.
+ * Existing cards shift down via `layout` animation.
+ */
+export const conveyorEntry = {
+  initial: { y: -14, opacity: 0 },
+  animate: { y: 0, opacity: 1 },
+  exit: { y: 8, opacity: 0, scale: 0.96 },
+  transition: {
+    duration: DURATION.heroEnter,
+    ease: SOFT_SPRING,
+    layout: { duration: DURATION.layout, ease: SOFT_SPRING },
+  },
+};
+
+/**
  * Hero resolved card entry (slightly longer for emphasis).
  */
 export const heroResolvedEntry = {
-  initial: { y: DISTANCE.enterY, opacity: 0 },
-  animate: { y: 0, opacity: 1 },
-  exit: { y: -8, opacity: 0 },
+  initial: { y: DISTANCE.enterY, opacity: 0, scale: 0.97 },
+  animate: { y: 0, opacity: 1, scale: 1 },
+  // Exit: settle downward into the stack, slight scale-down, fade
+  exit: { y: 12, scale: 0.95, opacity: 0 },
   transition: {
-    duration: DURATION.layout,
-    ease: SOFT_SPRING,
+    duration: DURATION.expressive,
+    ease: [0.22, 1, 0.36, 1], // custom cubic: fast settle, overshoot-free
   },
 };
 

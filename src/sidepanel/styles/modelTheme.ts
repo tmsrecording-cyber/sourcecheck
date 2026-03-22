@@ -7,7 +7,7 @@ import {
 
 export type ModelTone = {
   id: GeminiModelOption;
-  name: 'blue' | 'green' | 'yellow';
+  name: 'blue' | 'green' | 'indigo';
   hex: string;
   rgb: string;
 };
@@ -25,12 +25,6 @@ export const MODEL_TONES: Record<GeminiModelOption, ModelTone> = {
     hex: '#81C995',
     rgb: '129, 201, 149',
   },
-  'gemini-3-flash-preview': {
-    id: 'gemini-3-flash-preview',
-    name: 'yellow',
-    hex: '#FDE293',
-    rgb: '253, 226, 147',
-  },
 };
 
 const DEFAULT_MODEL_TONE = MODEL_TONES[FREEMIUM_MODEL];
@@ -44,9 +38,9 @@ export const getModelTone = (model?: string): ModelTone => {
 
 export const buildModelCssVars = (model?: string): ModelCssVars => {
   const tone = getModelTone(model);
-  const maxTintAlpha = tone.name === 'yellow' ? 0.28 : 0.32;
-  const maxGlowAlpha = tone.name === 'yellow' ? 0.30 : 0.48;
-  const glowHaloAlpha = tone.name === 'yellow' ? 0.16 : 0.24;
+  const maxTintAlpha = 0.32;
+  const maxGlowAlpha = 0.48;
+  const glowHaloAlpha = 0.24;
 
   return {
     '--model-accent-rgb': tone.rgb,

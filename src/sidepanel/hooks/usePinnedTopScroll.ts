@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, useEffect } from 'react';
 
 interface PinnedTopScrollOptions {
   pinThreshold?: number;
@@ -45,6 +45,17 @@ export const usePinnedTopScroll = <T extends HTMLElement>(
       scrollTop: 0,
     };
   }, []);
+
+  // Attach scroll listener to the element
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+
+    element.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      element.removeEventListener('scroll', handleScroll);
+    };
+  }, [handleScroll]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;

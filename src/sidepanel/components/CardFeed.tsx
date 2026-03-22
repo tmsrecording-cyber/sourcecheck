@@ -1,5 +1,5 @@
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type {
   AskQuestionSource,
   AnalysisStatus,
@@ -15,6 +15,13 @@ import {
   SOFT_SPRING,
   DURATION,
 } from '../styles/motionTokens';
+import {
+  getClaimKey,
+  getCardClaimKey,
+  type LivePhase,
+  type ReadingVariant,
+  type StageEntryDerived,
+} from '../hooks/useLiveStageFlow';
 
 
 /** @deprecated — kept for API compatibility; the stage now owns this logic */
@@ -33,19 +40,21 @@ interface CardFeedProps {
   cards: SourceCard[];
   /** Complete card history (unfiltered) for HISTORY tab */
   allCards?: SourceCard[];
-  pendingClaims: PendingClaimPreview[];
   status?: AnalysisStatus;
   chunksScanned?: number;
-  lastScannedTimestamp?: number | null;
-  currentScanPreview?: string | null;
-  scanEntities?: string[];
-  scanActionState?: string | null;
-  scanReason?: string | null;
-  liveTimestampSeconds?: number | null;
+  livePhase?: LivePhase;
+  readingVariant?: ReadingVariant;
+  readingPreview?: string | null;
+  readingTimestamp?: number | null;
+  stageEntries?: StageEntryDerived[];
+  dockedKeys?: ReadonlySet<string>;
+  recentChecks?: SourceCard[];
+  queuedCount?: number;
+  showLiveCheckLabel?: boolean;
   isPinned?: boolean;
   pinToTop?: () => void;
-  onEntitySelect?: (entityLabel: string) => void;
   onRetryTranscript?: () => void;
+  onClearHistory?: () => void;
   selectedModel?: string;
   activeTab?: 'live' | 'history';
   /** @deprecated — no longer used; stage owns its own state */
@@ -54,8 +63,6 @@ interface CardFeedProps {
 
 const FEED_RAIL_LAYOUT = {
   '--rail-left': '46px',
-  '--rail-node-left': '42px',
-  '--rail-connector-left': '50px',
 } as CSSProperties;
 
 const MAX_HISTORY_ROWS = 20;
@@ -68,114 +75,50 @@ const STATUS_RGB: Record<string, string> = {
   unverifiable: '154, 160, 166',
 };
 
-// ─── Stage hold durations ─────────────────────────────────────────────────────
-/** How long the resolved card holds in the stage before docking (ms) */
-const STAGE_HOLD_MS = 2500;
-/** Shorter hold when there's a claim queued behind this one */
-const STAGE_HOLD_SHORT_MS = 900;
+const STAGE_SHELL_MIN_HEIGHT = {
+  reading: 0,
+  checking: 168,
+  resolved: 0,
+  idle: 0,
+} as const;
 
 /* ── Main feed ── */
 
 export const CardFeed = ({
   askHistory = [],
   cards,
-  pendingClaims,
   status = 'idle',
   chunksScanned = 0,
-  lastScannedTimestamp = null,
-  currentScanPreview = null,
-  scanEntities = [],
-  scanActionState = null,
-  scanReason = null,
-  liveTimestampSeconds = null,
+  livePhase = 'idle',
+  readingVariant = null,
+  readingPreview = null,
+  readingTimestamp = null,
+  stageEntries = [],
+  dockedKeys,
+  recentChecks: derivedRecentChecks,
+  queuedCount = 0,
+  showLiveCheckLabel = false,
   isPinned = true,
   pinToTop,
   activeTab = 'live',
   selectedModel = BYOK_DEFAULT_MODEL,
   allCards,
   onRetryTranscript,
+  onClearHistory,
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
   const enableListLayoutAnimations = !prefersReducedMotion;
+  const recentChecks = derivedRecentChecks ?? cards;
 
   const isInitialLoading =
     status === 'loading' &&
     cards.length === 0 &&
-    pendingClaims.length === 0 &&
+    livePhase === 'idle' &&
     chunksScanned === 0;
 
-  // ── Stage state ──────────────────────────────────────────────────────────────
-  // The stage owns exactly ONE claim lifecycle at a time.
-  // Flow: pending → checking → resolved (hold) → docked into recent checks
-  const [stageCardId, setStageCardId] = useState<string | null>(null);
-  const stageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const displayCards = useMemo(() => allCards ?? cards, [allCards, cards]);
-
-  // Claim key mirrors getClaimKey() in the service worker.
-  // PendingClaimPreview.id is this hash; SourceCard.id is a fresh UUID from
-  // the backend, so stage lookups must use the claim key, not the card UUID.
-  const cardClaimKey = (card: SourceCard) =>
-    `${card.claim.timestampSeconds}:${card.claim.claimText.trim().toLowerCase()}`;
-
-  // Cards in stage and feed
-  const stageCheckingClaim = pendingClaims.find((c) => c.id === stageCardId) ?? null;
-  const stageResolvedCard = displayCards.find((c) => cardClaimKey(c) === stageCardId) ?? null;
-  const stageMode: 'listening' | 'checking' | 'resolved' =
-    !stageCardId ? 'listening' :
-    stageCheckingClaim ? 'checking' :
-    stageResolvedCard ? 'resolved' :
-    'listening';
-
-  // Recent checks: all resolved cards except the one currently in stage
-  const recentChecks = displayCards.filter((c) => cardClaimKey(c) !== stageCardId);
-
-  // Queue: pending claims that are NOT the one in the stage
-  const queuedCount = pendingClaims.filter((c) => c.id !== stageCardId).length;
-
-  // Promote next pending claim into stage when stage is empty
-  useEffect(() => {
-    if (activeTab !== 'live') return;
-    if (stageCardId) return;
-    const next = pendingClaims[0];
-    if (next) setStageCardId(next.id);
-  }, [activeTab, pendingClaims, stageCardId]);
-
-  // When stage claim resolves → hold, then dock
-  useEffect(() => {
-    if (!stageCardId || !stageResolvedCard) return;
-
-    if (stageTimerRef.current) clearTimeout(stageTimerRef.current);
-
-    // Shorten hold when there's a queue waiting
-    const holdMs = queuedCount > 0 ? STAGE_HOLD_SHORT_MS : STAGE_HOLD_MS;
-
-    stageTimerRef.current = setTimeout(() => {
-      setStageCardId(null);
-      stageTimerRef.current = null;
-    }, holdMs);
-
-    return () => {
-      if (stageTimerRef.current) {
-        clearTimeout(stageTimerRef.current);
-        stageTimerRef.current = null;
-      }
-    };
-  }, [stageCardId, stageResolvedCard?.id, queuedCount]);
-
-  // Safety: clear stage if claim vanished entirely (edge case)
-  useEffect(() => {
-    if (!stageCardId) return;
-    if (!stageCheckingClaim && !stageResolvedCard) setStageCardId(null);
-  }, [stageCardId, stageCheckingClaim, stageResolvedCard]);
-
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => {
-      if (stageTimerRef.current) clearTimeout(stageTimerRef.current);
-    };
-  }, []);
+  // Live tab uses current-video cards; History tab uses accumulated cross-video history
+  const historyCards = useMemo(() => allCards ?? cards, [allCards, cards]);
 
   // Clear expanded card if it leaves recent checks
   useEffect(() => {
@@ -183,13 +126,21 @@ export const CardFeed = ({
     if (!recentChecks.some((c) => c.id === expandedClaimId)) setExpandedClaimId(null);
   }, [expandedClaimId, recentChecks]);
 
-  const hasScanSignal = chunksScanned > 0 || lastScannedTimestamp !== null;
-  const isLiveReading = (status === 'monitoring' || status === 'verifying') && hasScanSignal;
+  const anyDocking = (dockedKeys?.size ?? 0) > 0 || stageEntries.some((e) => e.isDocking);
+  const isLiveReading = livePhase !== 'idle' || anyDocking;
   const showResumeLive =
     !isPinned &&
     isLiveReading &&
     activeTab === 'live' &&
-    (cards.length > 0 || pendingClaims.length > 0);
+    (recentChecks.length > 0 || livePhase !== 'idle');
+
+  const showStateCard = status === 'no-transcript' || status === 'error';
+  const showAmbientWaiting = !isInitialLoading && !showStateCard && livePhase === 'idle';
+  const stageShellMinHeight = isInitialLoading
+    ? STAGE_SHELL_MIN_HEIGHT.checking
+    : anyDocking
+      ? STAGE_SHELL_MIN_HEIGHT.resolved
+      : STAGE_SHELL_MIN_HEIGHT[livePhase];
 
   const modelCssVars = buildModelCssVars(selectedModel);
 
@@ -202,195 +153,315 @@ export const CardFeed = ({
 
         {/* ── LIVE TAB ─────────────────────────────────────────────────────── */}
         {activeTab === 'live' && (
-          <div className="live-tab-rail flex flex-col">
+          <LayoutGroup id="live-stage-feed">
+            <div className="live-tab-rail flex flex-col">
+              <div className="px-3 pt-2 pb-1">
+                {(showLiveCheckLabel || (livePhase === 'reading' && readingVariant != null)) && (
+                  <div className="stage-section-row ml-[46px] mb-2">
+                    <span className="stage-section-rule" />
+                    <p className="stage-section-label">Live Check</p>
+                  </div>
+                )}
 
-            {/* Stage zone */}
-            <div className="px-3 pt-2 pb-1">
-              {(isInitialLoading || (stageCardId && stageMode !== 'listening')) && (
-                <p className="stage-section-label ml-[46px] mb-2">Live Check</p>
-              )}
-
-              <div className="relative">
-                <AnimatePresence mode="wait">
-
-                  {/* Skeleton */}
-                  {isInitialLoading && (
-                    <motion.div
-                      key="skeleton"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: DURATION.micro }}
-                    >
-                      <FeedCard
-                        size="skeleton"
-                        timestampSeconds={null}
-                        accentRgb="var(--sc-neutral-rgb)"
-                      />
-                    </motion.div>
-                  )}
-
-                  {/* Active claim in stage: checking or resolved */}
-                  {!isInitialLoading && stageCardId && stageMode !== 'listening' && (
-                    <motion.div
-                      key={stageCardId}
-                      layoutId={enableListLayoutAnimations ? `claim-${stageCardId}` : undefined}
-                      layout={enableListLayoutAnimations}
-                      initial={prefersReducedMotion ? false : { opacity: 0, y: -8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, transition: { duration: 0.06 } }}
-                      transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
-                    >
-                      <AnimatePresence mode="wait" initial={false}>
-                        {stageMode === 'checking' && stageCheckingClaim && (
-                          <motion.div
-                            key="checking"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0, transition: { duration: 0.1 } }}
-                            transition={{ duration: 0.15 }}
-                          >
-                            <FeedCard
-                              size="verifying"
-                              claimText={stageCheckingClaim.claimText || 'Checking that claim…'}
-                              timestampSeconds={stageCheckingClaim.timestampSeconds}
-                              accentRgb="var(--model-accent-rgb)"
-                              glow
-                              suppressEntry
-                            />
-                          </motion.div>
-                        )}
-                        {stageMode === 'resolved' && stageResolvedCard && (
-                          <motion.div
-                            key="resolved"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0, transition: { duration: 0.06 } }}
-                            transition={{ duration: 0.2 }}
-                          >
-                            <FeedCard
-                              size="hero"
-                              card={stageResolvedCard}
-                              timestampSeconds={stageResolvedCard.timestampSeconds}
-                              accentRgb={STATUS_RGB[stageResolvedCard.status] ?? '154, 160, 166'}
-                              suppressEntry
-                            />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* Queue overlay — overlaid on stage card */}
-                      <AnimatePresence>
-                        {queuedCount > 0 && (
-                          <motion.div
-                            key="queue-chip"
-                            className="absolute bottom-3 right-3 pointer-events-none"
-                            initial={{ opacity: 0, scale: 0.88 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
-                            transition={{ duration: 0.18, ease: SOFT_SPRING }}
-                          >
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[10px] font-medium text-sc-muted/65 bg-sc-bg-0/85 border border-sc-border-soft/50 backdrop-blur-sm tabular-nums">
-                              {queuedCount} queued
-                            </span>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </motion.div>
-                  )}
-
-                  {/* Ambient state: no active claim in stage */}
-                  {!isInitialLoading && !stageCardId && (
-                    <motion.div
-                      key={`ambient-${status}`}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: DURATION.standard }}
-                    >
-                      {status === 'no-transcript' && (
+                <motion.div
+                  className="relative live-stage-shell"
+                  animate={{ minHeight: stageShellMinHeight }}
+                  transition={{ duration: DURATION.standard, ease: SOFT_SPRING }}
+                >
+                  <AnimatePresence mode="wait" initial={false}>
+                    {isInitialLoading && (
+                      <motion.div
+                        key="skeleton"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: DURATION.micro }}
+                      >
                         <FeedCard
-                          size="state"
-                          badgeLabel="No captions"
+                          size="skeleton"
                           timestampSeconds={null}
                           accentRgb="var(--sc-neutral-rgb)"
-                          tone="muted"
-                          headline="No usable captions found."
-                          supportLine="Try a different video, or enable auto-captions."
-                          actionLabel={onRetryTranscript ? 'Retry' : undefined}
-                          onAction={onRetryTranscript}
                         />
-                      )}
-                      {status === 'error' && (
+                      </motion.div>
+                    )}
+
+                    {!isInitialLoading && livePhase === 'reading' && readingVariant && (
+                      <motion.div
+                        key="reading"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: DURATION.fast02 }}
+                      >
                         <FeedCard
-                          size="state"
-                          badgeLabel="Error"
-                          timestampSeconds={null}
-                          accentRgb="var(--sc-neutral-rgb)"
-                          tone="muted"
-                          headline="Something interrupted verification."
-                          supportLine="Try refreshing the page."
+                          size="scanning"
+                          previewText=""
+                          timestampSeconds={readingTimestamp}
+                          accentRgb="var(--model-accent-rgb)"
+                          suppressEntry
+                          chunksScanned={chunksScanned}
                         />
-                      )}
-                      {(status === 'monitoring' || status === 'ready' || status === 'idle' || status === 'verifying') && (
-                        currentScanPreview ? (
+                      </motion.div>
+                    )}
+
+                    {/* Primary stage entry — inside mode="wait" to keep reading↔claim transition sequential */}
+                    {!isInitialLoading && stageEntries[0] && (() => {
+                      const entry = stageEntries[0];
+                      const entryPhase = entry.resolvedCard ? 'resolved' : (entry.checkingClaim ? 'checking' : null);
+                      if (!entryPhase) return null;
+                      return (
+                        <motion.div
+                          key={entry.claimKey}
+                          // CALM: Only use layoutId when NOT exiting - prevents morph collision
+                          layoutId={enableListLayoutAnimations ? `claim-${entry.claimKey}` : undefined}
+                          layout={enableListLayoutAnimations}
+                          initial={prefersReducedMotion ? false : { opacity: 0, y: -8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          // CALM EXIT: Simple opacity fade only - was scale+y+opacity chaos
+                          exit={{ opacity: 0, transition: { duration: 0.25, ease: SOFT_SPRING } }}
+                          transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
+                        >
+                          <AnimatePresence mode="wait" initial={false}>
+                            {entryPhase === 'checking' && entry.checkingClaim && (
+                              <motion.div
+                                key="checking"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0, transition: { duration: 0.16, ease: SOFT_SPRING } }}
+                                transition={{ duration: DURATION.micro }}
+                              >
+                                <FeedCard
+                                  size="verifying"
+                                  claimText={entry.checkingClaim.claimText || 'Checking that claim…'}
+                                  claimType={entry.checkingClaim.claimType}
+                                  timestampSeconds={entry.checkingClaim.timestampSeconds}
+                                  accentRgb="var(--model-accent-rgb)"
+                                  glow
+                                  suppressEntry
+                                />
+                              </motion.div>
+                            )}
+                            {entryPhase === 'resolved' && entry.resolvedCard && (
+                              <motion.div
+                                key="resolved"
+                                initial={{ opacity: 0, scale: 1.01 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
+                                transition={{ duration: DURATION.micro }}
+                              >
+                                <FeedCard
+                                  size="compact"
+                                  card={entry.resolvedCard}
+                                  timestampSeconds={entry.resolvedCard.timestampSeconds}
+                                  accentRgb={STATUS_RGB[entry.resolvedCard.status] ?? '154, 160, 166'}
+                                  suppressEntry
+                                />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      );
+                    })()}
+
+                    {!isInitialLoading && showStateCard && (
+                      <motion.div
+                        key={`state-${status}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: DURATION.standard }}
+                      >
+                        {status === 'no-transcript' && (
                           <FeedCard
-                            size="scanning"
-                            previewText={currentScanPreview}
-                            entities={scanEntities}
-                            actionState={scanActionState as 'VERIFYING' | 'REJECTED' | 'BUFFERING' | 'PARSE_ERROR' | null}
-                            reason={scanReason}
-                            timestampSeconds={liveTimestampSeconds}
-                            accentRgb="var(--model-accent-rgb)"
+                            size="state"
+                            badgeLabel="No captions"
+                            timestampSeconds={null}
+                            accentRgb="var(--sc-neutral-rgb)"
+                            tone="muted"
+                            headline="Captions couldn't be loaded."
+                            supportLine="Try refreshing the page or click CC in the player to enable captions."
+                            actionLabel={onRetryTranscript ? 'Retry' : undefined}
+                            onAction={onRetryTranscript}
                           />
-                        ) : (
-                          <div className="ml-[46px] py-3 pr-2 flex items-center gap-2.5">
-                            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sc-muted/25 animate-pulse" />
+                        )}
+                        {status === 'error' && (
+                          <FeedCard
+                            size="state"
+                            badgeLabel="Error"
+                            timestampSeconds={null}
+                            accentRgb="var(--sc-neutral-rgb)"
+                            tone="muted"
+                            headline="Something interrupted verification."
+                            supportLine="Try refreshing the page."
+                          />
+                        )}
+                      </motion.div>
+                    )}
+
+                    {showAmbientWaiting && (
+                      <motion.div
+                        key="waiting"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: DURATION.standard }}
+                      >
+                        <div className="ml-[46px] py-3 pr-2">
+                          <div className="flex items-center gap-2.5">
+                            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sc-muted/25 animate-heartbeat" />
                             <p className="text-[12px] text-sc-muted/40">
                               Waiting for a claim worth checking
                             </p>
                           </div>
-                        )
-                      )}
-                    </motion.div>
-                  )}
+                          {chunksScanned > 0 && (
+                            <p className="mt-1 ml-4 text-[10px] font-mono tabular-nums text-sc-muted/25">
+                              {chunksScanned} segments analyzed
+                            </p>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-                </AnimatePresence>
+                  {/* Secondary stage entry — outside mode="wait", independent lifecycle */}
+                  <AnimatePresence>
+                    {!isInitialLoading && stageEntries[1] && (() => {
+                      const entry = stageEntries[1];
+                      const entryPhase = entry.resolvedCard ? 'resolved' : (entry.checkingClaim ? 'checking' : null);
+                      if (!entryPhase) return null;
+                      return (
+                        <motion.div
+                          key={entry.claimKey}
+                          layoutId={enableListLayoutAnimations ? `claim-${entry.claimKey}` : undefined}
+                          layout={enableListLayoutAnimations}
+                          className="relative mt-1"
+                          initial={prefersReducedMotion ? false : { opacity: 0, y: -6 }}
+                          animate={{ opacity: 0.45, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.97, transition: { duration: DURATION.micro, ease: SOFT_SPRING } }}
+                          transition={{ duration: DURATION.standard, ease: SOFT_SPRING }}
+                        >
+                          <AnimatePresence mode="wait" initial={false}>
+                            {entryPhase === 'checking' && entry.checkingClaim && (
+                              <motion.div
+                                key="checking"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0, transition: { duration: 0.16, ease: SOFT_SPRING } }}
+                                transition={{ duration: DURATION.micro }}
+                              >
+                                <FeedCard
+                                  size="verifying"
+                                  claimText={entry.checkingClaim.claimText || 'Checking that claim…'}
+                                  claimType={entry.checkingClaim.claimType}
+                                  timestampSeconds={entry.checkingClaim.timestampSeconds}
+                                  accentRgb="var(--sc-neutral-rgb)"
+                                  suppressEntry
+                                />
+                              </motion.div>
+                            )}
+                            {entryPhase === 'resolved' && entry.resolvedCard && (
+                              <motion.div
+                                key="resolved"
+                                initial={{ opacity: 0, scale: 1.01 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
+                                transition={{ duration: DURATION.micro }}
+                              >
+                                <FeedCard
+                                  size="compact"
+                                  card={entry.resolvedCard}
+                                  timestampSeconds={entry.resolvedCard.timestampSeconds}
+                                  accentRgb={STATUS_RGB[entry.resolvedCard.status] ?? '154, 160, 166'}
+                                  suppressEntry
+                                />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                          <AnimatePresence>
+                            {queuedCount > 0 && (
+                              <motion.div
+                                key="queue-chip"
+                                className="absolute bottom-3 right-3 pointer-events-none"
+                                initial={{ opacity: 0, scale: 0.88 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.9 }}
+                                transition={{ duration: 0.18, ease: SOFT_SPRING }}
+                              >
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[10px] font-medium text-sc-muted/65 bg-sc-bg-0/85 border border-sc-border-soft/50 backdrop-blur-sm tabular-nums">
+                                  {queuedCount} more
+                                </span>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      );
+                    })()}
+                  </AnimatePresence>
+
+                  {/* Queue chip when no secondary visible but overflow exists */}
+                  <AnimatePresence>
+                    {!stageEntries[1] && queuedCount > 0 && stageEntries[0] && (
+                      <motion.div
+                        key="queue-chip-primary"
+                        className="absolute bottom-3 right-3 pointer-events-none"
+                        initial={{ opacity: 0, scale: 0.88 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        transition={{ duration: 0.18, ease: SOFT_SPRING }}
+                      >
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[10px] font-medium text-sc-muted/65 bg-sc-bg-0/85 border border-sc-border-soft/50 backdrop-blur-sm tabular-nums">
+                          {queuedCount} queued
+                        </span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
               </div>
-            </div>
 
-            {/* Recent checks */}
-            {recentChecks.length > 0 && (
-              <div className="px-3 mt-3.5">
-                <p className="stage-section-label ml-[46px] mb-2">Recent checks</p>
-                <div className="flex flex-col gap-1">
-                  {recentChecks.map((card, index) => (
-                    <motion.div
-                      key={card.id}
-                      layoutId={enableListLayoutAnimations ? `claim-${cardClaimKey(card)}` : undefined}
-                      layout={enableListLayoutAnimations}
-                      custom={index}
-                      variants={getStackEntryVariants(prefersReducedMotion)}
-                      initial={prefersReducedMotion ? false : 'hidden'}
-                      animate={prefersReducedMotion ? undefined : 'visible'}
-                    >
-                      <FeedCard
-                        size="compact"
-                        card={card}
-                        timestampSeconds={card.timestampSeconds}
-                        accentRgb={STATUS_RGB[card.status] ?? '154, 160, 166'}
-                        isExpanded={expandedClaimId === card.id}
-                        onToggle={() =>
-                          setExpandedClaimId((c) => (c === card.id ? null : card.id))
-                        }
-                      />
-                    </motion.div>
-                  ))}
+              {recentChecks.length > 0 && (
+                <div className={`px-3 ${livePhase === 'reading' ? 'mt-2.5' : 'mt-3.5'}`}>
+                  <div className="stage-section-row ml-[46px] mb-2">
+                    <span className="stage-section-rule" />
+                    <p className="stage-section-label">Recent checks</p>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {recentChecks.map((card, index) => {
+                      const claimKey = getCardClaimKey(card);
+                      const isDockTarget = Boolean(dockedKeys?.has(claimKey));
+
+                      // CALM TRANSITION: Docking cards should NOT use layoutId morphing
+                      // The stage card exits gracefully; this card appears with simple fade
+                      // This prevents the chaotic "morphing" animation that fights with exit
+                      return (
+                        <motion.div
+                          key={card.id}
+                          // NO layoutId for docking cards - prevents animation collision
+                          layoutId={enableListLayoutAnimations && !isDockTarget ? `claim-${claimKey}` : undefined}
+                          layout={enableListLayoutAnimations && !isDockTarget}
+                          custom={index}
+                          variants={isDockTarget ? undefined : getStackEntryVariants(prefersReducedMotion)}
+                          initial={isDockTarget ? { opacity: 0, y: 8 } : prefersReducedMotion ? false : 'hidden'}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={isDockTarget ? { duration: 0.35, ease: SOFT_SPRING } : undefined}
+                        >
+                          <FeedCard
+                            size="compact"
+                            card={card}
+                            timestampSeconds={card.timestampSeconds}
+                            accentRgb={STATUS_RGB[card.status] ?? '154, 160, 166'}
+                            isExpanded={expandedClaimId === card.id}
+                            onToggle={() =>
+                              setExpandedClaimId((c) => (c === card.id ? null : card.id))
+                            }
+                          />
+                        </motion.div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
-
-          </div>
+              )}
+            </div>
+          </LayoutGroup>
         )}
 
         {/* ── HISTORY TAB ──────────────────────────────────────────────────── */}
@@ -419,22 +490,31 @@ export const CardFeed = ({
             )}
 
             {/* Fact checks */}
-            {displayCards.length > 0 && (
+            {historyCards.length > 0 && (
               <motion.div
                 layout={enableListLayoutAnimations}
                 className="feed-card-stack flex flex-col gap-1"
               >
-                <div className="feed-rail-offset mb-0.5">
+                <div className="feed-rail-offset mb-0.5 flex items-center justify-between">
                   <div className="ml-1">
                     <p className="feed-section-label">Fact checks</p>
                   </div>
+                  {onClearHistory && (
+                    <button
+                      type="button"
+                      onClick={onClearHistory}
+                      className="text-[10px] text-sc-muted/50 hover:text-sc-muted/80 transition-colors mr-1"
+                    >
+                      Clear
+                    </button>
+                  )}
                 </div>
-                {displayCards.slice().reverse().map((card, reverseIndex) => (
+                {historyCards.slice().reverse().map((card, reverseIndex) => (
                   <motion.div
                     key={card.id}
                     layout={enableListLayoutAnimations}
                     layoutId={enableListLayoutAnimations ? `claim-${card.id}` : undefined}
-                    custom={displayCards.length - 1 - reverseIndex}
+                    custom={historyCards.length - 1 - reverseIndex}
                     variants={getStackEntryVariants(prefersReducedMotion)}
                     initial={prefersReducedMotion ? false : 'hidden'}
                     animate={prefersReducedMotion ? undefined : 'visible'}
@@ -456,7 +536,7 @@ export const CardFeed = ({
             )}
 
             {/* Empty history state */}
-            {displayCards.length === 0 && askHistory.length === 0 && (
+            {historyCards.length === 0 && askHistory.length === 0 && (
               <FeedCard
                 size="state"
                 badgeLabel="No history"
