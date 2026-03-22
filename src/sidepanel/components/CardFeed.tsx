@@ -193,7 +193,6 @@ export const CardFeed = ({
                     {!isInitialLoading && ((livePhase === 'reading' && readingVariant != null) || !!stageEntries[0]) && (
                       <motion.div
                         key="live-primary"
-                        layout={enableListLayoutAnimations}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0, transition: { duration: 0.22, ease: SOFT_SPRING } }}
