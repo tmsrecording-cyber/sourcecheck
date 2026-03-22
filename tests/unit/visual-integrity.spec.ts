@@ -57,14 +57,15 @@ describe('rail line model color', () => {
     expect(block).toContain('model-accent-rgb');
   });
 
-  it('verifying rail uses a flowing pipeline animation on ::after', () => {
-    expect(css).toContain('railDataFlow');
-    expect(css).toContain('.rail-line-verify::after');
-  });
-
-  it('FeedCard applies rail-line-scan to scanning cards', () => {
-    expect(feedCard).toContain("rail-line-scan");
-    expect(feedCard).toContain("rail-line-verify");
+  it('live-tab-rail background thread is the single spine (no per-card rail-line rendered)', () => {
+    // Architecture: live-tab-rail::before is the sole vertical line.
+    // Per-card rail-line spans were removed to eliminate the double-line artifact.
+    // The CSS classes still exist (for possible future use) but FeedCard does not render them.
+    expect(feedCard).not.toContain("rail-line-scan");
+    expect(feedCard).not.toContain("rail-line-verify");
+    // The background thread lives in CSS
+    expect(css).toContain('live-tab-rail::before');
+    expect(css).toContain('railScanFlow');
   });
 
   it('base rail-line has no hardcoded opacity that would suppress the colour', () => {

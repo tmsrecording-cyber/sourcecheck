@@ -325,11 +325,22 @@ const CompactContent = ({
   // Extract first sentence of nuance for primary display (truncate at first period, or use full nuance)
   const nuanceFirstSentence = nuance ? nuance.split(/\.(\s|$)/)[0] + (nuance.includes('.') ? '.' : '') : '';
   
-  // Filter generic evaluation/boilerplate phrases — they add no info beyond the verdict badge
+  // Full boilerplate filter for supported/partial/disputed cards — these phrases contradict the verdict
   const BOILERPLATE_RE = /^we could not verify|^this claim could not|^unable to verify|^this likely needs|^no verifiable|^this requires|^verifying this|^cannot be verified|^insufficient (public )?evidence|^there (is|are) no|^no reliable source|^no (strong|credible|independent) (web|source)|^this (claim|statement) (cannot|could not)|^based on (available|the) (evidence|sources?|information)/i;
-  const reasoningText = (nuanceFirstSentence && !BOILERPLATE_RE.test(nuanceFirstSentence))
-    ? nuanceFirstSentence
-    : card.claim.claimText;
+  const isUnverifiable = card.status === 'unverifiable';
+  // For unverifiable cards, only filter pure "verification failed" phrases — ones that say
+  // nothing about WHY or WHAT is missing. Explanatory phrases ("needs specifics",
+  // "requires a primary source", etc.) are kept — they're the useful signal.
+  // When pure boilerplate is detected, fall back to the claim text so the user sees WHAT
+  // couldn't be verified rather than a generic failure message.
+  const UV_PURE_BOILERPLATE_RE = /^we could not verify|^this claim could not|^unable to verify|^cannot be verified|^this (claim|statement) (cannot|could not)|^verifying this claim/i;
+  const reasoningText = isUnverifiable
+    ? (nuanceFirstSentence && !UV_PURE_BOILERPLATE_RE.test(nuanceFirstSentence))
+      ? nuanceFirstSentence
+      : card.claim.claimText
+    : (nuanceFirstSentence && !BOILERPLATE_RE.test(nuanceFirstSentence))
+      ? nuanceFirstSentence
+      : card.claim.claimText;
 
   return (
     <div 
@@ -485,8 +496,8 @@ const ScanningContent = ({
     <>
       <div className="flex items-center gap-2">
         <span className={`status-dot ${isVerifying ? 'status-dot-pulse' : 'status-dot-subtle'}`} />
-        <span className={`text-[11px] font-medium tracking-[0.02em] ${isVerifying ? 'scanning-label-active' : 'text-sc-muted'}`}>
-          {isVerifying ? 'Checking claim…' : 'Scanning'}
+        <span className={`font-mono text-[10px] font-bold tracking-[0.07em] uppercase ${isVerifying ? 'scanning-label-active' : 'text-sc-muted/70'}`}>
+          {isVerifying ? 'Checking…' : 'Scanning'}
         </span>
         <ScanPulseBar active={isVerifying} />
       </div>
@@ -634,57 +645,59 @@ export const FeedCard = (props: FeedCardProps) => {
   const isCompact = size === 'compact';
   const isScanning = size === 'scanning';
   const isPassiveCard = size === 'state' || size === 'skeleton';
-  const showRail = !isCompact;
+  // State and skeleton cards span full width with no timeline context
+  const showRail = !isPassiveCard;
 
   return (
     <div
       className="feed-card-wrapper feed-card-wrapper-rail"
-      style={{ '--rail-left': '44px' } as CSSProperties}
+      style={{ '--rail-left': '52px' } as CSSProperties}
     >
       {showRail && (
         <div className="feed-card-rail">
-          {/* Timestamp */}
-          {timestampSeconds !== null && (
+          {/* Timestamp — only on stage cards (compact shows timestamp in its own header row) */}
+          {timestampSeconds !== null && !isCompact && (
             <div className="rail-timestamp-wrap">
               <span className="rail-timestamp">{formatTime(timestampSeconds)}</span>
             </div>
           )}
-          
-          {/* Vertical rail line — model color for live states, verdict color for resolved */}
+
+          {/* Diamond node — full size for stage cards, compact dot for resolved checks */}
+          {/* NOTE: No per-card rail-line rendered here. The live-tab-rail::before pseudo-element
+              is the single source of truth for the vertical spine. Removing the per-card line
+              eliminates the double-line / fighting-animation visual artifact. */}
           <span
             className={[
-              'rail-line',
-              size === 'scanning' ? 'rail-line-scan' : '',
-              size === 'verifying' ? 'rail-line-verify' : '',
+              'rail-node',
+              isCompact ? 'rail-node-compact' : '',
+              !isCompact && glow ? 'rail-node-glow' : '',
             ].join(' ').trim()}
-            style={
-              size !== 'scanning' && size !== 'verifying'
-                ? {
-                    background: `linear-gradient(180deg, transparent 0%, rgba(${accentRgb}, 0.60) 8%, rgba(${accentRgb}, 0.36) 50%, rgba(${accentRgb}, 0.12) 92%, transparent 100%)`,
-                  }
-                : undefined
-            }
-          />
-          
-          {/* Diamond node */}
-          <span
-            className={`rail-node ${glow ? 'rail-node-glow' : ''}`}
-            style={{ 
-              backgroundColor: `rgba(${accentRgb}, 1)`,
-              borderColor: `rgba(${accentRgb}, ${glow ? 0.5 : 0.34})`,
+            style={isCompact ? {
+              // Compact: small solid-fill verdict dot
+              backgroundColor: `rgba(${accentRgb}, 0.9)`,
+              borderColor: `rgba(${accentRgb}, 0.30)`,
+              boxShadow: `0 0 4px rgba(${accentRgb}, 0.22)`,
+            } : {
+              // Stage cards: dark interior + accent border — visually breaks the spine
+              // so the line reads as "terminating" at the node, not passing through it
+              backgroundColor: 'rgba(var(--sc-bg-0-rgb, 23, 23, 23), 0.97)',
+              borderColor: `rgba(${accentRgb}, ${glow ? 0.88 : 0.68})`,
+              borderWidth: '2px',
               boxShadow: glow
-                ? `0 0 10px rgba(${accentRgb}, 0.3), 0 0 4px rgba(${accentRgb}, 0.15), inset 0 0 2px rgba(255, 255, 255, 0.45)`
-                : `0 0 6px rgba(${accentRgb}, 0.22), 0 0 4px rgba(${accentRgb}, 0.12), inset 0 0 2px rgba(255, 255, 255, 0.3)`,
+                ? `0 0 14px rgba(${accentRgb}, 0.42), 0 0 5px rgba(${accentRgb}, 0.24), inset 0 0 3px rgba(${accentRgb}, 0.18)`
+                : `0 0 8px rgba(${accentRgb}, 0.28), 0 0 3px rgba(${accentRgb}, 0.14)`,
             }}
           />
-          
-          {/* Connector to card */}
-          <span
-            className="rail-connector"
-            style={{ 
-              background: `linear-gradient(to right, rgba(${accentRgb}, 0.82), rgba(${accentRgb}, 0.22) 80%, transparent)`
-            }}
-          />
+
+          {/* Connector to card — only on stage cards; compact cards rely on proximity */}
+          {!isCompact && (
+            <span
+              className="rail-connector"
+              style={{
+                background: `linear-gradient(to right, rgba(${accentRgb}, 0.72), rgba(${accentRgb}, 0.18) 80%, transparent)`
+              }}
+            />
+          )}
         </div>
       )}
 

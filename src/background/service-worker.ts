@@ -1455,7 +1455,17 @@ const getVerificationSkipReason = (claim: ExtractedClaim) => {
 
   // --- 1. Basic structural filters ---
   const claimWords = claim.claimText.trim().split(/\s+/).length;
-  
+
+  // Truncated claims (extraction model missed its own fragment rule) — the
+  // verifier can't evaluate an incomplete sentence and returns "unverifiable".
+  const endsWithEllipsis = /(?:\.{2,}|\u2026)$/.test(claim.claimText.trim());
+  if (endsWithEllipsis) {
+    const reason = 'truncated claim text (ends with ellipsis)';
+    metricsAccumulator.candidatesRejectedClientQuality++;
+    metricsAccumulator.skipReasons[reason] = (metricsAccumulator.skipReasons[reason] || 0) + 1;
+    return reason;
+  }
+
   // Too short to be meaningful (less than 3 words is definitely a fragment)
   if (claimWords < 3) {
     const reason = `claim too short (${claimWords} words)`;

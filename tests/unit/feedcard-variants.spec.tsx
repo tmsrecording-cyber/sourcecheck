@@ -67,8 +67,8 @@ describe('FeedCard variants', () => {
     expect(html).toContain('feed-card-compact');
     // Reasoning text element is always present
     expect(html).toContain('compact-reasoning-text');
-    // Boilerplate nuance ("This likely needs a paper...") falls back to the actual claim text
-    expect(html).toContain('Federal Records Act');
+    // For unverifiable cards, the nuance IS the useful context — shown as-is, no boilerplate filter
+    expect(html).toContain('This likely needs a paper');
     expect(html).toContain('Cannot verify');
   });
 
@@ -204,9 +204,10 @@ describe('FeedCard variants', () => {
   });
 
   it('resolved cards appear in both live and history tabs', () => {
-    const card2 = { ...baseCard, id: 'card-2', timestampSeconds: 120 };
+    // card2 is supported — unverifiable are filtered from History
+    const card2 = { ...baseCard, id: 'card-2', status: 'supported' as const, timestampSeconds: 120 };
 
-    // Live tab shows resolved cards as compact — nothing vanishes
+    // Live tab shows resolved cards as compact (including unverifiable)
     const liveHtml = renderToStaticMarkup(
       <CardFeed
         cards={[baseCard, card2]}
@@ -218,7 +219,7 @@ describe('FeedCard variants', () => {
     );
     expect(liveHtml).toContain('feed-card-compact');
 
-    // History tab shows the same cards
+    // History tab filters out unverifiable, but still shows supported/partial/disputed
     const historyHtml = renderToStaticMarkup(
       <CardFeed
         cards={[baseCard, card2]}

@@ -60,7 +60,7 @@ interface CardFeedProps {
 }
 
 const FEED_RAIL_LAYOUT = {
-  '--rail-left': '46px',
+  '--rail-left': '52px',
 } as CSSProperties;
 
 
@@ -113,8 +113,12 @@ export const CardFeed = ({
     livePhase === 'idle' &&
     chunksScanned === 0;
 
-  // Live tab uses current-video cards; History tab uses accumulated cross-video history
-  const historyCards = useMemo(() => allCards ?? cards, [allCards, cards]);
+  // Live tab uses current-video cards; History tab uses accumulated cross-video history.
+  // Filter unverifiable from History — they're noise, not insight.
+  const historyCards = useMemo(
+    () => (allCards ?? cards).filter((c) => c.status !== 'unverifiable'),
+    [allCards, cards],
+  );
 
   // Clear expanded card if it leaves recent checks
   useEffect(() => {
@@ -158,7 +162,7 @@ export const CardFeed = ({
             <div className="live-tab-rail flex flex-col">
               <div className="px-3 pt-2 pb-1">
                 {(showLiveCheckLabel || (livePhase === 'reading' && readingVariant != null)) && (
-                  <div className="stage-section-row ml-[46px] mb-2">
+                  <div className="stage-section-row ml-[52px] mb-2">
                     <span className="stage-section-rule" />
                     <p className="stage-section-label">Live Check</p>
                   </div>
@@ -205,10 +209,10 @@ export const CardFeed = ({
                           {livePhase === 'reading' && readingVariant != null && !stageEntries[0] && (
                             <motion.div
                               key="scanning"
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              exit={{ opacity: 0, transition: { duration: 0.12, ease: SOFT_SPRING } }}
-                              transition={{ duration: 0.18, ease: SOFT_SPRING }}
+                              initial={{ opacity: 0, y: 4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -3, transition: { duration: 0.14, ease: SOFT_SPRING } }}
+                              transition={{ duration: 0.22, ease: SOFT_SPRING }}
                             >
                               <FeedCard
                                 size="scanning"
@@ -228,21 +232,19 @@ export const CardFeed = ({
                             return (
                               <motion.div
                                 key={entry.claimKey}
-                                layoutId={enableListLayoutAnimations ? `claim-${entry.claimKey}` : undefined}
-                                layout={enableListLayoutAnimations}
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0, transition: { duration: 0.14, ease: SOFT_SPRING } }}
-                                transition={{ duration: 0.18, ease: SOFT_SPRING }}
+                                initial={{ opacity: 0, y: 5 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -3, transition: { duration: 0.16, ease: SOFT_SPRING } }}
+                                transition={{ duration: 0.24, ease: SOFT_SPRING }}
                               >
                                 <AnimatePresence mode="wait" initial={false}>
                                   {entryPhase === 'checking' && entry.checkingClaim && (
                                     <motion.div
                                       key="checking"
-                                      initial={{ opacity: 0 }}
-                                      animate={{ opacity: 1 }}
-                                      exit={{ opacity: 0, transition: { duration: 0.18, ease: SOFT_SPRING } }}
-                                      transition={{ duration: 0.24, ease: SOFT_SPRING }}
+                                      initial={{ opacity: 0, y: 4 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      exit={{ opacity: 0, y: -3, transition: { duration: 0.18, ease: SOFT_SPRING } }}
+                                      transition={{ duration: 0.26, ease: SOFT_SPRING }}
                                     >
                                       <FeedCard
                                         size="verifying"
@@ -258,10 +260,10 @@ export const CardFeed = ({
                                   {entryPhase === 'resolved' && entry.resolvedCard && (
                                     <motion.div
                                       key="resolved"
-                                      initial={{ opacity: 0, scale: 1.01 }}
-                                      animate={{ opacity: 1, scale: 1 }}
+                                      initial={{ opacity: 0, y: 3, scale: 1.01 }}
+                                      animate={{ opacity: 1, y: 0, scale: 1 }}
                                       exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
-                                      transition={{ duration: 0.24, ease: SOFT_SPRING }}
+                                      transition={{ duration: 0.28, ease: SOFT_SPRING }}
                                     >
                                       <FeedCard
                                         size="compact"
@@ -323,7 +325,7 @@ export const CardFeed = ({
                         exit={{ opacity: 0 }}
                         transition={{ duration: DURATION.standard }}
                       >
-                        <div className="ml-[46px] py-3 pr-2">
+                        <div className="ml-[52px] py-3 pr-2">
                           <div className="flex items-center gap-2.5">
                             <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sc-muted/25 animate-heartbeat" />
                             <p className="text-[12px] text-sc-muted/40">
@@ -349,8 +351,6 @@ export const CardFeed = ({
                       return (
                         <motion.div
                           key={entry.claimKey}
-                          layoutId={enableListLayoutAnimations ? `claim-${entry.claimKey}` : undefined}
-                          layout={enableListLayoutAnimations}
                           className="relative mt-1"
                           initial={prefersReducedMotion ? false : { opacity: 0, y: -6 }}
                           animate={{ opacity: 0.45, y: 0 }}
@@ -437,7 +437,7 @@ export const CardFeed = ({
 
               {recentChecks.length > 0 && (
                 <div className={`px-3 ${livePhase === 'reading' ? 'mt-2.5' : 'mt-3.5'}`}>
-                  <div className="stage-section-row ml-[46px] mb-2">
+                  <div className="stage-section-row ml-[52px] mb-2">
                     <span className="stage-section-rule" />
                     <p className="stage-section-label">Recent checks</p>
                   </div>
@@ -452,9 +452,6 @@ export const CardFeed = ({
                       return (
                         <motion.div
                           key={card.id}
-                          // NO layoutId for docking cards - prevents animation collision
-                          layoutId={enableListLayoutAnimations && !isDockTarget ? `claim-${claimKey}` : undefined}
-                          layout={enableListLayoutAnimations && !isDockTarget}
                           custom={index}
                           variants={isDockTarget ? undefined : getStackEntryVariants(prefersReducedMotion)}
                           initial={isDockTarget ? { opacity: 0, y: 8 } : prefersReducedMotion ? false : 'hidden'}

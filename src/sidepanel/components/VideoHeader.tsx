@@ -180,11 +180,6 @@ export const VideoHeader = ({
           >
             {title}
           </h1>
-          {isLiveTab && (
-            <p className="mt-0.5 text-[11px] text-sc-muted/50 tracking-[0.005em] truncate">
-              {channel}
-            </p>
-          )}
         </div>
 
         {!isLiveTab && (
@@ -206,18 +201,16 @@ export const VideoHeader = ({
 
       {isLiveTab && (
         <AnimatePresence mode="wait">
-          {stripCopy && (
-            <motion.p
-              key={`${livePhase}-${stripCopy}`}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              className="mt-0.5 text-[11px] text-sc-muted/55 tracking-[0.01em]"
-            >
-              {stripCopy}
-            </motion.p>
-          )}
+          <motion.p
+            key={`${livePhase}-${stripCopy ?? 'idle'}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="mt-0.5 text-[11px] text-sc-muted/50 tracking-[0.005em] truncate"
+          >
+            {channel}{stripCopy ? <><span className="mx-1.5 opacity-40">·</span>{stripCopy}</> : null}
+          </motion.p>
         </AnimatePresence>
       )}
 
