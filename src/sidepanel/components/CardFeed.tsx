@@ -87,6 +87,7 @@ export const CardFeed = ({
   chunksScanned = 0,
   livePhase = 'idle',
   readingVariant = null,
+  readingPreview = null,
   readingTimestamp = null,
   stageEntries = [],
   dockedKeys,
@@ -212,7 +213,7 @@ export const CardFeed = ({
                             >
                               <FeedCard
                                 size="scanning"
-                                previewText=""
+                                previewText={readingPreview ?? ''}
                                 timestampSeconds={readingTimestamp}
                                 accentRgb="var(--model-accent-rgb)"
                                 suppressEntry

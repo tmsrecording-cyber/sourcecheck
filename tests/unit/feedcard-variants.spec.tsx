@@ -197,8 +197,8 @@ describe('FeedCard variants', () => {
     // Scanning card contains pulse bar activity visualization
     expect(html).toContain('scan-pulse-bar');
     expect(html).toContain('scan-pulse-segment');
-    // preview text is intentionally suppressed in ambient reading mode (teleprompter fix)
-    expect(html).not.toContain('A pending claim being verified');
+    // preview text shown in scanning card so user sees what's being read
+    expect(html).toContain('A pending claim being verified');
     expect(html).toContain('feed-card-compact');
     expect(html).not.toContain('feed-card-hero');
   });
