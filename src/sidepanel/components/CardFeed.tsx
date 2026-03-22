@@ -199,16 +199,16 @@ export const CardFeed = ({
                         transition={{ duration: 0.28, ease: SOFT_SPRING }}
                       >
                         {/* Inner content crossfades between scanning → checking → resolved.
-                            mode="popLayout" lets entering and exiting content overlap briefly
-                            so the card feels like it changes content, not swaps. */}
-                        <AnimatePresence mode="popLayout" initial={false}>
+                            mode="wait" keeps exiting elements in flow so the shell
+                            height stays stable — no layout jump between phases. */}
+                        <AnimatePresence mode="wait" initial={false}>
                           {livePhase === 'reading' && readingVariant != null && !stageEntries[0] && (
                             <motion.div
                               key="scanning"
                               initial={{ opacity: 0 }}
                               animate={{ opacity: 1 }}
-                              exit={{ opacity: 0, transition: { duration: 0.2, ease: SOFT_SPRING } }}
-                              transition={{ duration: 0.28, ease: SOFT_SPRING }}
+                              exit={{ opacity: 0, transition: { duration: 0.12, ease: SOFT_SPRING } }}
+                              transition={{ duration: 0.18, ease: SOFT_SPRING }}
                             >
                               <FeedCard
                                 size="scanning"
@@ -232,8 +232,8 @@ export const CardFeed = ({
                                 layout={enableListLayoutAnimations}
                                 initial={{ opacity: 0 }}
                                 animate={{ opacity: 1 }}
-                                exit={{ opacity: 0, transition: { duration: 0.22, ease: SOFT_SPRING } }}
-                                transition={{ duration: 0.3, ease: SOFT_SPRING }}
+                                exit={{ opacity: 0, transition: { duration: 0.14, ease: SOFT_SPRING } }}
+                                transition={{ duration: 0.18, ease: SOFT_SPRING }}
                               >
                                 <AnimatePresence mode="wait" initial={false}>
                                   {entryPhase === 'checking' && entry.checkingClaim && (
