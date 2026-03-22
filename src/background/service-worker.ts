@@ -2683,23 +2683,11 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
     return;
   }
   
-  // AGGRESSIVE PIPELINE LOGGING
-  console.log('[Pipeline] processPlayback called:', {
-    currentTime,
-    transcriptLength: currentTranscript.length,
-    hasActiveVideo: !!activeVideo,
-    isProcessing,
-    queueLength: analysisRequestQueue.length,
-    lastProcessedIndex,
-    videoId: activeVideo?.videoId,
-  });
-  
   // If already processing, queue the request and return
   if (isProcessing) {
     // FIX: Overwrite with the latest timestamp. We don't care about the intervening
     // milliseconds; we just want the pipeline to snap to the live playhead when ready.
     analysisRequestQueue = [{ currentTime, scheduledAt: Date.now() }];
-    console.log('[Pipeline] Queued next analysis at latest playhead');
     return;
   }
   
@@ -2758,7 +2746,6 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
   const minWordsRequired = isStartupBatch ? MIN_STARTUP_ANALYZE_WORDS : MIN_ANALYZE_WORDS;
   const hasSentenceBoundary = SENTENCE_END_REGEX.test(trimmedCombinedText);
   if (wordCount < minWordsRequired && currentIndex < currentTranscript.length - 1 && !hasSentenceBoundary) {
-    console.log('[Pipeline] Skipping: insufficient words', { wordCount, currentIndex, totalChunks: currentTranscript.length });
     return;
   }
 
@@ -2767,7 +2754,6 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
   const timeSinceLast = now - lastAnalyzedAt;
   const intervalMs = getAnalysisIntervalMs(backlogChunks);
   if (timeSinceLast < intervalMs) {
-    console.log('[Pipeline] Skipping: rate limited', { timeSinceLast, intervalMs, backlogChunks });
     return;
   }
   lastAnalyzedAt = now;
@@ -2780,17 +2766,6 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
 
   try {
     const analyzeEndpoint = `${API_BASE}/api/analyze-chunk`;
-    // AGGRESSIVE PIPELINE LOGGING
-    console.log('[Pipeline] ANALYZE CHUNK START:', {
-      videoId: requestVideoId,
-      startIndex,
-      endIndex,
-      chunkCount: chunksToProcess.length,
-      wordCount: chunksToProcess.map(c => c.text).join(' ').split(/\s+/).length,
-      firstChunk: chunksToProcess[0]?.text?.slice(0, 50),
-      lastChunk: chunksToProcess[chunksToProcess.length - 1]?.text?.slice(0, 50),
-      model: runtimeState.selectedModel,  // TRIAGE: Log model for each analyze call
-    });
 
     const analyzeStartTime = Date.now();
     let extraction: AnalyzeChunkResponse;
@@ -2828,18 +2803,6 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
     metricsAccumulator.candidatesRejectedBackendVerifiability += extraction._metrics?.verifiabilityFiltered || 0;
     metricsAccumulator.chunksScannedCount += chunksToProcess.length;
     
-    console.log('[Pipeline] API Response:', {
-      videoId: requestVideoId,
-      hasClaim: extraction.has_claim,
-      claimCount: extraction.claims?.length || 0,
-    });
-    console.log('[Pipeline] Parsed Response:', {
-      videoId: requestVideoId,
-      hasClaim: extraction.has_claim,
-      claimCount: extraction.claims?.length || 0,
-      actionState: extraction.action_state,
-      claims: extraction.claims?.map(c => ({ text: c.claimText?.slice(0, 40), confidence: c.confidence })),
-    });
     
     if (runGeneration !== processingGeneration || currentVideoInfo?.videoId !== requestVideoId) {
       console.log('[Pipeline] Generation mismatch or video changed, aborting.');

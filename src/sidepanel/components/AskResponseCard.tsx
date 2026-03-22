@@ -1,4 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
+import { useMemo } from 'react';
 import type { AskQuestionSource } from '../../../shared/types';
 import { formatTime } from '../utils/formatTime';
 import { getAskResponseEntry } from '../styles/motionTokens';
@@ -17,7 +18,7 @@ export const AskResponseCard = ({
   sources,
 }: AskResponseCardProps) => {
   const prefersReducedMotion = useReducedMotion();
-  const entry = getAskResponseEntry(prefersReducedMotion);
+  const entry = useMemo(() => getAskResponseEntry(prefersReducedMotion), [prefersReducedMotion]);
 
   return (
     <motion.div

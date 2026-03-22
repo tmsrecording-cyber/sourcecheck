@@ -206,8 +206,6 @@ export const App = () => {
   const feedScrollKey = useMemo(() => {
     return [
       displayAnalysisStatus,
-      runtimeState.lastScannedTimestamp ?? 'none',
-      runtimeState.chunksScanned,
       askHistory.length,
       runtimeState.sourceCards.length,
       runtimeState.pendingClaims.length,
@@ -218,8 +216,6 @@ export const App = () => {
     ].join('::');
   }, [
     displayAnalysisStatus,
-    runtimeState.lastScannedTimestamp,
-    runtimeState.chunksScanned,
     askHistory.length,
     runtimeState.sourceCards.length,
     runtimeState.pendingClaims.length,
