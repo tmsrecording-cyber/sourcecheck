@@ -46,7 +46,7 @@ const COMPACT_LABELS: Record<GeminiModelOption, string> = {
 
 /** Simple speed tags */
 const SPEED_TAGS: Record<'fast' | 'standard' | 'deep', string> = {
-  fast: 'scan fast · verify deep',
+  fast: 'fast + deep',
   standard: 'balanced',
   deep: 'thorough',
 };
