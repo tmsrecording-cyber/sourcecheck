@@ -137,9 +137,24 @@ Vague Generalizations:
 - "Technology moves fast"
 
 Pure Opinions:
-- Any claim starting with "I think", "I believe", "In my opinion"
+- Any claim starting with "I think", "I believe", "In my opinion", "I feel like"
 - Predictions without data basis: "This will change the world"
 - Personal anecdotes: "When I was in college..."
+
+YouTube Commentary Patterns (ALWAYS REJECT — these are framing, not facts):
+- "The real issue is...", "The real problem is...", "The real reason is..."
+- "What people don't understand is...", "What nobody tells you..."
+- "Here's the thing...", "The thing is...", "Here's what's really going on..."
+- "What they don't want you to know...", "What mainstream [media/science] ignores..."
+- "Think about it...", "If you think about it...", "When you really look at it..."
+- "Trust me...", "Believe me...", "I'm telling you..."
+- "The truth is...", "The reality is..." (when not backed by named evidence)
+- Any framing that sets up the speaker's take without asserting a specific, verifiable fact
+
+CRITICAL: BUFFERING is ONLY for literally incomplete sentences where the speaker is mid-thought.
+If a claim is fully formed but vague, weak, or opinion-based — use REJECTED, NOT BUFFERING.
+BUFFERING means "more text is needed to know if there's a claim here."
+REJECTED means "this text is fully visible and is not a verifiable claim."
 
 Trivial/Common Knowledge:
 - "Water is wet", "The sun rises in the east"

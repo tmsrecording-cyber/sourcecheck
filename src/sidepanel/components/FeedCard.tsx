@@ -369,6 +369,12 @@ const CompactContent = ({
             <span className={`compact-verdict compact-verdict-${card.status}`}>
               {meta.label}
             </span>
+            {/* A5: Show category chip for unverifiable cards — "Missing details", "Not found", etc. */}
+            {isUnverifiable && resolvedSourceTitleCompact && !card.isTransientFailure && (
+              <span className="compact-unverifiable-category">
+                {resolvedSourceTitleCompact}
+              </span>
+            )}
             {card.timestampSeconds !== null && card.timestampSeconds !== undefined && (
               <span className="compact-timestamp">{formatTime(card.timestampSeconds)}</span>
             )}
@@ -384,8 +390,9 @@ const CompactContent = ({
             {reasoningText}
           </p>
           
-          {/* Source - always visible, prominent */}
-          {resolvedSourceTitleCompact && (
+          {/* Source - always visible for verified cards.
+              For unverifiable: show link if URL exists, skip text-only source (category chip handles it) */}
+          {resolvedSourceTitleCompact && (!isUnverifiable || hasSourceLink) && (
             <p className="compact-source-line">
               {hasSourceLink ? (
                 <a

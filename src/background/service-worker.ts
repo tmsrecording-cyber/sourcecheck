@@ -54,7 +54,9 @@ void hardenStorageAccessLevels();
 const LARGE_SEEK_TIME_SECONDS = 180;    // jumps > 3 min that weren't caught by VIDEO_SEEKED
 const STARTUP_BACKFILL_SECONDS = 120;   // on first run, scan the last 2 min of history
 const MAX_VERIFICATION_RETRIES = 2;
-const MAX_CONCURRENT_VERIFICATIONS = 2;
+const MAX_CONCURRENT_VERIFICATIONS = 4;
+const THROTTLED_CONCURRENT_VERIFICATIONS = 2;
+const CONSECUTIVE_429_THROTTLE_THRESHOLD = 3;
 const PLAYHEAD_LEASH_SECONDS = 15;
 const MAX_SOURCE_CARDS = 20;  // Aligned with backend ask-video limit
 const MAX_ASK_SOURCE_CARDS = 12;
@@ -164,6 +166,7 @@ let currentScanReason: string | null = null;
 let bufferedFutureScan: BufferedFutureScan | null = null;
 let verificationQueue: VerificationQueueItem[] = [];
 let activeVerificationKeys = new Set<string>();
+let consecutive429Count = 0;
 let hasHydratedState = false;
 let hydrationPromise: Promise<void> | null = null;
 let hydratedAt: number | null = null; // TC5: Timestamp of last hydration for grace period
@@ -2264,8 +2267,9 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds} model=${runtimeState.selectedModel}`  // TRIAGE: Log model
     );
     // Gather surrounding transcript context for better verification
-    // Get chunks within 30 seconds of the claim timestamp
-    const contextWindowSeconds = 30;
+    // A4: Expand context window on retry (retryCount > 0) to catch claims like
+    // "the study found X" where the study name appears in the next chunk
+    const contextWindowSeconds = item.retryCount > 0 ? 60 : 30;
     const contextChunks = currentTranscript.filter(
       (chunk) => Math.abs(chunk.startTime - item.claim.timestampSeconds) <= contextWindowSeconds
     );
@@ -2307,6 +2311,20 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     metricsAccumulator.verifySucceeded++;
     if (sourceCard.status === 'unverifiable') {
       metricsAccumulator.verifyDowngradedUnverifiable++;
+
+      // A4: Re-queue with expanded context on first unverifiable result
+      // Avoids false unverifiables caused by missing context (e.g. "the study found X" without study name)
+      if (item.retryCount === 0 && !usedFallback) {
+        console.log(
+          `[SourceCheck/SW] re-queuing unverifiable claim with expanded context video=${item.videoId} ` +
+          `timestamp=${item.claim.timestampSeconds}`
+        );
+        activeVerificationKeys.delete(item.key);
+        removePendingClaimByKey(item.key);
+        const retryItem: VerificationQueueItem = { ...item, retryCount: 1 };
+        verificationQueue.push(retryItem);
+        return;
+      }
     }
     metricsAccumulator.cardsAppended++;
 
@@ -2348,6 +2366,13 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       url: '/api/verify-claim'
     });
     
+    // A2: Track consecutive 429s for dynamic throttle
+    if (classifiedError.code === 'RATE_LIMITED' || errorStatus === 429) {
+      consecutive429Count++;
+    } else {
+      consecutive429Count = 0;
+    }
+
     // Check if this is a non-retryable error using shared classification
     const isNonRetryable = !classifiedError.retryable;
     
@@ -2449,9 +2474,18 @@ const processVerificationQueue = async () => {
     // Use shift() pattern to safely handle queue mutations during iteration
     while (verificationQueue.length > 0) {
       if (runGeneration !== verificationGeneration) return;
+
+      // A3: Priority sort — highest confidence claims verified first
+      verificationQueue.sort((a, b) => (b.claim.confidence ?? 0.5) - (a.claim.confidence ?? 0.5));
+
+      // A2: Dynamic throttle — drop to 2 concurrent after repeated 429s
+      const concurrency = consecutive429Count >= CONSECUTIVE_429_THROTTLE_THRESHOLD
+        ? THROTTLED_CONCURRENT_VERIFICATIONS
+        : MAX_CONCURRENT_VERIFICATIONS;
+
       // Take items from front of queue - safe against mutations during processing
       const batch: VerificationQueueItem[] = [];
-      for (let i = 0; i < MAX_CONCURRENT_VERIFICATIONS && verificationQueue.length > 0; i++) {
+      for (let i = 0; i < concurrency && verificationQueue.length > 0; i++) {
         const item = verificationQueue.shift();
         if (item) batch.push(item);
       }
@@ -2488,6 +2522,7 @@ const flushPipelineForSeek = (currentTime: number) => {
   isVerifying = false;
   verificationQueue = [];
   activeVerificationKeys = new Set<string>();
+  consecutive429Count = 0;
   allPendingClaims = [];
   pendingClaims = [];
   lastAnalyzedAt = 0;

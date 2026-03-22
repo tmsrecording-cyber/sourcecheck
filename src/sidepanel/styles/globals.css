@@ -2964,6 +2964,24 @@ body::before {
   white-space: nowrap;
 }
 
+/* A5: Category chip for unverifiable cards — explains WHY, shown in meta row */
+.compact-unverifiable-category {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px dashed rgba(var(--sc-muted-rgb), 0.32);
+  background: rgba(var(--sc-muted-rgb), 0.08);
+  color: rgba(var(--sc-muted-rgb), 0.72);
+  padding: 1px 6px;
+  font-size: 9px;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .compact-claim-text {
   margin-top: 7px;
   font-size: 12px;
