@@ -1745,7 +1745,6 @@ const analyzeXmlTranscript = (xmlText: string) => {
     const parser = new DOMParser();
     xmlDoc = parser.parseFromString(xmlText, 'text/xml');
   } catch (error) {
-    console.log('[SourceCheck][HARD DEBUG] XML parse-threw:', error);
     return {
       rawCount: 0,
       chunks: [] as TranscriptChunk[],
@@ -1755,7 +1754,6 @@ const analyzeXmlTranscript = (xmlText: string) => {
   
   const parserErrors = Array.from(xmlDoc.getElementsByTagName('parsererror'));
   if (parserErrors.length > 0) {
-    console.log('[SourceCheck][HARD DEBUG] XML parsererror:', parserErrors[0]?.textContent);
     return {
       rawCount: 0,
       chunks: [] as TranscriptChunk[],
@@ -1766,7 +1764,6 @@ const analyzeXmlTranscript = (xmlText: string) => {
   const textNodes = Array.from(xmlDoc.getElementsByTagName('text'));
   
   if (textNodes.length === 0) {
-    console.log('[SourceCheck][HARD DEBUG] XML has no <text> nodes');
   }
   
   const chunks = parseXmlTranscript(xmlText);
@@ -1794,7 +1791,6 @@ const parseJson3Transcript = (jsonText: string): TranscriptChunk[] => {
       }))
       .filter((chunk) => chunk.text.length > 0);
   } catch (error) {
-    console.warn('[SourceCheck][HARD DEBUG] JSON3 parse error:', error);
     return [];
   }
 };
@@ -1812,7 +1808,6 @@ const analyzeJson3Transcript = (jsonText: string) => {
   try {
     payload = JSON.parse(jsonText) as Json3TranscriptResponse;
   } catch (error) {
-    console.log('[SourceCheck][HARD DEBUG] JSON3 parse-threw:', error);
     return {
       rawCount: 0,
       chunks: [] as TranscriptChunk[],
@@ -1824,7 +1819,6 @@ const analyzeJson3Transcript = (jsonText: string) => {
   
   // Log if no events
   if (events.length === 0) {
-    console.log('[SourceCheck][HARD DEBUG] JSON3 has no events array');
   }
   
   const chunks = events
@@ -1907,7 +1901,6 @@ const analyzeSrv3Transcript = (xmlText: string) => {
     const parser = new DOMParser();
     xmlDoc = parser.parseFromString(xmlText, 'text/xml');
   } catch (error) {
-    console.log('[SourceCheck][HARD DEBUG] SRV3 parse-threw:', error);
     return {
       rawCount: 0,
       chunks: [] as TranscriptChunk[],
@@ -1917,7 +1910,6 @@ const analyzeSrv3Transcript = (xmlText: string) => {
   
   const parserErrors = Array.from(xmlDoc.getElementsByTagName('parsererror'));
   if (parserErrors.length > 0) {
-    console.log('[SourceCheck][HARD DEBUG] SRV3 parsererror:', parserErrors[0]?.textContent);
     return {
       rawCount: 0,
       chunks: [] as TranscriptChunk[],
@@ -1928,7 +1920,6 @@ const analyzeSrv3Transcript = (xmlText: string) => {
   const paragraphNodes = Array.from(xmlDoc.getElementsByTagName('p'));
   
   if (paragraphNodes.length === 0) {
-    console.log('[SourceCheck][HARD DEBUG] SRV3 has no <p> nodes');
   }
   
   const segmentCount = paragraphNodes.reduce(
@@ -2037,20 +2028,6 @@ const fetchTranscriptChunks = async (
       const contentType = response.headers.get('content-type') || 'unknown';
       const bodyText = await response.text();
 
-      // HARD DEBUG: Log raw response details
-      console.log(`[SourceCheck][HARD DEBUG] Transcript fetch:`, {
-        format: candidate.format,
-        url: candidate.url,
-        status: response.status,
-        contentType,
-        bodyLength: bodyText.length,
-        bodyPreview: bodyText.slice(0, 300).replace(/\s+/g, ' '),
-        startsWithDoctype: bodyText.trim().toLowerCase().startsWith('<!doctype'),
-        startsWithHtml: bodyText.trim().toLowerCase().startsWith('<html'),
-        startsWithXml: bodyText.trim().startsWith('<?xml'),
-        looksLikeJson: bodyText.trim().startsWith('{') || bodyText.trim().startsWith('['),
-      });
-
       logTranscriptDetail('html', 'fetchStatus', {
         format: candidate.format,
         status: response.status,
@@ -2119,7 +2096,6 @@ const fetchTranscriptChunks = async (
         bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
           ? failure
           : bestFailure;
-        console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} response was empty (0 bytes after trim)`);
         continue;
       }
 
@@ -2129,7 +2105,6 @@ const fetchTranscriptChunks = async (
           trimmedLower.startsWith('<html') ||
           trimmedLower.startsWith('<head') ||
           trimmedLower.includes('<title>')) {
-        console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} returned HTML instead of transcript`);
         emitTranscriptFetchDebug(
           onFetchDebug,
           'html',
@@ -2163,7 +2138,6 @@ const fetchTranscriptChunks = async (
               ? analyzeJson3Transcript(bodyText)
               : analyzeSrv3Transcript(bodyText);
         } catch (parseError) {
-          console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} parse threw:`, parseError);
           emitTranscriptFetchDebug(
             onFetchDebug,
             'html',
@@ -2183,12 +2157,6 @@ const fetchTranscriptChunks = async (
         }
         
         const { chunks } = parseResult;
-        
-        console.log(`[SourceCheck][HARD DEBUG] Transcript ${candidate.format} parsed:`, {
-          rawCount: parseResult.rawCount,
-          chunksAfterFilter: chunks.length,
-          emptyReason: (parseResult as any).emptyReason,
-        });
 
         if (chunks.length > 0) {
           emitTranscriptFetchDebug(
@@ -2296,8 +2264,6 @@ const fetchTranscriptChunks = async (
       continue;
     }
   }
-
-  console.log(`[SourceCheck][HARD DEBUG] All transcript fetch attempts failed. bestFailure:`, bestFailure);
   return bestFailure;
 };
 
