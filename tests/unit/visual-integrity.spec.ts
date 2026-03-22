@@ -279,6 +279,65 @@ describe('ambient heartbeat animation', () => {
 describe('rail node visibility', () => {
   it('rail nodes scale on card hover', () => {
     expect(css).toContain('.feed-card-wrapper:hover .rail-node');
-    expect(css).toContain('scale(1.15)');
+    // B4: Updated to 1.2x scale (was 1.15) for more visible hover feedback
+    expect(css).toContain('scale(1.2)');
+  });
+
+  it('verifying card rail node has expanding ring pulse', () => {
+    // B4: Active verification communicated via expanding ring on the rail node
+    expect(css).toContain('.rail-node-active');
+    expect(css).toContain('@keyframes railNodeRingPulse');
+  });
+});
+
+// ── Phase B: Source chip ──────────────────────────────────────────────────
+// Compact cards show a source type icon + domain chip when a URL is present.
+// This enables quick source identification at a glance.
+
+describe('source chip on compact cards', () => {
+  it('source chip link class is defined in CSS', () => {
+    expect(css).toContain('.compact-source-chip-link');
+  });
+
+  it('FeedCard references source chip link class', () => {
+    expect(feedCard).toContain('compact-source-chip-link');
+  });
+
+  it('source type icon map covers all source types', () => {
+    // All sourceType values must have an icon entry
+    expect(feedCard).toContain('academic_paper');
+    expect(feedCard).toContain('news_article');
+    expect(feedCard).toContain('official_source');
+    expect(feedCard).toContain('wikipedia');
+  });
+});
+
+// ── Phase B: Glassmorphism compact cards ──────────────────────────────────
+// Compact cards use inner glass highlight for visual depth.
+
+describe('glassmorphism card depth', () => {
+  it('compact card has inner glass highlight', () => {
+    const block = css.match(/\.feed-card-compact\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('inset 0 1px 0');
+  });
+
+  it('hero card has deeper shadow with inner highlight', () => {
+    const block = css.match(/\.feed-card-hero\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).toContain('inset 0 1px 0');
+  });
+});
+
+// ── Phase A: Unverifiable category chip ──────────────────────────────────
+// Unverifiable cards show a category chip explaining why ("Missing details",
+// "Not found", etc.) directly in the meta row for quick scanning.
+
+describe('unverifiable category chip', () => {
+  it('category chip class is defined in CSS', () => {
+    expect(css).toContain('.compact-unverifiable-category');
+  });
+
+  it('FeedCard renders category chip for unverifiable cards', () => {
+    expect(feedCard).toContain('compact-unverifiable-category');
+    expect(feedCard).toContain('isUnverifiable');
   });
 });
