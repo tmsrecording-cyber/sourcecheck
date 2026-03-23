@@ -84,7 +84,7 @@ function parseClientIp(request: NextRequest): string {
     10,
     Math.max(0, parseInt(process.env.TRUSTED_PROXY_COUNT || '0', 10) || 0)
   );
-  
+
   if (trustedProxyCount > 0) {
     const forwardedFor = request.headers.get('x-forwarded-for');
     if (forwardedFor) {
@@ -94,7 +94,21 @@ function parseClientIp(request: NextRequest): string {
     }
     return request.headers.get('x-real-ip') || 'unknown';
   }
-  
+
+  // TRUSTED_PROXY_COUNT not configured: Vercel and most edge platforms set
+  // x-real-ip to the actual client IP at the ingress layer — it cannot be
+  // spoofed by the client. Fall back to the leftmost XFF entry as a secondary
+  // signal. Both give per-user isolation instead of collapsing everyone into
+  // a single 'unknown' bucket.
+  const realIp = request.headers.get('x-real-ip');
+  if (realIp?.trim()) return realIp.trim();
+
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    const firstIp = forwardedFor.split(',')[0]?.trim();
+    if (firstIp) return firstIp;
+  }
+
   return 'unknown';
 }
 

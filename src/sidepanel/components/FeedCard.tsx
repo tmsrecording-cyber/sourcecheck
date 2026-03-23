@@ -231,6 +231,53 @@ const CLAIM_TYPE_LABELS: Record<string, string> = {
   quote: 'Quote check',
 };
 
+// Adversarial strip — shows dual-agent verification activity
+const ADVERSARIAL_PHASES = [
+  'advocate searching for support',
+  'challenger looking for flaws',
+  'both sides comparing sources',
+  'advocate vs challenger',
+] as const;
+
+const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
+  const synthesizing = elapsed >= 8;
+  const reducedMotion = useReducedMotion();
+  const phaseIndex = Math.floor(elapsed / 2.5) % ADVERSARIAL_PHASES.length;
+  const phaseText = synthesizing ? 'merging both verdicts' : ADVERSARIAL_PHASES[phaseIndex];
+
+  return (
+    <div className="adversarial-strip">
+      {/* Advocate agent */}
+      <div className="adversarial-agent-group">
+        <span className={`adversarial-node adversarial-node-for${reducedMotion ? '' : ' animated'}${synthesizing ? ' done' : ''}`} />
+        <span className="adversarial-agent-label adversarial-agent-label-for">for</span>
+      </div>
+
+      {/* Tension bridge */}
+      <div className={`adversarial-bridge${synthesizing ? ' converged' : ''}`}>
+        {!reducedMotion && (
+          <>
+            <span className="adversarial-bridge-pulse" />
+            <span className="adversarial-bridge-pulse adversarial-bridge-pulse-reverse" />
+          </>
+        )}
+      </div>
+
+      {/* Challenger agent */}
+      <div className="adversarial-agent-group">
+        <span className={`adversarial-node adversarial-node-against${reducedMotion ? '' : ' animated'}${synthesizing ? ' done' : ''}`} />
+        <span className="adversarial-agent-label adversarial-agent-label-against">against</span>
+      </div>
+
+      {/* Phase text */}
+      <span className={`adversarial-phase${synthesizing ? ' synth' : ''}`}>
+        {phaseText}
+      </span>
+      <span className="adversarial-timer">{elapsed}s</span>
+    </div>
+  );
+};
+
 // Verifying card — shows elapsed time so the user knows something real is happening
 const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimType?: string }) => {
   const [elapsed, setElapsed] = useState(0);
@@ -258,11 +305,7 @@ const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimTy
         {claimText}
       </p>
 
-      {elapsed > 0 && (
-        <p className="mt-3 text-[11px] font-mono tabular-nums text-sc-muted/50">
-          {elapsed}s
-        </p>
-      )}
+      <AdversarialStrip elapsed={elapsed} />
     </>
   );
 };

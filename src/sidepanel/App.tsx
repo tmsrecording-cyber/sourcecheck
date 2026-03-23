@@ -115,6 +115,7 @@ export const App = () => {
   const { notices, enqueueNotice, dismissNotice } = useNoticeQueue();
   const isMountedRef = useRef(true);
   const lastTranscriptFallbackNoticeAtRef = useRef(0);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -136,6 +137,7 @@ export const App = () => {
     const videoId = runtimeState.currentVideo?.videoId ?? null;
     // M5 PRIVACY: Check if this is a private session (e.g., Google Meet)
     const isPrivate = runtimeState.currentVideo?.sourceContext?.visibility === 'private';
+    if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
     setAskDraft('');
     setAskError(null);
     setIsThinking(false);
@@ -185,6 +187,7 @@ export const App = () => {
 
   useEffect(() => {
     if (isRetryingTranscript && analysisStatus !== 'no-transcript') {
+      if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
       setIsRetryingTranscript(false);
     }
   }, [analysisStatus, isRetryingTranscript]);
@@ -286,6 +289,15 @@ export const App = () => {
     setAskError(null);
     setLastProviderError(null);
     setIsRetryingTranscript(true);
+    // Backstop: if analysisStatus never leaves 'no-transcript', clear the retrying flag after 20s
+    if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    retryTimeoutRef.current = setTimeout(() => {
+      retryTimeoutRef.current = null;
+      if (isMountedRef.current) {
+        setIsRetryingTranscript(false);
+        setAskError('Transcript retry timed out. Refresh the page.');
+      }
+    }, 20_000);
     // Best-effort cleanup — do not let it block the actual retry
     void chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' }).catch(() => {});
     try {
@@ -299,6 +311,7 @@ export const App = () => {
         throw new Error((retryResponse as { error?: string }).error || 'Retry failed');
       }
     } catch (error) {
+      if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
         setIsRetryingTranscript(false);

@@ -2246,17 +2246,17 @@ body::before {
 
 .rail-timestamp-wrap {
   position: absolute;
-  left: 0;
+  left: -8px;   /* slide left so h:mm:ss sits within the panel padding area */
   top: 14px;
-  width: 30px;
+  width: 42px;  /* right edge at 34px — stays clear of node at 36px */
   text-align: right;
 }
 
 .rail-timestamp {
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: 9.5px;   /* 10.5px caused h:mm:ss (~47px) to overflow and clip at panel edge */
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--sc-text-soft);
   opacity: 0.9;
 }
@@ -3484,6 +3484,166 @@ body::before {
 @keyframes thinkingPulse {
   0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(var(--sc-accent-rgb), 0.4); }
   50% { opacity: 0.7; transform: scale(0.9); box-shadow: 0 0 0 4px rgba(var(--sc-accent-rgb), 0); }
+}
+
+/* ── Adversarial Strip (dual-agent verification) ── */
+.adversarial-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  height: 20px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.adversarial-agent-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.adversarial-node {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.5s ease, box-shadow 0.5s ease, transform 0.5s ease;
+}
+
+/* Advocate node — cool teal */
+.adversarial-node-for {
+  background: rgba(100, 210, 180, 0.6);
+  box-shadow: 0 0 4px rgba(100, 210, 180, 0.15);
+}
+.adversarial-node-for.animated {
+  animation: adversarialPulseFor 1.6s ease-in-out infinite;
+}
+.adversarial-node-for.done {
+  background: rgba(100, 210, 180, 0.9);
+  box-shadow: 0 0 8px rgba(100, 210, 180, 0.35);
+  transform: scale(1.15);
+}
+
+/* Challenger node — cool steel blue (sibling to teal) */
+.adversarial-node-against {
+  background: rgba(120, 185, 235, 0.55);
+  box-shadow: 0 0 4px rgba(120, 185, 235, 0.12);
+}
+.adversarial-node-against.animated {
+  animation: adversarialPulseAgainst 2.2s ease-in-out infinite;
+}
+.adversarial-node-against.done {
+  background: rgba(120, 185, 235, 0.88);
+  box-shadow: 0 0 8px rgba(120, 185, 235, 0.3);
+  transform: scale(1.15);
+}
+
+.adversarial-agent-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.adversarial-agent-label-for { color: rgba(100, 210, 180, 0.45); }
+.adversarial-agent-label-against { color: rgba(120, 185, 235, 0.40); }
+
+/* Tension bridge — two counter-traveling pulses */
+.adversarial-bridge {
+  position: relative;
+  width: 28px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.06);
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: background 0.5s ease, box-shadow 0.5s ease;
+}
+.adversarial-bridge.converged {
+  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.18);
+  box-shadow: 0 0 6px rgba(var(--model-accent-rgb, 138, 180, 248), 0.12);
+}
+
+.adversarial-bridge-pulse {
+  position: absolute;
+  top: -1px;
+  width: 8px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(100, 210, 180, 0.5), rgba(120, 185, 235, 0.4));
+  animation: adversarialTravel 2.0s ease-in-out infinite alternate;
+}
+.adversarial-bridge-pulse-reverse {
+  background: linear-gradient(90deg, rgba(120, 185, 235, 0.35), rgba(100, 210, 180, 0.4));
+  animation: adversarialTravelReverse 2.6s ease-in-out infinite alternate;
+}
+
+.adversarial-phase {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  color: rgba(var(--sc-muted-rgb), 0.32);
+  white-space: nowrap;
+  margin-left: 2px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  transition: color 0.4s ease;
+}
+.adversarial-phase.synth {
+  color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.55);
+}
+
+.adversarial-timer {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--sc-muted-rgb), 0.35);
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+@keyframes adversarialPulseFor {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(1);
+    box-shadow: 0 0 4px rgba(100, 210, 180, 0.1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.6);
+    box-shadow: 0 0 10px rgba(100, 210, 180, 0.35);
+  }
+}
+
+@keyframes adversarialPulseAgainst {
+  0%, 100% {
+    opacity: 0.38;
+    transform: scale(1);
+    box-shadow: 0 0 4px rgba(120, 185, 235, 0.08);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.5);
+    box-shadow: 0 0 9px rgba(120, 185, 235, 0.28);
+  }
+}
+
+@keyframes adversarialTravel {
+  0%   { left: -2px; opacity: 0; }
+  20%  { opacity: 0.8; }
+  80%  { opacity: 0.8; }
+  100% { left: calc(100% - 6px); opacity: 0; }
+}
+
+@keyframes adversarialTravelReverse {
+  0%   { left: calc(100% - 6px); opacity: 0; }
+  20%  { opacity: 0.6; }
+  80%  { opacity: 0.6; }
+  100% { left: -2px; opacity: 0; }
 }
 
 /* Compact card inner */
