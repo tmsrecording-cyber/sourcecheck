@@ -407,7 +407,7 @@ function synthesizeVerification(
     const finalStatus: VerificationStatus = advStatus === 'supported' ? 'partial' : 'disputed';
     // Build synthesized nuance showing both sides
     const synthesizedNuance = advocate.confidence >= 0.5
-      ? `${advocate.nuance.replace(/\.$/, '')}; however, ${challenger.nuance.charAt(0).toLowerCase()}${challenger.nuance.slice(1)}`
+      ? `${advocate.nuance.replace(/[.;]$/, '')} · ${challenger.nuance}`
       : challenger.nuance;
     return {
       status: finalStatus,
@@ -423,7 +423,7 @@ function synthesizeVerification(
   // Challenger found complications but not outright dispute
   if (chalStatus === 'partial' && challenger.confidence >= 0.5) {
     const finalStatus: VerificationStatus = 'partial';
-    const synthesizedNuance = `${advocate.nuance.replace(/\.$/, '')}; ${challenger.nuance.charAt(0).toLowerCase()}${challenger.nuance.slice(1)}`;
+    const synthesizedNuance = `${advocate.nuance.replace(/[.;]$/, '')} · ${challenger.nuance}`;
     return {
       status: finalStatus,
       sourceTitle: advocate.sourceTitle, // Advocate's source is primary

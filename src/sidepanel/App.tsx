@@ -263,10 +263,15 @@ export const App = () => {
     setAskError(null);
 
     try {
-      const rawResult: unknown = await chrome.runtime.sendMessage({
-        type: 'ASK_QUESTION',
-        payload: { question: trimmedQuery },
-      });
+      const rawResult: unknown = await Promise.race([
+        chrome.runtime.sendMessage({
+          type: 'ASK_QUESTION',
+          payload: { question: trimmedQuery },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Request timed out. Please try again.')), 45_000)
+        ),
+      ]);
 
       if (!isMountedRef.current || currentVideoIdRef.current !== submittedVideoId) {
         return;

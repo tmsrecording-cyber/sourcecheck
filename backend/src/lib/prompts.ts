@@ -171,6 +171,41 @@ Use BUFFERING when:
 - The thought trails off or is interrupted
 - A complete claim is likely coming but not yet stated
 
+=== WORKED EXAMPLES ===
+
+EXTRACT (VERIFYING):
+Transcript: "And the Šrámek study from 2000 found dopamine increases 250 percent within just two minutes of cold water immersion"
+→ action_state: "VERIFYING"
+→ claim_text: "Cold water immersion increases dopamine by 250% within two minutes (Šrámek et al., 2000)"
+→ Why: Named study, specific number, specific duration, measurable mechanism. Verifiability: 0.92.
+
+Transcript: "The U.S. national debt hit $30 trillion for the first time in February 2022"
+→ action_state: "VERIFYING"
+→ claim_text: "The U.S. national debt exceeded $30 trillion for the first time in February 2022"
+→ Why: Named entity, specific dollar figure, specific date. Verifiability: 0.95.
+
+REJECT:
+Transcript: "This is one of the most significant breakthroughs we've ever seen in modern medicine"
+→ action_state: "REJECTED"
+→ Why: Pure value judgment ("most significant"). No number, date, or proper noun. Nothing to fact-check.
+
+Transcript: "I think AI is going to fundamentally transform the way we live and work"
+→ action_state: "REJECTED"
+→ Why: Hedged opinion ("I think"), future prediction, no checkable specifics. NEVER extract "I think X will happen."
+
+Transcript: "The real issue that nobody talks about is how government subsidies distort the market"
+→ action_state: "REJECTED"
+→ Why: Classic YouTube framing device ("the real issue nobody talks about"). No verifiable fact embedded.
+
+Transcript: "Look, prices are going up and everyone can see that"
+→ action_state: "REJECTED"
+→ Why: No proper noun, no specific number, no date. Vague generalization that cannot be verified with a search.
+
+BUFFER:
+Transcript: "The Harvard meta-analysis from 2023 looked at 47 randomized trials and found that participants who exercised regularly had..."
+→ action_state: "BUFFERING"
+→ Why: A specific, verifiable claim is clearly forming (named institution, year, sample count) but the outcome hasn't been stated yet. The next sentence will complete it.
+
 === RANKING ===
 
 Sort candidates by: (verifiability × value × speaker_confidence)
@@ -293,7 +328,17 @@ Before adding any candidate, verify ALL of these:
 
 === BUFFERING ===
 
-Use BUFFERING when the speaker is mid-sentence. Meeting captions are often fragmented — be generous with BUFFERING rather than extracting weak partial claims.
+Use BUFFERING when the speaker is mid-sentence and a strong, specific claim is clearly forming. Meeting captions are often fragmented — prefer BUFFERING over extracting a weak partial claim.
+
+BUFFER these (claim is incoming):
+- "The Q4 revenue report shows we actually hit..." (statistic coming, sentence unfinished)
+- "According to the Gartner 2024 study, enterprise AI adoption..." (named source + claim forming)
+- "GDPR Article 83 specifies that fines can reach..." (legal citation + threshold forming)
+
+REJECT immediately, do NOT buffer (hedged or speculative even if sentence is complete):
+- "I think last year the number was around 40 percent" → REJECTED (hedged: "I think", "around")
+- "Someone mentioned that Python 3.12 might have removed the GIL" → REJECTED (attribution uncertainty)
+- "We might want to look at the compliance numbers" → REJECTED (brainstorming, not a claim)
 
 === RANKING ===
 

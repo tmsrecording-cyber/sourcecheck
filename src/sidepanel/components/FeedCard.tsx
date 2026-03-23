@@ -10,7 +10,7 @@
  * This creates visual continuity as cards flow down the waterfall.
  */
 
-import { Fragment, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { Fragment, memo, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { formatTime } from '../utils/formatTime';
 import { stripLegacyCachePrefix } from '../utils/trustCopy';
@@ -850,4 +850,4 @@ export const FeedCard = (props: FeedCardProps) => {
   );
 };
 
-export default FeedCard;
+export default memo(FeedCard);

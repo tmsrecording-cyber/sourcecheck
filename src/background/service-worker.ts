@@ -1323,7 +1323,7 @@ const hasQueuedVerificationForKey = (key: string) =>
 // Uses semantic embeddings when available, falls back to normalized text comparison
 // PERFORMANCE: normalized text is cached in PendingClaimPreview to avoid repeated regex work
 const getNormalizedClaimText = (text: string): string =>
-  text.toLowerCase().replace(/[^a-z0-9]/g, '');
+  text.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 
 // Calculate cosine similarity between two embedding vectors
 // Returns value between -1 and 1 (1 = identical, 0 = orthogonal, -1 = opposite)
@@ -1396,11 +1396,15 @@ const isNearDuplicate = (claim: ExtractedClaim): boolean => {
   // or when semantic check didn't find a match
   const normalizedClaimText = getNormalizedClaimText(claim.claimText);
 
-  // Helper to check similarity - shared 80%+ of normalized text
+  // Word-level Jaccard similarity: shared words / union of words
+  // More accurate than length ratio — "tax cut" vs "rate cut" won't falsely dedupe
   const isSimilar = (normalizedOther: string): boolean => {
-    const longer = Math.max(normalizedClaimText.length, normalizedOther.length);
-    const shorter = Math.min(normalizedClaimText.length, normalizedOther.length);
-    return shorter > 0 && (shorter / longer) > 0.8;
+    const aWords = new Set(normalizedClaimText.split(' ').filter(Boolean));
+    const bWords = normalizedOther.split(' ').filter(Boolean);
+    if (aWords.size === 0 || bWords.length === 0) return false;
+    const shared = bWords.filter((w) => aWords.has(w)).length;
+    const union = new Set([...aWords, ...bWords]).size;
+    return union > 0 && shared / union > 0.7;
   };
 
   // Check existing source cards (bounded to MAX_SOURCE_CARDS = 20)
