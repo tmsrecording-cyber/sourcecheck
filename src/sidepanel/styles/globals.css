@@ -3610,34 +3610,17 @@ body::before {
 .adversarial-agent-label-for { color: rgba(100, 210, 180, 0.45); }
 .adversarial-agent-label-against { color: rgba(120, 185, 235, 0.40); }
 
-/* Tension bridge — two counter-traveling pulses */
+/* Bridge — simple separator between FOR and AGAINST agents */
 .adversarial-bridge {
-  position: relative;
-  width: 28px;
-  height: 2px;
+  width: 20px;
+  height: 1px;
   border-radius: 1px;
-  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.06);
+  background: rgba(var(--sc-muted-rgb), 0.14);
   flex-shrink: 0;
-  overflow: hidden;
-  transition: background 0.5s ease, box-shadow 0.5s ease;
+  transition: background 0.5s ease;
 }
 .adversarial-bridge.converged {
-  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.18);
-  box-shadow: 0 0 6px rgba(var(--model-accent-rgb, 138, 180, 248), 0.12);
-}
-
-.adversarial-bridge-pulse {
-  position: absolute;
-  top: -1px;
-  width: 8px;
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, rgba(100, 210, 180, 0.5), rgba(120, 185, 235, 0.4));
-  animation: adversarialTravel 2.0s ease-in-out infinite alternate;
-}
-.adversarial-bridge-pulse-reverse {
-  background: linear-gradient(90deg, rgba(120, 185, 235, 0.35), rgba(100, 210, 180, 0.4));
-  animation: adversarialTravelReverse 2.6s ease-in-out infinite alternate;
+  background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.22);
 }
 
 .adversarial-phase {
@@ -3668,43 +3651,28 @@ body::before {
 
 @keyframes adversarialPulseFor {
   0%, 100% {
-    opacity: 0.45;
+    opacity: 0.5;
     transform: scale(1);
-    box-shadow: 0 0 4px rgba(100, 210, 180, 0.1);
   }
   50% {
     opacity: 1;
-    transform: scale(1.6);
-    box-shadow: 0 0 10px rgba(100, 210, 180, 0.35);
+    transform: scale(1.25);
+    box-shadow: 0 0 6px rgba(100, 210, 180, 0.25);
   }
 }
 
 @keyframes adversarialPulseAgainst {
   0%, 100% {
-    opacity: 0.38;
+    opacity: 0.42;
     transform: scale(1);
-    box-shadow: 0 0 4px rgba(120, 185, 235, 0.08);
   }
   50% {
-    opacity: 0.95;
-    transform: scale(1.5);
-    box-shadow: 0 0 9px rgba(120, 185, 235, 0.28);
+    opacity: 0.92;
+    transform: scale(1.2);
+    box-shadow: 0 0 5px rgba(120, 185, 235, 0.2);
   }
 }
 
-@keyframes adversarialTravel {
-  0%   { left: -2px; opacity: 0; }
-  20%  { opacity: 0.8; }
-  80%  { opacity: 0.8; }
-  100% { left: calc(100% - 6px); opacity: 0; }
-}
-
-@keyframes adversarialTravelReverse {
-  0%   { left: calc(100% - 6px); opacity: 0; }
-  20%  { opacity: 0.6; }
-  80%  { opacity: 0.6; }
-  100% { left: -2px; opacity: 0; }
-}
 
 /* Compact card inner */
 .compact-card-inner {

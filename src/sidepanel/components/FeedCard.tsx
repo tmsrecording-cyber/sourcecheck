@@ -232,18 +232,10 @@ const CLAIM_TYPE_LABELS: Record<string, string> = {
 };
 
 // Adversarial strip — shows dual-agent verification activity
-const ADVERSARIAL_PHASES = [
-  'advocate searching for support',
-  'challenger looking for flaws',
-  'both sides comparing sources',
-  'advocate vs challenger',
-] as const;
-
 const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
   const synthesizing = elapsed >= 8;
   const reducedMotion = useReducedMotion();
-  const phaseIndex = Math.floor(elapsed / 2.5) % ADVERSARIAL_PHASES.length;
-  const phaseText = synthesizing ? 'merging both verdicts' : ADVERSARIAL_PHASES[phaseIndex];
+  const phaseText = synthesizing ? 'synthesizing' : 'checking';
 
   return (
     <div className="adversarial-strip">
@@ -253,15 +245,8 @@ const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
         <span className="adversarial-agent-label adversarial-agent-label-for">for</span>
       </div>
 
-      {/* Tension bridge */}
-      <div className={`adversarial-bridge${synthesizing ? ' converged' : ''}`}>
-        {!reducedMotion && (
-          <>
-            <span className="adversarial-bridge-pulse" />
-            <span className="adversarial-bridge-pulse adversarial-bridge-pulse-reverse" />
-          </>
-        )}
-      </div>
+      {/* Simple bridge — two agents, one separator */}
+      <div className={`adversarial-bridge${synthesizing ? ' converged' : ''}`} />
 
       {/* Challenger agent */}
       <div className="adversarial-agent-group">
@@ -269,7 +254,6 @@ const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
         <span className="adversarial-agent-label adversarial-agent-label-against">against</span>
       </div>
 
-      {/* Phase text */}
       <span className={`adversarial-phase${synthesizing ? ' synth' : ''}`}>
         {phaseText}
       </span>
