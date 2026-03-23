@@ -193,11 +193,10 @@ const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; s
         <path d="M2 6.5L4.8 9.2L10 3" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
     ),
-    // Two offset parallel lines — reads as "mixed signal"
+    // Tilde wave — universally reads as "approximately / mixed"
     partial: (
       <svg width={s} height={s} viewBox="0 0 12 12" fill="none">
-        <path d="M2.5 4.8H7.8" stroke="currentColor" strokeWidth={sw - 0.4} strokeLinecap="round"/>
-        <path d="M4.2 7.2H9.5" stroke="currentColor" strokeWidth={sw - 0.4} strokeLinecap="round"/>
+        <path d="M2 6.5 Q3.5 4.5 5 6.5 Q6.5 8.5 8 6.5 Q9 5.5 10 6" stroke="currentColor" strokeWidth={sw - 0.4} strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
     ),
     // Thicker X — definitive rejection
