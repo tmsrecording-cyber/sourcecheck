@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { usePinnedTopScroll } from './hooks/usePinnedTopScroll';
 import { AlertTriangle, KeyRound } from 'lucide-react';
-import { FREEMIUM_MODEL } from '../../shared/types';
 import { useProviderSettings } from './hooks/useProviderSettings';
 import { useNoticeQueue } from './hooks/useNoticeQueue';
 import { useProviderErrorGate } from './hooks/useProviderErrorGate';
@@ -11,7 +10,6 @@ import { useLiveStageFlow } from './hooks/useLiveStageFlow';
 import { VideoHeader } from './components/VideoHeader';
 import { CardFeed } from './components/CardFeed';
 import { AskBox } from './components/AskBox';
-import { ModelPicker } from './components/ModelPicker';
 import { SettingsPanel } from './components/SettingsPanel';
 import { NoticeStack } from './components/NoticeStack';
 import { SourceCheckLogo } from './components/SourceCheckLogo';
@@ -20,7 +18,6 @@ import { useExtensionStorage } from './hooks/useExtensionStorage';
 import { useCardHistory } from './hooks/useCardHistory';
 import { useAskHistory } from './hooks/useAskHistory';
 import {
-  buildModelChangedNotice,
   buildSettingsSavedNotice,
   getLatestTranscriptFallbackNotice,
 } from './utils/notices';
@@ -151,7 +148,6 @@ export const App = () => {
   }, [runtimeState.currentVideo?.videoId, runtimeState.currentVideo?.sourceContext?.visibility, resetAskForVideo]);
 
   const analysisStatus = lifecycleToAnalysisStatus(runtimeState.lifecycle);
-  const effectiveSelectedModel = hasCustomKey ? runtimeState.selectedModel : FREEMIUM_MODEL;
   const hasAskContext = (transcript?.length ?? 0) > 0 || runtimeState.sourceCards.length > 0;
   const canFocusAsk = hasAskContext && !isThinking;
   const pressFeedback = getPressSettle(prefersReducedMotion);
@@ -433,28 +429,6 @@ export const App = () => {
           </nav>
 
           <div className="flex min-w-0 items-center justify-end gap-1.5 flex-shrink-0">
-            <ModelPicker 
-              selectedModel={effectiveSelectedModel} 
-              hasCustomKey={hasCustomKey}
-              compact
-              onModelChange={async (model) => {
-                if (model === effectiveSelectedModel) {
-                  return;
-                }
-
-                setLastProviderError(null);
-                try {
-                  const modelChangeResponse: unknown = await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
-                  if (modelChangeResponse && typeof modelChangeResponse === 'object' && (modelChangeResponse as { status?: string }).status === 'error') {
-                    throw new Error((modelChangeResponse as { error?: string }).error || 'Model change failed');
-                  }
-                  enqueueNotice(buildModelChangedNotice(model, hasCustomKey));
-                } catch (error) {
-                  console.error('[SourceCheck/UI] Model change failed:', error);
-                  enqueueNotice({ dedupeKey: 'model-change-error', title: 'Model change failed', message: 'Try again.', tone: 'warning' });
-                }
-              }} 
-            />
             <motion.button
               onClick={() => setShowSettings(true)}
               className="header-icon-btn h-7 w-7 flex items-center justify-center rounded-md text-sc-muted hover:bg-sc-surface-1 hover:text-sc-text focus:outline-none"
@@ -488,7 +462,6 @@ export const App = () => {
             playbackState={runtimeState.playbackState}
             lastScannedTimestamp={runtimeState.lastScannedTimestamp}
             cards={headerCards}
-            selectedModel={effectiveSelectedModel}
             livePhase={liveFlow.livePhase}
             liveStripCopy={liveFlow.headerStripCopy}
           />
@@ -518,7 +491,6 @@ export const App = () => {
             onRetryTranscript={handleRetryTranscript}
             onClearHistory={clearCardHistory}
             activeTab={activeTab}
-            selectedModel={effectiveSelectedModel}
           />
         </div>
         <AskBox

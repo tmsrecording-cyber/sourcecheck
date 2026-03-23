@@ -1,6 +1,4 @@
 import { API_BASE, REQUEST_TIMEOUT_MS } from '../../config';
-import type { GeminiModelOption } from '../../../shared/types';
-import { FREEMIUM_MODEL, normalizeModel } from '../../../shared/types';
 import { PROVIDER_SETTINGS_KEY, getStoredProviderApiKey } from '../providers/types';
 import { logSessionInitFailure, logProviderError, logRetryExhausted } from '../telemetry';
 
@@ -11,7 +9,6 @@ const SESSION_FETCH_TIMEOUT_MS = 10_000;
 
 interface FetchPayload {
   [key: string]: unknown;
-  model?: GeminiModelOption;
 }
 
 // Session token cache (shared across calls)
@@ -459,26 +456,11 @@ export async function fetchWithBYOK(
 ): Promise<unknown> {
   console.log('[SourceCheck/API] fetchWithBYOK called:', endpoint);
   
-  // Pull the saved key and model from storage (once, outside retry loop)
-  // ARCHITECTURE: apiKey from local providerSettings, selectedModel from sync (single source of truth)
-  const [providerResult, syncResult] = await Promise.all([
-    chrome.storage.local.get([PROVIDER_SETTINGS_KEY]),
-    chrome.storage.sync.get(['selectedModel']),
-  ]);
+  // Pull the saved API key from storage (once, outside retry loop)
+  const providerResult = await chrome.storage.local.get([PROVIDER_SETTINGS_KEY]);
   const customApiKey = getStoredProviderApiKey(providerResult[PROVIDER_SETTINGS_KEY]);
-  // CANONICAL: selectedModel always comes from sync storage (single source of truth)
-  const selectedModel = normalizeModel(syncResult.selectedModel);
-
   const hasCustomKey = customApiKey !== null;
-  
-  // MODEL POLICY: Pass the user's selected model for both free and BYOK tiers.
-  // The backend enforces per-route policy:
-  //   - analyze-chunk: passes through (flash-lite for Dual mode)
-  //   - verify-claim: route overrides to flash-2.5 regardless of what is sent
-  const modelToUse = selectedModel;
-  
-  // Build payload with model
-  const requestPayload = { ...payload, model: modelToUse };
+  const requestPayload = { ...payload };
 
   let lastError: Error | null = null;
   
@@ -504,8 +486,6 @@ export async function fetchWithBYOK(
 
       if (hasCustomKey) {
         headers.set('X-Custom-Api-Key', customApiKey);
-        // CANONICAL: Always send the selected model from sync storage (single source of truth)
-        headers.set('X-Custom-Model', selectedModel);
       }
 
       const clientSecret = import.meta.env.VITE_CLIENT_SECRET;

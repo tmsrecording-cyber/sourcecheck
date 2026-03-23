@@ -72,32 +72,6 @@ export function normalizeModel(model: string | null | undefined): GeminiModelOpt
   return FREEMIUM_MODEL;
 }
 
-export interface ModelConfig {
-  id: GeminiModelOption;
-  label: string;
-  description: string;
-  speed: 'fast' | 'standard' | 'deep';
-}
-
-/** 
- * Models available in the UI model picker.
- * All entries MUST be in ALLOWED_MODELS.
- * Ordered: fastest → standard → most capable
- */
-export const AVAILABLE_MODELS: ModelConfig[] = [
-  {
-    id: 'gemini-2.5-flash',
-    label: 'Standard',
-    description: 'Single-pass verification',
-    speed: 'standard',
-  },
-  {
-    id: 'gemini-3.1-flash-lite-preview',
-    label: 'Adversarial',
-    description: 'For · Against · Synthesize',
-    speed: 'fast',
-  },
-];
 
 /** A single timed segment from YouTube's captions */
 export interface TranscriptChunk {
@@ -404,8 +378,6 @@ export interface PanelSessionState {
   pendingTranscriptBufferSummary?: PendingTranscriptBufferSummary;
   transcriptMessageStats?: TranscriptMessageStats;
   lastProviderError?: ProviderErrorState | null;
-  /** User's preferred Gemini model (normalized to allowed values) */
-  selectedModel?: GeminiModelOption;
 }
 
 /** Trimmed source card sent to /api/ask-video (only the fields the backend needs) */
@@ -490,6 +462,4 @@ export interface WorkerRuntimeState {
   transcriptLoadDeadlineAt: number | null;
   debugStage: DebugStage;
   eventLog: DebugEvent[];
-  /** User's preferred Gemini model (normalized to allowed values) */
-  selectedModel: GeminiModelOption;
 }

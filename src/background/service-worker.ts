@@ -19,10 +19,6 @@ import {
   WorkerLifecycle,
   WorkerRuntimeState,
   DebugEvent,
-  GeminiModelOption,
-  FREEMIUM_MODEL,
-  ALLOWED_MODELS,
-  normalizeModel,
 } from '../../shared/types';
 import {
   API_BASE,
@@ -387,8 +383,6 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
   eventLog: [],
-  // MODEL POLICY: Freemium/trial/managed tier always uses FREEMIUM_MODEL
-  selectedModel: FREEMIUM_MODEL,
 };
 
 let runtimeState: WorkerRuntimeState = { ...INITIAL_RUNTIME_STATE };
@@ -2017,12 +2011,10 @@ const hydrateState = async () => {
       'pendingTranscriptBuffer', 'pendingVerifications',
     ]),
     chrome.storage.local.get([TRANSCRIPT_SNAPSHOT_KEY, PENDING_TRANSCRIPT_BUFFER_KEY]),
-    chrome.storage.sync.get(['selectedModel']),
     readProviderApiKey(), // Session-first storage read
   ])
-    .then(([stored, localStored, syncStored, storedProviderApiKey]) => {
+    .then(([stored, localStored, storedProviderApiKey]) => {
       const storedRuntime = stored[WORKER_RUNTIME_STATE_KEY] as Partial<WorkerRuntimeState> | null | undefined;
-      const syncSelectedModel = syncStored?.selectedModel as string | undefined;
 
       // Restore canonical state from stored WorkerRuntimeState
       if (storedRuntime && typeof storedRuntime === 'object') {
@@ -2063,25 +2055,6 @@ const hydrateState = async () => {
           transcriptFetchLog,
           transcriptMessageStats: storedRuntime.transcriptMessageStats ?? INITIAL_RUNTIME_STATE.transcriptMessageStats,
           pendingTranscriptBufferSummary: storedRuntime.pendingTranscriptBufferSummary ?? INITIAL_RUNTIME_STATE.pendingTranscriptBufferSummary,
-          // Restore selectedModel — sync storage wins over session storage.
-          // Sync is written atomically (awaited) on MODEL_CHANGED; session is debounced.
-          // If the SW was killed before the debounce fired, session is stale — sync is ground truth.
-          selectedModel: (() => {
-            const rawModel = syncSelectedModel ?? storedRuntime.selectedModel ?? INITIAL_RUNTIME_STATE.selectedModel;
-            const normalized = normalizeModel(rawModel);
-            if (!storedProviderApiKey) {
-              if (normalized !== FREEMIUM_MODEL) {
-                console.warn(
-                  `[model-policy] Clearing stale non-BYOK model '${normalized}' during hydration; reverting to '${FREEMIUM_MODEL}'`
-                );
-                void chrome.storage.sync.set({ selectedModel: FREEMIUM_MODEL }).catch((storageError) => {
-                  console.error('[SourceCheck/SW] Failed to reset stale sync model during hydration:', storageError);
-                });
-              }
-              return FREEMIUM_MODEL;
-            }
-            return normalized as GeminiModelOption;
-          })(),
         };
 
         debugStage = runtimeState.debugStage;
@@ -2266,7 +2239,7 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       `timestamp=${item.claim.timestampSeconds}`
     );
     console.log(
-      `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds} model=${runtimeState.selectedModel}`  // TRIAGE: Log model
+      `[SourceCheck/SW] verify-claim request video=${item.videoId} endpoint=${API_BASE}/api/verify-claim timestamp=${item.claim.timestampSeconds}`
     );
     // Gather surrounding transcript context for better verification
     // A4: Expand context window on retry (retryCount > 0) to catch claims like
@@ -2285,7 +2258,6 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
       videoId: item.videoId,
       videoTitle: item.videoTitle,
       channelName: item.channelName,
-      model: runtimeState.selectedModel,
       contextTranscript: contextTranscript || undefined,
       isPrivate: isPrivateSession() || undefined,
     }) as VerifyClaimResponse;
@@ -2697,7 +2669,6 @@ const askVideoQuestion = async (question: string) => {
     currentTime,
     transcriptContext: buildAskTranscriptContext(currentTime),
     sourceCards: buildAskSourceCards(currentTime),
-    model: runtimeState.selectedModel,  // Include selected model
   };
   if (payload.transcriptContext.length === 0 && payload.sourceCards.length === 0) {
     throw new Error('No transcript or source cards are available yet. Let the video play a little longer.');
@@ -2823,7 +2794,6 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
         channelName: activeVideo.channel,
         chunks: chunksToProcess,
         currentTimestamp: currentTime,
-        model: runtimeState.selectedModel,
         sourceType: currentVideoInfo?.sourceContext?.type ?? 'youtube',
         isPrivate: isPrivateSession() || undefined,
       }) as AnalyzeChunkResponse;
@@ -2836,7 +2806,6 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
           : String(analyzeError);
       console.error('[Pipeline] ANALYZE CHUNK FAILED:', {
         videoId: requestVideoId,
-        model: runtimeState.selectedModel,
         error: errorMessage,
         errorType: analyzeError instanceof Error ? 'Error' : typeof analyzeError,
         durationMs: Date.now() - analyzeStartTime,
@@ -3270,41 +3239,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       void processPlayback(newChunk.startTime).catch((err) =>
         console.error('[SW] processPlayback error (live chunk):', err)
       );
-      sendResponse({ status: 'ok' });
-      return;
-    }
-
-    if (message.type === 'MODEL_CHANGED') {
-      const normalizedModel = normalizeModel(message.model);
-      let effectiveModel = normalizedModel;
-
-      try {
-        // Session-first storage: use readProviderApiKey helper
-        const storedProviderApiKey = await readProviderApiKey();
-        if (!storedProviderApiKey) {
-          if (normalizedModel !== FREEMIUM_MODEL) {
-            console.warn(
-              `[model-policy] Ignoring non-BYOK model '${normalizedModel}' and reverting to '${FREEMIUM_MODEL}'`
-            );
-          }
-          effectiveModel = FREEMIUM_MODEL;
-        }
-      } catch (storageError) {
-        console.error('[SourceCheck/SW] Failed to read provider settings for model change:', storageError);
-        effectiveModel = FREEMIUM_MODEL;
-      }
-
-      runtimeState.selectedModel = effectiveModel;
-      clearLastProviderError();
-      try {
-        await chrome.storage.sync.set({ selectedModel: effectiveModel });
-      } catch (storageError) {
-        console.error('[SourceCheck/SW] Failed to persist model selection:', storageError);
-      }
-      // Flush session storage immediately (bypass debounce) so the model survives SW termination.
-      // The debounce window is the exact race that causes stale model on wake-up.
-      flushPersistPanelState();
-      console.log('[SourceCheck/SW] Model changed to:', effectiveModel);
       sendResponse({ status: 'ok' });
       return;
     }

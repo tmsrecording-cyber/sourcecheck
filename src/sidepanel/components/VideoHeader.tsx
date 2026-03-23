@@ -13,7 +13,6 @@ interface VideoHeaderProps {
   playbackState?: PlaybackState | null;
   lastScannedTimestamp?: number | null;
   cards?: SourceCard[];
-  selectedModel?: string;
   livePhase?: LivePhase;
   liveStripCopy?: string | null;
 }
@@ -140,11 +139,10 @@ export const VideoHeader = ({
   playbackState,
   lastScannedTimestamp = null,
   cards = [],
-  selectedModel,
   livePhase = 'idle',
   liveStripCopy = null,
 }: VideoHeaderProps) => {
-  const modelCssVars = buildModelCssVars(selectedModel);
+  const modelCssVars = buildModelCssVars('gemini-3.1-flash-lite-preview');
   const isLiveTab = activeTab === 'live';
   const statusMeta = STATUS_META[status];
   const isScanning = status === 'monitoring' || status === 'verifying';

@@ -1,8 +1,4 @@
-import {
-  FREEMIUM_MODEL,
-  type GeminiModelOption,
-  type TranscriptFetchDebugEntry,
-} from '../../../shared/types';
+import type { TranscriptFetchDebugEntry } from '../../../shared/types';
 
 export type SidepanelNoticeTone = 'accent' | 'success' | 'warning';
 
@@ -17,38 +13,12 @@ export interface PendingSidepanelNotice extends Omit<SidepanelNotice, 'id'> {
   dedupeKey: string;
 }
 
-const MODEL_LABELS: Record<GeminiModelOption, string> = {
-  'gemini-2.5-flash': 'Standard',
-  'gemini-3.1-flash-lite-preview': 'Adversarial',
-};
-
 export const buildSettingsSavedNotice = (): PendingSidepanelNotice => ({
   dedupeKey: 'settings-saved',
   title: 'Settings saved',
   message: 'API key saved.',
   tone: 'success',
 });
-
-export const buildModelChangedNotice = (
-  model: GeminiModelOption,
-  hasCustomKey: boolean,
-): PendingSidepanelNotice => {
-  if (!hasCustomKey || model === FREEMIUM_MODEL) {
-    return {
-      dedupeKey: `model:${FREEMIUM_MODEL}:managed`,
-      title: 'Managed model',
-      message: 'Using Standard mode.',
-      tone: 'accent',
-    };
-  }
-
-  return {
-    dedupeKey: `model:${model}`,
-    title: 'Model changed',
-    message: `Now using ${MODEL_LABELS[model]}.`,
-    tone: 'accent',
-  };
-};
 
 export const buildAskReadyNotice = (): PendingSidepanelNotice => ({
   dedupeKey: 'ask-ready',

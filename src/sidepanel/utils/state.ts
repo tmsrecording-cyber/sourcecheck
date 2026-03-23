@@ -3,9 +3,6 @@ import {
   WorkerLifecycle,
   AnalysisStatus,
   TranscriptChunk,
-  ALLOWED_MODELS,
-  FREEMIUM_MODEL,
-  normalizeModel,
 } from '../../../shared/types';
 
 // CANONICAL: Initial runtime state uses FREEMIUM_MODEL as default (single source of truth)
@@ -33,12 +30,7 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   transcriptLoadDeadlineAt: null,
   debugStage: 'idle',
   eventLog: [],
-  selectedModel: FREEMIUM_MODEL,
 };
-
-// Use the canonical normalizeModel from shared/types — single source of truth for migration + validation
-const migrateModel = (model: unknown): string =>
-  typeof model === 'string' ? normalizeModel(model) : FREEMIUM_MODEL;
 
 export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState => {
   if (!value || typeof value !== 'object') {
@@ -50,7 +42,6 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
   return {
     ...INITIAL_RUNTIME_STATE,
     ...candidate,
-    selectedModel: migrateModel(candidate.selectedModel) as typeof ALLOWED_MODELS[number],
     currentVideo: candidate.currentVideo && typeof candidate.currentVideo === 'object'
       && typeof candidate.currentVideo.videoId === 'string'
       && typeof candidate.currentVideo.title === 'string'

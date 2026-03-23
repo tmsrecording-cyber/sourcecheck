@@ -577,8 +577,6 @@ export async function POST(request: NextRequest) {
   const extensionId = request.headers.get('x-extension-id')?.trim() || '';
   const customApiKey = request.headers.get('x-custom-api-key')?.trim();
   const hasCustomKey = !!customApiKey && customApiKey.length > 0;
-  // BYOK: Check for model in header (x-custom-model) as override
-  const headerModel = request.headers.get('x-custom-model')?.trim();
 
   try {
     // -------------------------------------------------------------------------
@@ -667,8 +665,8 @@ export async function POST(request: NextRequest) {
     // -------------------------------------------------------------------------
     // PHASE 6: Call Gemini
     // -------------------------------------------------------------------------
-    // BYOK: Use header model if provided (from x-custom-model), else fall back to body
-    const effectiveModel = hasCustomKey && headerModel ? headerModel : parsedBody.model;
+    // Extraction always uses flash-lite — structured output, no grounding needed
+    const effectiveModel = 'gemini-3.1-flash-lite-preview';
     
     const {
       data: rawExtraction,

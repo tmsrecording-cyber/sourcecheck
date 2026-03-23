@@ -5,7 +5,6 @@ import type {
   AnalysisStatus,
   SourceCard,
 } from '../../../shared/types';
-import { BYOK_DEFAULT_MODEL } from '../../../shared/types';
 import { FeedCard } from './FeedCard';
 import { AskResponseCard } from './AskResponseCard';
 import { buildModelCssVars } from '../styles/modelTheme';
@@ -53,7 +52,6 @@ interface CardFeedProps {
   pinToTop?: () => void;
   onRetryTranscript?: () => void;
   onClearHistory?: () => void;
-  selectedModel?: string;
   activeTab?: 'live' | 'history';
   /** @deprecated — no longer used; stage owns its own state */
   onHeroStateChange?: (state: HeroSlotState) => void;
@@ -97,7 +95,6 @@ export const CardFeed = ({
   isPinned = true,
   pinToTop,
   activeTab = 'live',
-  selectedModel = BYOK_DEFAULT_MODEL,
   allCards,
   onRetryTranscript,
   onClearHistory,
@@ -147,7 +144,7 @@ export const CardFeed = ({
       ? STAGE_SHELL_MIN_HEIGHT.checking  // Hold stage open while docking card is still visible
       : STAGE_SHELL_MIN_HEIGHT[livePhase];
 
-  const modelCssVars = buildModelCssVars(selectedModel);
+  const modelCssVars = buildModelCssVars('gemini-3.1-flash-lite-preview');
 
   return (
     <div className="relative" style={modelCssVars}>
