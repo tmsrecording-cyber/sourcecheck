@@ -15,11 +15,9 @@ import { describe, expect, it } from 'vitest';
 
 const CSS_PATH = resolve(__dirname, '../../src/sidepanel/styles/globals.css');
 const FEED_CARD_PATH = resolve(__dirname, '../../src/sidepanel/components/FeedCard.tsx');
-const MODEL_PICKER_PATH = resolve(__dirname, '../../src/sidepanel/components/ModelPicker.tsx');
 
 const css = readFileSync(CSS_PATH, 'utf8');
 const feedCard = readFileSync(FEED_CARD_PATH, 'utf8');
-const modelPicker = readFileSync(MODEL_PICKER_PATH, 'utf8');
 
 // ── Verifying card ─────────────────────────────────────────────────────────
 // The verifying card shows an elapsed time counter (honest, real signal)
@@ -157,19 +155,97 @@ describe('scanning card hover', () => {
   });
 });
 
-// ── Model picker compact trigger ───────────────────────────────────────────
-// The compact trigger must be wide enough to display model labels without
-// truncation and must carry a left-border accent in the model's tone colour.
+// ── Adversarial pipeline always on ────────────────────────────────────────
+// Model picker was removed — adversarial (advocate + challenger) verification
+// is always used. No UI toggle exists. Locks against re-introducing a toggle.
 
-describe('model picker compact trigger', () => {
-  it('compact container is at least 108px wide', () => {
-    const widthMatch = modelPicker.match(/w-\[(\d+)px\]/)?.[1] ?? '0';
-    expect(parseInt(widthMatch, 10)).toBeGreaterThanOrEqual(108);
+describe('adversarial pipeline always on', () => {
+  it('ModelPicker component does not exist', () => {
+    const { existsSync } = require('fs');
+    const pickerPath = resolve(__dirname, '../../src/sidepanel/components/ModelPicker.tsx');
+    expect(existsSync(pickerPath)).toBe(false);
   });
 
-  it('compact trigger has a left-border accent in the model tone colour', () => {
-    expect(modelPicker).toContain('borderLeftColor');
-    expect(modelPicker).toContain('currentTone.rgb');
+  it('FeedCard does not reference ModelPicker', () => {
+    expect(feedCard).not.toContain('ModelPicker');
+  });
+
+  it('FeedCard contains adversarial strip with FOR and AGAINST agents', () => {
+    expect(feedCard).toContain('adversarial-strip');
+    expect(feedCard).toContain('adversarial-node-for');
+    expect(feedCard).toContain('adversarial-node-against');
+    expect(feedCard).toContain('adversarial-agent-label-for');
+    expect(feedCard).toContain('adversarial-agent-label-against');
+  });
+
+  it('adversarial strip CSS defines both FOR and AGAINST node colours', () => {
+    expect(css).toContain('.adversarial-node-for');
+    expect(css).toContain('.adversarial-node-against');
+  });
+});
+
+// ── Adversarial strip: no clipping ────────────────────────────────────────
+// The strip must NOT have overflow:hidden — that was clipping the FOR dot's
+// pulse animation at the left edge of the card.
+
+describe('adversarial strip overflow', () => {
+  it('adversarial-strip does not have overflow: hidden', () => {
+    const block = css.match(/\.adversarial-strip\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).not.toContain('overflow: hidden');
+    expect(block).not.toContain('overflow:hidden');
+  });
+});
+
+// ── Live stage shell: hover-safe overflow ─────────────────────────────────
+// The live-stage-shell must NOT use overflow:hidden — that was clipping the
+// card's top border/glow when the hover-lift translateY(-2px) animation fired.
+
+describe('live stage shell overflow', () => {
+  it('live-stage-shell does not clip with overflow: hidden', () => {
+    const block = css.match(/\.live-stage-shell\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(block).not.toContain('overflow: hidden');
+    expect(block).not.toContain('overflow:hidden');
+  });
+});
+
+// ── Debate block: FOR / AGAINST expansion ─────────────────────────────────
+// When advocate and challenger return distinct findings, the expanded compact
+// card shows a FOR / AGAINST block. Both sides must be styled independently.
+
+describe('debate block visual structure', () => {
+  it('CSS defines debate-block container', () => {
+    expect(css).toContain('.debate-block');
+  });
+
+  it('CSS defines distinct tints for FOR and AGAINST sides', () => {
+    const forBlock = css.match(/\.debate-side-for\s*\{[^}]+\}/s)?.[0] ?? '';
+    const againstBlock = css.match(/\.debate-side-against\s*\{[^}]+\}/s)?.[0] ?? '';
+    expect(forBlock).toBeTruthy();
+    expect(againstBlock).toBeTruthy();
+    // FOR uses teal; AGAINST uses steel-blue — must be different colours
+    expect(forBlock).not.toEqual(againstBlock);
+  });
+
+  it('FeedCard renders debate block when both nuance fields are present', () => {
+    expect(feedCard).toContain('advocateNuance');
+    expect(feedCard).toContain('challengerNuance');
+    expect(feedCard).toContain('debate-block');
+  });
+});
+
+// ── Rail data-stream direction ─────────────────────────────────────────────
+// The rail scan flow keyframe must travel downward (positive Y) to match
+// the natural top-to-bottom timeline reading direction.
+
+describe('rail data-stream direction', () => {
+  it('railScanFlow keyframe uses positive Y (downward flow)', () => {
+    // The 100% stop must end at a positive Y position — negative Y means upward.
+    // Extract the @keyframes railScanFlow block by finding its 100% stop.
+    const idx = css.indexOf('@keyframes railScanFlow');
+    const block = idx >= 0 ? css.slice(idx, idx + 300) : '';
+    // "0 112px" = downward travel endpoint. Must exist; "-112px" must not.
+    expect(block).toContain('112px');
+    expect(block).not.toContain('-112px');
   });
 });
 

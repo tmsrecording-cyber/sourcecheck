@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildAskReadyNotice,
-  buildModelChangedNotice,
   buildSettingsSavedNotice,
   getLatestTranscriptFallbackNotice,
 } from '../../src/sidepanel/utils/notices';
@@ -17,33 +16,11 @@ describe('sidepanel notices', () => {
     });
   });
 
-  it('builds BYOK model-change notices with the selected model label', () => {
-    expect(
-      buildModelChangedNotice('gemini-3.1-flash-lite-preview', true),
-    ).toEqual({
-      dedupeKey: 'model:gemini-3.1-flash-lite-preview',
-      title: 'Model changed',
-      message: 'Now using Flash 3.1 Lite.',
-      tone: 'accent',
-    });
-  });
-
   it('builds ask-ready notice for live answers', () => {
     expect(buildAskReadyNotice()).toEqual({
       dedupeKey: 'ask-ready',
       title: 'Answer ready',
       message: 'See HISTORY for the answer.',
-      tone: 'accent',
-    });
-  });
-
-  it('falls back to the managed-model notice when BYOK is inactive', () => {
-    expect(
-      buildModelChangedNotice('gemini-3-flash-preview', false),
-    ).toEqual({
-      dedupeKey: 'model:gemini-2.5-flash:managed',
-      title: 'Managed model',
-      message: 'Using Flash 2.5.',
       tone: 'accent',
     });
   });

@@ -2068,7 +2068,10 @@ body::before {
 }
 
 .live-stage-shell {
-  overflow: hidden;
+  overflow: visible;
+  /* padding gives the hover-lift 2px room to breathe above the shell */
+  padding-top: 3px;
+  margin-top: -3px;
 }
 
 .live-reading-strip-shell {
@@ -3551,7 +3554,6 @@ body::before {
   gap: 6px;
   margin-top: 12px;
   height: 20px;
-  overflow: hidden;
   min-width: 0;
 }
 
