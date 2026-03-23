@@ -667,6 +667,9 @@ export async function POST(request: NextRequest) {
     let outputTokens: number;
     let sources: Array<{ title: string; url: string }>;
     let usedFallback = false;
+    // E2: Debate view — raw per-pass nuances surfaced in the expanded card
+    let advocateNuance: string | undefined;
+    let challengerNuance: string | undefined;
     
     // Helper to check if error is recoverable for retry/fallback
     const isRecoverableGroundingError = (err: unknown): boolean => {
@@ -756,6 +759,14 @@ export async function POST(request: NextRequest) {
       rawVerification = synthesized;
       inputTokens = advocateResult.inputTokens + challengerResult.inputTokens;
       outputTokens = advocateResult.outputTokens + challengerResult.outputTokens;
+      // E2: Capture raw per-pass nuances for the debate view (strip Gemini citation markers)
+      const advRaw = advocateResult.data.nuance.replace(/\[\d+\]/g, '').trim().slice(0, MAX_NUANCE_LENGTH);
+      const chalRaw = challengerResult.data.nuance.replace(/\[\d+\]/g, '').trim().slice(0, MAX_NUANCE_LENGTH);
+      // Only store when both passes have meaningful, distinct findings
+      if (advRaw && chalRaw && advRaw !== chalRaw) {
+        advocateNuance = advRaw;
+        challengerNuance = chalRaw;
+      }
       // Merge grounding sources from both sides for best URL matching
       const seenUrls = new Set<string>();
       sources = [...advocateResult.sources, ...challengerResult.sources].filter((s) => {
@@ -924,6 +935,8 @@ export async function POST(request: NextRequest) {
       nuance: resolvedNuance,
       ...(evidenceSnippet ? { evidenceSnippet } : {}),
       ...(contradictionContext ? { contradictionContext } : {}),
+      ...(advocateNuance ? { advocateNuance } : {}),
+      ...(challengerNuance ? { challengerNuance } : {}),
       timestampSeconds: claim.timestampSeconds,
       verifiedAt: new Date().toISOString(),
       ...(claimEmbedding.length > 0 ? { embedding: claimEmbedding } : {}),

@@ -234,9 +234,26 @@ export const VideoHeader = ({
               {verificationSummary.total} checked
             </span>
           </div>
-          <p className="mt-1.5 text-[10px] font-mono text-sc-muted/80 tracking-wide">
-            {verificationSummary.text}
-          </p>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+            <span className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold tabular-nums" style={{ color: 'rgb(var(--sc-supported-rgb))' }}>{verificationSummary.supported}</span>
+              <span className="text-[10px] text-sc-muted/60">Supported</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold tabular-nums" style={{ color: 'rgb(var(--sc-partial-rgb))' }}>{verificationSummary.mixed}</span>
+              <span className="text-[10px] text-sc-muted/60">Mixed</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold tabular-nums" style={{ color: 'rgb(var(--sc-disputed-rgb))' }}>{verificationSummary.unsupported}</span>
+              <span className="text-[10px] text-sc-muted/60">Unsupported</span>
+            </span>
+            {verificationSummary.unresolved > 0 && (
+              <span className="flex items-center gap-1.5">
+                <span className="text-[11px] font-semibold tabular-nums text-sc-muted/50">{verificationSummary.unresolved}</span>
+                <span className="text-[10px] text-sc-muted/40">Unverifiable</span>
+              </span>
+            )}
+          </div>
         </div>
       )}
     </header>

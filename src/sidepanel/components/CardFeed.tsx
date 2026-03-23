@@ -297,8 +297,8 @@ export const CardFeed = ({
                             timestampSeconds={null}
                             accentRgb="var(--sc-neutral-rgb)"
                             tone="muted"
-                            headline="Captions couldn't be loaded."
-                            supportLine="Try refreshing the page or click CC in the player to enable captions."
+                            headline="No captions found for this video."
+                            supportLine="Try ⋮ → Show transcript in YouTube, then Retry. Some videos don't have captions available."
                             actionLabel={onRetryTranscript ? 'Retry' : undefined}
                             onAction={onRetryTranscript}
                           />

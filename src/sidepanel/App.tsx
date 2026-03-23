@@ -122,7 +122,9 @@ export const App = () => {
   }, []);
 
   useEffect(() => {
-    void hardenStorageAccessLevels().catch(() => {});
+    void hardenStorageAccessLevels().catch((err) => {
+      console.warn('[SourceCheck/UI] Storage access hardening failed:', err);
+    });
   }, []);
 
   const { lastProviderError, setLastProviderError, recordSettingsSave } = useProviderErrorGate({
@@ -192,6 +194,28 @@ export const App = () => {
     }
   }, [analysisStatus, isRetryingTranscript]);
 
+  // E4: Rate limit feedback — show a notice when a live 429 hits the pipeline.
+  // Uses direct message listener (not persisted lastProviderError) so stale state
+  // from a previous session never shows a false "paused" toast on load.
+  useEffect(() => {
+    const listener = (msgRaw: unknown) => {
+      if (typeof msgRaw !== 'object' || msgRaw === null) return;
+      const msg = msgRaw as Record<string, unknown>;
+      if (msg.type !== 'PROVIDER_ERROR') return;
+      const payload = msg.payload as Record<string, unknown> | null;
+      if (payload?.code === 'RATE_LIMITED') {
+        enqueueNotice({
+          dedupeKey: 'rate-limited',
+          title: 'Verification paused',
+          message: 'Rate limit reached — resuming shortly.',
+          tone: 'warning',
+        });
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, [enqueueNotice]);
+
   useEffect(() => {
     const fallbackNotice = getLatestTranscriptFallbackNotice(
       runtimeState.transcriptFetchLog,
@@ -260,6 +284,11 @@ export const App = () => {
       const result = rawResult as AskQuestionResult;
       if (result.status !== 'ok') {
         setAskError(result.error || 'Could not answer that yet.');
+        return;
+      }
+
+      if (typeof result.answer !== 'string') {
+        setAskError('Could not answer that yet.');
         return;
       }
 
@@ -415,7 +444,10 @@ export const App = () => {
 
                 setLastProviderError(null);
                 try {
-                  await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
+                  const modelChangeResponse: unknown = await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model });
+                  if (modelChangeResponse && typeof modelChangeResponse === 'object' && (modelChangeResponse as { status?: string }).status === 'error') {
+                    throw new Error((modelChangeResponse as { error?: string }).error || 'Model change failed');
+                  }
                   enqueueNotice(buildModelChangedNotice(model, hasCustomKey));
                 } catch (error) {
                   console.error('[SourceCheck/UI] Model change failed:', error);

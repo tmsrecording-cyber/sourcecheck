@@ -530,6 +530,19 @@ const CompactContent = ({
                   "{evidenceSnippet}"
                 </p>
               )}
+              {/* E2: Debate view — what each agent found before synthesis */}
+              {card.advocateNuance && card.challengerNuance && (
+                <div className="debate-block">
+                  <div className="debate-side debate-side-for">
+                    <span className="debate-side-label debate-side-label-for">for</span>
+                    <p className="debate-side-text">{card.advocateNuance}</p>
+                  </div>
+                  <div className="debate-side debate-side-against">
+                    <span className="debate-side-label debate-side-label-against">against</span>
+                    <p className="debate-side-text">{card.challengerNuance}</p>
+                  </div>
+                </div>
+              )}
               {contradictionContext && (
                 <p className="compact-contradiction-copy">
                   ⚠ {contradictionContext}
@@ -600,7 +613,7 @@ const ScanningContent = ({
       <div className="flex items-center gap-2">
         <span className={`status-dot ${isVerifying ? 'status-dot-pulse' : 'status-dot-subtle'}`} />
         <span className={`font-mono text-[10px] font-bold tracking-[0.07em] uppercase ${isVerifying ? 'scanning-label-active' : 'text-sc-muted/70'}`}>
-          {isVerifying ? 'Checking…' : 'Scanning'}
+          {isVerifying ? 'Checking…' : 'Listening'}
         </span>
         <ScanPulseBar active={isVerifying} />
       </div>

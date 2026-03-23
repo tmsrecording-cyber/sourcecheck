@@ -54,7 +54,7 @@ export const NoticeStack = ({
               style={{ '--notice-rgb': tone.rgb } as CSSProperties}
             >
               <div className="sidepanel-notice-icon" aria-hidden="true">
-                <Icon size={13} strokeWidth={2} />
+                <Icon size={11} strokeWidth={1.8} />
               </div>
               <div className="sidepanel-notice-copy">
                 <p className="sidepanel-notice-title">{notice.title}</p>
@@ -67,7 +67,7 @@ export const NoticeStack = ({
                 aria-label="Dismiss notice"
                 whileTap={pressFeedback}
               >
-                <X size={12} strokeWidth={2} />
+                <X size={10} strokeWidth={2} />
               </motion.button>
             </motion.div>
           );

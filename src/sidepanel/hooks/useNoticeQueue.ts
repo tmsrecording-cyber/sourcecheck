@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { PendingSidepanelNotice, SidepanelNotice } from '../utils/notices';
 
-const NOTICE_AUTO_DISMISS_MS = 3600;
+const NOTICE_AUTO_DISMISS_MS = 2500;
 const MAX_NOTICES = 3;
 
 export const useNoticeQueue = () => {

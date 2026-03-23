@@ -471,10 +471,11 @@ export async function fetchWithBYOK(
 
   const hasCustomKey = customApiKey !== null;
   
-  // MODEL POLICY: 
-  // - Freemium (no custom key): Always use FREEMIUM_MODEL
-  // - BYOK mode: Use normalized selectedModel from sync (single source of truth)
-  const modelToUse = hasCustomKey ? selectedModel : FREEMIUM_MODEL;
+  // MODEL POLICY: Pass the user's selected model for both free and BYOK tiers.
+  // The backend enforces per-route policy:
+  //   - analyze-chunk: passes through (flash-lite for Dual mode)
+  //   - verify-claim: route overrides to flash-2.5 regardless of what is sent
+  const modelToUse = selectedModel;
   
   // Build payload with model
   const requestPayload = { ...payload, model: modelToUse };

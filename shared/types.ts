@@ -87,14 +87,14 @@ export interface ModelConfig {
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
     id: 'gemini-2.5-flash',
-    label: 'Flash 2.5',
-    description: 'Balanced, reliable',
+    label: 'Standard',
+    description: 'Single-pass verification',
     speed: 'standard',
   },
   {
     id: 'gemini-3.1-flash-lite-preview',
-    label: 'Dual',
-    description: 'Fast scan · Deep verify',
+    label: 'Adversarial',
+    description: 'For · Against · Synthesize',
     speed: 'fast',
   },
 ];
@@ -338,6 +338,10 @@ export interface SourceCard {
   /** When a related claim from a different video contradicts this claim's verdict,
    *  this field surfaces the discrepancy so the user can investigate. */
   contradictionContext?: string;
+  /** Raw nuance from the advocate (for) pass — shown in the expanded debate view */
+  advocateNuance?: string;
+  /** Raw nuance from the challenger (against) pass — shown in the expanded debate view */
+  challengerNuance?: string;
 }
 
 /** What /api/verify-claim returns */
