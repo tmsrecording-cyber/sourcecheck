@@ -196,7 +196,7 @@ const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; s
     // Tilde wave — universally reads as "approximately / mixed"
     partial: (
       <svg width={s} height={s} viewBox="0 0 12 12" fill="none">
-        <path d="M2 6.5 Q3.5 4.5 5 6.5 Q6.5 8.5 8 6.5 Q9 5.5 10 6" stroke="currentColor" strokeWidth={sw - 0.4} strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M1.5 7 Q3 4.5 5 7 Q7 9.5 9 7 Q10 5.5 10.5 6" stroke="currentColor" strokeWidth={sw - 0.2} strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
     ),
     // Thicker X — definitive rejection
@@ -234,7 +234,7 @@ const CLAIM_TYPE_LABELS: Record<string, string> = {
 const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
   const synthesizing = elapsed >= 8;
   const reducedMotion = useReducedMotion();
-  const phaseText = synthesizing ? 'synthesizing' : 'checking';
+  const phaseText = synthesizing ? 'merging' : 'checking';
 
   return (
     <div className="adversarial-strip">
@@ -244,8 +244,7 @@ const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
         <span className="adversarial-agent-label adversarial-agent-label-for">for</span>
       </div>
 
-      {/* Simple bridge — two agents, one separator */}
-      <div className={`adversarial-bridge${synthesizing ? ' converged' : ''}`} />
+      <span className="adversarial-sep">·</span>
 
       {/* Challenger agent */}
       <div className="adversarial-agent-group">

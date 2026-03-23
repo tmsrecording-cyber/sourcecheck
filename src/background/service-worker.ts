@@ -1884,27 +1884,27 @@ const flushPersistPanelState = (options: {
   if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
     console.warn('[SourceCheck/SW] Panel state payload too large, truncating...');
 
-    // If still too large, reduce card counts further
-    if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
-      payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 10);
-      payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 20);
-      payload.allSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 10);
-      payload.allPendingClaims = (payload.allPendingClaims as PendingClaimPreview[]).slice(0, 20);
-      // Update the runtimeState in payload to match
-      (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = payload.sourceCards as SourceCard[];
-      (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = payload.pendingClaims as PendingClaimPreview[];
-      (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allSourceCards = payload.allSourceCards as SourceCard[];
-    }
+    // First pass: reduce card counts to moderate limits
+    payload.sourceCards = (payload.sourceCards as SourceCard[]).slice(0, 10);
+    payload.pendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 20);
+    payload.allSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 10);
+    payload.allPendingClaims = (payload.allPendingClaims as PendingClaimPreview[]).slice(0, 20);
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = payload.sourceCards as SourceCard[];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = payload.pendingClaims as PendingClaimPreview[];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allSourceCards = payload.allSourceCards as SourceCard[];
 
-    // If STILL too large, aggressively truncate cards but DON'T delete them entirely
+    // If still too large after first pass, emergency truncation to 5 cards
     if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
       console.warn('[SourceCheck/SW] Panel state too large, using emergency truncation');
-      // Keep at least the most recent cards - don't wipe them completely
       const emergencySourceCards = (payload.sourceCards as SourceCard[]).slice(0, 5);
       const emergencyPendingClaims = (payload.pendingClaims as PendingClaimPreview[]).slice(0, 10);
       const emergencyAllSourceCards = (payload.allSourceCards as SourceCard[]).slice(0, 5);
       const emergencyAllPendingClaims = (payload.allPendingClaims as PendingClaimPreview[]).slice(0, 10);
-      
+
+      // Trim in-memory arrays so subsequent flush calls don't keep hitting emergency
+      allSourceCards = allSourceCards.slice(0, 5);
+      allPendingClaims = allPendingClaims.slice(0, 10);
+
       const emergencyPayload = {
         [WORKER_RUNTIME_STATE_KEY]: {
           ...persistableRuntimeState,
@@ -1921,7 +1921,7 @@ const flushPersistPanelState = (options: {
         currentScanActionState,
         currentScanReason,
       };
-      
+
       enqueueStorageWrite(emergencyPayload, 'emergency-panel-state');
       return;
     }

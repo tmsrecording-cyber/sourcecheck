@@ -108,11 +108,13 @@ describe('verdict-tinted card hover glow', () => {
 //   unverifiable — dashed circle + slash (null/void symbol, not a plain dot)
 
 describe('status icon visual character', () => {
-  it('partial icon has two path elements (two offset lines)', () => {
-    // Two separate <path> elements inside the partial icon svg
+  it('partial icon is a tilde wave path (single connected stroke)', () => {
+    // Single <path> element — a wave/tilde that reads as "approximately / mixed"
     const partialBlock = feedCard.match(/partial:\s*\(\s*<svg[^>]*>[\s\S]*?<\/svg>\s*\)/)?.[0] ?? '';
     const pathCount = (partialBlock.match(/<path /g) ?? []).length;
-    expect(pathCount).toBeGreaterThanOrEqual(2);
+    expect(pathCount).toBeGreaterThanOrEqual(1);
+    // Must use Q (quadratic bezier) curves for a wave shape, not straight lines
+    expect(partialBlock).toContain('Q');
   });
 
   it('unverifiable icon has a circle and a slash, not just a filled dot', () => {
