@@ -211,7 +211,7 @@ export const App = () => {
       runtimeState.pendingClaims.length,
       liveFlow.livePhase,
       liveFlow.stageEntries.length,
-      liveFlow.dockedKeys.size,
+      Array.from(liveFlow.dockedKeys).sort().join(','),
       liveFlow.isDocking ? 'docking' : 'steady',
     ].join('::');
   }, [
@@ -221,7 +221,7 @@ export const App = () => {
     runtimeState.pendingClaims.length,
     liveFlow.livePhase,
     liveFlow.stageEntries.length,
-    liveFlow.dockedKeys.size,
+    liveFlow.dockedKeys,
     liveFlow.isDocking,
   ]);
 
@@ -240,17 +240,23 @@ export const App = () => {
     setAskError(null);
 
     try {
-      const result = await chrome.runtime.sendMessage({
+      const rawResult: unknown = await chrome.runtime.sendMessage({
         type: 'ASK_QUESTION',
         payload: { question: trimmedQuery },
-      }) as AskQuestionResult;
+      });
 
       if (!isMountedRef.current || currentVideoIdRef.current !== submittedVideoId) {
         return;
       }
 
-      if (!result || result.status !== 'ok') {
-        setAskError(result?.error || 'Could not answer that yet.');
+      if (!rawResult || typeof rawResult !== 'object') {
+        setAskError('Could not answer that yet.');
+        return;
+      }
+
+      const result = rawResult as AskQuestionResult;
+      if (result.status !== 'ok') {
+        setAskError(result.error || 'Could not answer that yet.');
         return;
       }
 
@@ -275,20 +281,27 @@ export const App = () => {
 
   const handleRetryTranscript = async () => {
     if (!runtimeState.currentVideo?.videoId) return;
+    const submittedVideoId = currentVideoIdRef.current;
     // Clear stale errors before attempting fresh retry
     setAskError(null);
     setLastProviderError(null);
     setIsRetryingTranscript(true);
+    // Best-effort cleanup — do not let it block the actual retry
+    void chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' }).catch(() => {});
     try {
-      await chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' });
-      await chrome.runtime.sendMessage({
+      const retryResponse: unknown = await chrome.runtime.sendMessage({
         type: 'RETRY_TRANSCRIPT',
         payload: { videoId: runtimeState.currentVideo.videoId }
       });
+      // MV3 sendMessage only throws on transport failure, not app-level errors.
+      // Check the response payload for service-worker-reported failures.
+      if (retryResponse && typeof retryResponse === 'object' && (retryResponse as { status?: string }).status === 'error') {
+        throw new Error((retryResponse as { error?: string }).error || 'Retry failed');
+      }
     } catch (error) {
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
-      setIsRetryingTranscript(false);
-      if (isMountedRef.current) {
+      if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
+        setIsRetryingTranscript(false);
         setAskError('Transcript retry failed. Refresh the page.');
       }
     }
@@ -393,6 +406,7 @@ export const App = () => {
                   enqueueNotice(buildModelChangedNotice(model, hasCustomKey));
                 } catch (error) {
                   console.error('[SourceCheck/UI] Model change failed:', error);
+                  enqueueNotice({ dedupeKey: 'model-change-error', title: 'Model change failed', message: 'Try again.', tone: 'warning' });
                 }
               }} 
             />

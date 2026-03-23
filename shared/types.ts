@@ -335,6 +335,9 @@ export interface SourceCard {
    *  These cards do NOT block re-verification — hasCardForClaim() skips them so the same claim
    *  can be retried in future processing cycles. */
   isTransientFailure?: boolean;
+  /** When a related claim from a different video contradicts this claim's verdict,
+   *  this field surfaces the discrepancy so the user can investigate. */
+  contradictionContext?: string;
 }
 
 /** What /api/verify-claim returns */

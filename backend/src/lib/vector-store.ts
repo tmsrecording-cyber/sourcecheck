@@ -177,6 +177,53 @@ export async function findSimilarClaim(
   }
 }
 
+// Configuration for related claim lookups (Phase D intelligence layer)
+const RELATED_SIMILARITY_THRESHOLD = 0.78;
+const MAX_RELATED_RESULTS = 5; // Fetch 5, filter down to 3 best
+
+/**
+ * Find RELATED claims (not exact matches) for adversarial verification context.
+ * Returns up to 3 related claims with their verification history.
+ * Uses a lower similarity threshold (0.78) than exact-match dedup (0.92).
+ */
+export async function findRelatedClaims(
+  embedding: number[],
+): Promise<VectorMatch[]> {
+  const client = getVectorClient();
+  if (!client) return [];
+
+  const projectedEmbedding = projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+
+  try {
+    const results = await client.query({
+      vector: projectedEmbedding,
+      topK: MAX_RELATED_RESULTS,
+      includeMetadata: true,
+    });
+
+    if (!results || results.length === 0) return [];
+
+    // Filter to related range (0.78 - 0.91) — above 0.92 is an exact match handled separately
+    // Also exclude unverifiable results (stale, not useful as prior intelligence)
+    return results
+      .filter((r) => {
+        const meta = r.metadata as unknown as ClaimVector;
+        return r.score >= RELATED_SIMILARITY_THRESHOLD
+          && r.score < SIMILARITY_THRESHOLD
+          && meta.status !== 'unverifiable';
+      })
+      .slice(0, 3)
+      .map((r) => ({
+        id: String(r.id),
+        score: r.score,
+        metadata: r.metadata as unknown as ClaimVector,
+      }));
+  } catch (error) {
+    console.error('[vector-store] Failed to query related claims:', error);
+    return [];
+  }
+}
+
 /**
  * Check if vector store is available
  */

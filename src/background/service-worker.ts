@@ -1712,6 +1712,7 @@ const resetSessionState = (nextVideo: ActiveVideoContext | null) => {
   bufferedFutureScan = null;
   verificationQueue = [];
   activeVerificationKeys = new Set<string>();
+  analysisRequestQueue = [];
   isProcessing = false;
   isVerifying = false;
   lastAnalyzedAt = 0;

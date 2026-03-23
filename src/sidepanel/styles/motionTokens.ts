@@ -52,8 +52,8 @@ export const DURATION = {
   standard: 0.28,
   /** 340ms - Card entry, layout shifts */
   layout: 0.34,
-  /** 420ms - Hero card entry — deliberate milestone moment */
-  heroEnter: 0.42,
+  /** 520ms - Hero card entry — deliberate milestone moment */
+  heroEnter: 0.52,
   /** 460ms - Stack entry, staggered items */
   enter: 0.46,
   /** 380ms - Tab transitions */
@@ -67,16 +67,16 @@ export const DURATION = {
 // =============================================================================
 
 export const DISTANCE = {
-  /** Subtle lift for card hover (-1px) */
-  liftY: -1,
+  /** Subtle lift for card hover (-2px) */
+  liftY: -2,
   /** Stronger lift for emphasis (-2px) */
   liftYStrong: -2,
   /** Entry slide distance (14px) */
   enterY: 14,
   /** Exit slide distance (-10px) */
   exitY: -10,
-  /** Subtle scale for card hover (1.006) */
-  hoverScale: 1.006,
+  /** Subtle scale for card hover (1.012) */
+  hoverScale: 1.012,
   /** Subtle scale for compact card hover (1.003) */
   hoverScaleCompact: 1.003,
   /** Press settle scale (0.996) */

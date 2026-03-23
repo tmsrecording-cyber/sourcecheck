@@ -683,24 +683,23 @@ function getEffectiveModel(
   // Normalize the requested model (handles null/undefined and stale values)
   const normalizedRequested = normalizeModel(requestedModel);
 
-  // Managed tier (no custom API key): HARD LOCK to freemium model only.
-  // This cannot be overridden by client request, regardless of claimed tier.
+  // Managed tier (no custom API key):
+  // All ALLOWED_MODELS use the same backend API key — no cost difference.
+  // The route layer decides which model fits each stage:
+  //   - Extraction (analyze-chunk): user's selected model passes through (flash-lite for Dual)
+  //   - Verification (verify-claim): route overrides to flash-2.5 for FACTS Grounding accuracy
   if (!customApiKey) {
-    if (requestedModel && normalizedRequested !== FREEMIUM_MODEL) {
-      console.warn(
-        `[model-policy] Managed request requested '${requestedModel}' but hard-locked to '${FREEMIUM_MODEL}'`
-      );
+    if (!requestedModel) {
+      return FREEMIUM_MODEL;
     }
-    return FREEMIUM_MODEL;
+    return normalizedRequested;
   }
 
   // BYOK mode: Allow any valid model from ALLOWED_MODELS
-  // If no model specified, fall back to BYOK default
   if (!requestedModel) {
-    console.log(`[model-policy] BYOK mode with no model specified, using default: ${BYOK_DEFAULT_MODEL}`);
     return BYOK_DEFAULT_MODEL;
   }
-  
+
   return normalizedRequested;
 }
 

@@ -144,7 +144,7 @@ export const CardFeed = ({
   const stageShellMinHeight = isInitialLoading
     ? STAGE_SHELL_MIN_HEIGHT.checking
     : anyDocking
-      ? STAGE_SHELL_MIN_HEIGHT.resolved
+      ? STAGE_SHELL_MIN_HEIGHT.checking  // Hold stage open while docking card is still visible
       : STAGE_SHELL_MIN_HEIGHT[livePhase];
 
   const modelCssVars = buildModelCssVars(selectedModel);

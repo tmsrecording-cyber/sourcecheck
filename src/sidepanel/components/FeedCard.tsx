@@ -185,7 +185,7 @@ const stopSourceLinkPropagation = (
 // Status icons
 const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; size?: 'small' | 'normal' }) => {
   const s = size === 'small' ? 10 : 12;
-  const sw = size === 'small' ? 1.8 : 2.2;
+  const sw = size === 'small' ? 2.2 : 2.6;
   const icons = {
     // Authoritative checkmark — heavier stroke, more decisive angle
     supported: (
@@ -254,7 +254,7 @@ const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimTy
         )}
       </div>
 
-      <p className="mt-3 text-[17px] font-semibold leading-[1.42] tracking-[-0.016em] text-textMain">
+      <p className="mt-3 text-[16px] font-semibold leading-[1.42] tracking-[-0.016em] text-textMain">
         {claimText}
       </p>
 
@@ -274,6 +274,7 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
   const resolvedSourceTitle = resolveSourceTitle(card.sourceTitle);
   const source = resolvedSourceTitle || 'No reliable source found';
   const evidenceSnippet = card.evidenceSnippet?.trim() || '';
+  const contradictionContext = card.contradictionContext?.trim() || '';
   const safeSourceUrl = sanitizeUrl(card.sourceUrl);
   const hasSourceLink = Boolean(safeSourceUrl && resolvedSourceTitle);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
@@ -302,6 +303,15 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
           <p className="feed-card-evidence-kicker">Evidence</p>
           <p className="feed-card-evidence-copy mt-1 line-clamp-4">
             "{evidenceSnippet}"
+          </p>
+        </div>
+      )}
+
+      {contradictionContext && (
+        <div className="feed-card-contradiction-block mt-3">
+          <p className="feed-card-evidence-kicker feed-card-contradiction-kicker">Conflict detected</p>
+          <p className="feed-card-contradiction-copy mt-1">
+            {contradictionContext}
           </p>
         </div>
       )}
@@ -350,6 +360,7 @@ const CompactContent = ({
   const prefersReducedMotion = useReducedMotion();
   const resolvedSourceTitleCompact = resolveSourceTitle(card.sourceTitle);
   const evidenceSnippet = card.evidenceSnippet?.trim() || '';
+  const contradictionContext = card.contradictionContext?.trim() || '';
   const safeSourceUrlCompact = sanitizeUrl(card.sourceUrl);
   const hasSourceLink = Boolean(safeSourceUrlCompact && resolvedSourceTitleCompact);
   const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
@@ -474,6 +485,11 @@ const CompactContent = ({
               {evidenceSnippet && (
                 <p className="compact-expanded-evidence">
                   "{evidenceSnippet}"
+                </p>
+              )}
+              {contradictionContext && (
+                <p className="compact-contradiction-copy">
+                  ⚠ {contradictionContext}
                 </p>
               )}
               {memorySummary && (

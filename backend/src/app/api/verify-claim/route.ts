@@ -3,13 +3,13 @@ export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { askGeminiJSONWithSearch, generateEmbedding, isGeminiError } from '@/lib/gemini';
-import { buildGroundedVerificationPrompt } from '@/lib/prompts';
+import { buildAdvocatePrompt, buildChallengerPrompt } from '@/lib/prompts';
 import { getCorsHeaders, isAllowedOrigin } from '@/lib/cors';
 import { verifyBearerSessionToken } from '@/proxy';
 import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
 import { validateClientSecretAuth } from '@/lib/client-secret-auth';
-import { findSimilarClaim, upsertClaimVector } from '@/lib/vector-store';
+import { findSimilarClaim, findRelatedClaims, upsertClaimVector } from '@/lib/vector-store';
 import type {
   VerifyClaimRequest,
   VerifyClaimResponse,
@@ -164,19 +164,6 @@ const resolvePartialNuanceWithoutMatchedSource = (nuance: string): string => {
   return trimmed;
 };
 
-const VERIFICATION_SCHEMA = {
-  type: 'object',
-  properties: {
-    status: { type: 'string', enum: ['supported', 'partial', 'disputed', 'unverifiable'] },
-    sourceTitle: { type: 'string' },
-    sourceType: { type: 'string', enum: ['academic_paper', 'news_article', 'official_source', 'wikipedia', 'other'] },
-    nuance: { type: 'string' },
-    evidenceSnippet: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-  },
-  required: ['status', 'sourceTitle', 'sourceType', 'nuance'],
-  additionalProperties: false,
-};
-
 const MAX_SNIPPET_LENGTH = 200;
 
 /**
@@ -306,6 +293,159 @@ const selectBestSourceUrl = (
 
   return bestScore > 0 ? bestSource.url : '';
 };
+
+// ============================================================================
+// ADVERSARIAL VERIFICATION (Phase D)
+// ============================================================================
+
+const ADVERSARIAL_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['supported', 'partial', 'disputed', 'unverifiable'] },
+    sourceTitle: { type: 'string' },
+    sourceType: { type: 'string', enum: ['academic_paper', 'news_article', 'official_source', 'wikipedia', 'other'] },
+    nuance: { type: 'string' },
+    evidenceSnippet: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    confidence: { type: 'number' },
+  },
+  required: ['status', 'sourceTitle', 'sourceType', 'nuance', 'confidence'],
+  additionalProperties: false,
+};
+
+interface AdversarialResult {
+  status: VerificationStatus;
+  sourceTitle: string;
+  sourceType: string;
+  nuance: string;
+  evidenceSnippet?: string | null;
+  confidence: number;
+  sources: Array<{ title: string; url: string }>;
+}
+
+const STATUS_STRENGTH: Record<VerificationStatus, number> = {
+  supported: 3,
+  partial: 2,
+  disputed: 1,
+  unverifiable: 0,
+};
+
+/**
+ * Synthesize advocate + challenger results into a single verdict.
+ * Rules:
+ * 1. Both agree → use that status, pick best evidence
+ * 2. Advocate stronger than challenger → lean toward advocate but note challenger's concerns
+ * 3. Challenger found real problems → use challenger's status, explain tension
+ * 4. Both unverifiable → unverifiable
+ * 5. Nuance ALWAYS explains what both sides found
+ */
+function synthesizeVerification(
+  advocate: AdversarialResult,
+  challenger: AdversarialResult
+): RawVerification & { confidence: number; synthesizedNuance: string } {
+  const advStatus = advocate.status;
+  const chalStatus = challenger.status;
+
+  // Both agree on status
+  if (advStatus === chalStatus) {
+    // Pick the higher-confidence result for source/evidence
+    const primary = advocate.confidence >= challenger.confidence ? advocate : challenger;
+    return {
+      status: advStatus,
+      sourceTitle: primary.sourceTitle,
+      sourceType: primary.sourceType,
+      nuance: primary.nuance,
+      evidenceSnippet: primary.evidenceSnippet,
+      confidence: (advocate.confidence + challenger.confidence) / 2,
+      synthesizedNuance: primary.nuance,
+    };
+  }
+
+  // Both unverifiable
+  if (advStatus === 'unverifiable' && chalStatus === 'unverifiable') {
+    return {
+      status: 'unverifiable',
+      sourceTitle: advocate.sourceTitle || challenger.sourceTitle,
+      sourceType: 'other',
+      nuance: 'No sources found from either supporting or challenging perspective.',
+      evidenceSnippet: null,
+      confidence: 0,
+      synthesizedNuance: 'No sources found from either supporting or challenging perspective.',
+    };
+  }
+
+  // One found something, one found nothing → trust the one with evidence
+  if (advStatus === 'unverifiable' && chalStatus !== 'unverifiable') {
+    return {
+      status: chalStatus,
+      sourceTitle: challenger.sourceTitle,
+      sourceType: challenger.sourceType,
+      nuance: challenger.nuance,
+      evidenceSnippet: challenger.evidenceSnippet,
+      confidence: challenger.confidence * 0.8, // Discount — only one perspective
+      synthesizedNuance: challenger.nuance,
+    };
+  }
+  if (chalStatus === 'unverifiable' && advStatus !== 'unverifiable') {
+    return {
+      status: advStatus,
+      sourceTitle: advocate.sourceTitle,
+      sourceType: advocate.sourceType,
+      nuance: advocate.nuance,
+      evidenceSnippet: advocate.evidenceSnippet,
+      confidence: advocate.confidence * 0.8,
+      synthesizedNuance: advocate.nuance,
+    };
+  }
+
+  // Both found evidence but disagree — the interesting case
+  const advStrength = STATUS_STRENGTH[advStatus] * advocate.confidence;
+  const chalStrength = STATUS_STRENGTH[chalStatus] * challenger.confidence;
+
+  // Challenger found real counter-evidence (disputed or partial with high confidence)
+  if (chalStatus === 'disputed' && challenger.confidence >= 0.6) {
+    // Challenger wins if it has strong counter-evidence
+    const finalStatus: VerificationStatus = advStatus === 'supported' ? 'partial' : 'disputed';
+    // Build synthesized nuance showing both sides
+    const synthesizedNuance = advocate.confidence >= 0.5
+      ? `${advocate.nuance.replace(/\.$/, '')}; however, ${challenger.nuance.charAt(0).toLowerCase()}${challenger.nuance.slice(1)}`
+      : challenger.nuance;
+    return {
+      status: finalStatus,
+      sourceTitle: challenger.sourceTitle, // Counter-evidence is the more interesting source
+      sourceType: challenger.sourceType,
+      nuance: synthesizedNuance.slice(0, MAX_NUANCE_LENGTH),
+      evidenceSnippet: challenger.evidenceSnippet || advocate.evidenceSnippet,
+      confidence: (advocate.confidence + challenger.confidence) / 2,
+      synthesizedNuance: synthesizedNuance.slice(0, MAX_NUANCE_LENGTH),
+    };
+  }
+
+  // Challenger found complications but not outright dispute
+  if (chalStatus === 'partial' && challenger.confidence >= 0.5) {
+    const finalStatus: VerificationStatus = 'partial';
+    const synthesizedNuance = `${advocate.nuance.replace(/\.$/, '')}; ${challenger.nuance.charAt(0).toLowerCase()}${challenger.nuance.slice(1)}`;
+    return {
+      status: finalStatus,
+      sourceTitle: advocate.sourceTitle, // Advocate's source is primary
+      sourceType: advocate.sourceType,
+      nuance: synthesizedNuance.slice(0, MAX_NUANCE_LENGTH),
+      evidenceSnippet: advocate.evidenceSnippet || challenger.evidenceSnippet,
+      confidence: (advocate.confidence + challenger.confidence) / 2,
+      synthesizedNuance: synthesizedNuance.slice(0, MAX_NUANCE_LENGTH),
+    };
+  }
+
+  // Default: advocate wins (challenger didn't find strong counter-evidence)
+  return {
+    status: advStatus,
+    sourceTitle: advocate.sourceTitle,
+    sourceType: advocate.sourceType,
+    nuance: advocate.nuance,
+    evidenceSnippet: advocate.evidenceSnippet,
+    confidence: advocate.confidence,
+    synthesizedNuance: advocate.nuance,
+  };
+}
 
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get('origin');
@@ -469,26 +609,59 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ---- Gemini grounded verification with retry + graceful fallback ----
-    const prompt = buildGroundedVerificationPrompt(claim.claimText, claim.claimType, contextTranscript);
+    // ---- Adversarial verification with related claim intelligence (Phase D) ----
+
+    // D4: Look up related claims for prior intelligence context
+    let relatedClaims: Awaited<ReturnType<typeof findRelatedClaims>> = [];
+    if (embedding.length > 0) {
+      try {
+        relatedClaims = await findRelatedClaims(embedding);
+        if (relatedClaims.length > 0) {
+          console.log('[verify-claim] Related claims found for intelligence:', {
+            claimId: claim.id,
+            relatedCount: relatedClaims.length,
+            scores: relatedClaims.map((r) => r.score.toFixed(3)),
+          });
+        }
+      } catch (err) {
+        console.warn('[verify-claim] Related claim lookup failed, continuing without:', err);
+      }
+    }
+
+    // Map related claims to the format expected by prompt builders
+    const relatedClaimContext = relatedClaims.length > 0
+      ? relatedClaims.map((rc) => ({
+          claimText: rc.metadata.claimText,
+          status: rc.metadata.status,
+          sourceTitle: rc.metadata.sourceTitle,
+          videoTitle: rc.metadata.videoTitle,
+        }))
+      : undefined;
+
+    // Build adversarial prompts (advocate searches FOR support, challenger searches AGAINST)
+    const advocatePrompt = buildAdvocatePrompt(
+      claim.claimText, claim.claimType, contextTranscript, relatedClaimContext
+    );
+    const challengerPrompt = buildChallengerPrompt(
+      claim.claimText, claim.claimType, contextTranscript, relatedClaimContext
+    );
 
     // BYOK: Use header model if provided (from x-custom-model), else fall back to body
     const rawModel = customApiKey && headerModel ? headerModel : body.model;
     // Dual mode: 3.1-flash-lite is used for fast extraction (analyze-chunk) but
-    // verification always uses 2.5-flash for better reasoning quality.
+    // verification always uses 2.5-flash for better FACTS Grounding accuracy (85.3% vs 40.6%).
     const effectiveModel = rawModel === 'gemini-3.1-flash-lite-preview'
       ? 'gemini-2.5-flash'
       : rawModel;
-    
-    console.log('[verify-claim] Calling Gemini with grounding:', {
-      requestId: crypto.randomUUID(),
+
+    console.log('[verify-claim] Adversarial verification:', {
       claimId: claim.id,
       claimType: claim.claimType,
       model: effectiveModel,
       isBYOK: !!customApiKey,
-      promptLength: prompt.length,
+      relatedClaimsInjected: relatedClaims.length,
     });
-    
+
     let rawVerification: RawVerification;
     let inputTokens: number;
     let outputTokens: number;
@@ -496,129 +669,140 @@ export async function POST(request: NextRequest) {
     let usedFallback = false;
     
     // Helper to check if error is recoverable for retry/fallback
-    // SAFETY/OTHER/RECITATION: Policy blocks on sensitive content (geopolitical, etc.)
-    // PARSE_ERROR: JSON malformed/empty/truncated
-    // MAX_TOKENS: Response truncated
     const isRecoverableGroundingError = (err: unknown): boolean => {
       if (!isGeminiError(err)) return false;
       if (err.code === 'PARSE_ERROR') return true;
       if (err.code === 'API_ERROR') {
-        // Upstream transient failures
         if (err.status === 502 || err.status === 504) return true;
-        // MAX_TOKENS: retry with higher budget
         if (err.message.includes('MAX_TOKENS')) return true;
-        // SAFETY/OTHER/RECITATION: Policy blocks (geopolitical, sensitive content)
-        // These are product conditions, not server failures
-        if (err.message.includes('SAFETY') || 
+        if (err.message.includes('SAFETY') ||
             err.message.includes('RECITATION') ||
             err.message.includes('OTHER') ||
             err.message.includes('finishReason')) return true;
       }
       return false;
     };
-    
-    try {
-      const result = await askGeminiJSONWithSearch<RawVerification>(
-        prompt, 
-        1200, 
-        VERIFICATION_SCHEMA, 
-        effectiveModel, 
-        customApiKey,
-        '/api/verify-claim'
-      );
-      rawVerification = result.data;
-      inputTokens = result.inputTokens;
-      outputTokens = result.outputTokens;
-      sources = result.sources;
-    } catch (firstError) {
-      if (isRecoverableGroundingError(firstError)) {
-        // Log first attempt failure
-        const firstErr = isGeminiError(firstError) ? firstError : null;
-        console.warn('[verify-claim] First attempt failed, will retry', {
-          category: firstErr?.code === 'API_ERROR' ? 'upstream_non_ok' : (firstErr?.code?.toLowerCase() ?? 'unknown'),
-          model: effectiveModel,
-          claimId: claim.id,
-          retryAttempt: 1,
-          status: firstErr?.status ?? null,
-          finishReason: firstErr?.message.match(/finishReason=(\w+)/)?.[1] || null,
-        });
-        
-        // Retry once with higher token budget and no schema enforcement (more permissive)
-        try {
-          const retryResult = await askGeminiJSONWithSearch<RawVerification>(
-            prompt + '\n\nReturn ONLY valid JSON with no markdown formatting.',
-            1800, // higher maxTokens for retry
-            undefined, // skip strict schema validation on retry
-            effectiveModel,
-            customApiKey,
-            '/api/verify-claim'
-          );
-          rawVerification = retryResult.data;
-          inputTokens = retryResult.inputTokens;
-          outputTokens = retryResult.outputTokens;
-          sources = retryResult.sources;
-          console.info('[verify-claim] Retry succeeded for claim:', claim.id);
-        } catch (retryError) {
-          // Both attempts failed - use graceful fallback instead of 502
-          // Classify the failure category for observability
-          const classifyFailure = (err: unknown): string => {
-            if (!isGeminiError(err)) return 'unknown';
-            const msg = err.message;
-            if (err.status === 502 || err.status === 504) return 'upstream_non_ok';
-            if (msg.includes('PARSE_ERROR')) return 'parse_error';
-            if (msg.includes('schema') || msg.includes('validation')) return 'schema_error';
-            if (msg.includes('finishReason') || msg.includes('Empty response')) return 'empty_response';
-            if (msg.includes('MAX_TOKENS')) return 'max_tokens';
-            if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('AbortError')) return 'timeout';
-            return 'unknown';
-          };
-          
-          const category = classifyFailure(retryError);
-          const geminiErr = isGeminiError(retryError) ? retryError : null;
-          
-          // Single concise log line for fallback classification
-          console.warn('[verify-claim] Fallback triggered', {
-            category,
-            model: effectiveModel,
-            claimId: claim.id,
-            retryAttempt: 2,
-            status: geminiErr?.status ?? null,
-            finishReason: geminiErr?.message.match(/finishReason=(\w+)/)?.[1] || null,
+
+    // Run a single adversarial pass with one retry on recoverable errors
+    const validStatuses: VerificationStatus[] = ['supported', 'partial', 'disputed', 'unverifiable'];
+
+    type PassResult = {
+      data: AdversarialResult;
+      inputTokens: number;
+      outputTokens: number;
+      sources: Array<{ title: string; url: string }>;
+    };
+
+    const runAdversarialPass = async (
+      passPrompt: string,
+      role: 'advocate' | 'challenger'
+    ): Promise<PassResult | null> => {
+      const sanitizePassResult = (d: Record<string, unknown>, passSources: Array<{ title: string; url: string }>): AdversarialResult => ({
+        status: validStatuses.includes(d.status as VerificationStatus)
+          ? (d.status as VerificationStatus) : 'unverifiable',
+        sourceTitle: typeof d.sourceTitle === 'string' ? d.sourceTitle : '',
+        sourceType: (typeof d.sourceType === 'string' ? d.sourceType : 'other') as string,
+        nuance: typeof d.nuance === 'string' ? d.nuance : '',
+        evidenceSnippet: typeof d.evidenceSnippet === 'string' ? d.evidenceSnippet : null,
+        confidence: typeof d.confidence === 'number'
+          ? Math.max(0, Math.min(1, d.confidence)) : 0.5,
+        sources: passSources,
+      });
+
+      try {
+        const result = await askGeminiJSONWithSearch<Record<string, unknown>>(
+          passPrompt, 1200, ADVERSARIAL_SCHEMA, effectiveModel, customApiKey, '/api/verify-claim'
+        );
+        return {
+          data: sanitizePassResult(result.data, result.sources),
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          sources: result.sources,
+        };
+      } catch (firstError) {
+        if (isRecoverableGroundingError(firstError)) {
+          console.warn(`[verify-claim] ${role} first attempt failed, retrying`, {
+            claimId: claim.id, model: effectiveModel,
           });
-          
-          usedFallback = true;
-          // Use "partial" not "unverifiable" — the claim likely IS about a real topic
-          // but automated verification was blocked (often by safety filters on
-          // geopolitical/military content). "Partial" is honest: the claim exists
-          // in a real domain but we couldn't assess the specifics.
-          rawVerification = {
-            status: 'partial',
-            sourceTitle: 'Automated check incomplete',
-            sourceType: 'other',
-            nuance: 'Automated verification could not complete; verify this claim independently.',
-            evidenceSnippet: null,
-          };
-          inputTokens = 0;
-          outputTokens = 0;
-          sources = [];
+          try {
+            const retry = await askGeminiJSONWithSearch<Record<string, unknown>>(
+              passPrompt + '\n\nReturn ONLY valid JSON with no markdown formatting.',
+              1800, undefined, effectiveModel, customApiKey, '/api/verify-claim'
+            );
+            return {
+              data: sanitizePassResult(retry.data, retry.sources),
+              inputTokens: retry.inputTokens,
+              outputTokens: retry.outputTokens,
+              sources: retry.sources,
+            };
+          } catch {
+            console.warn(`[verify-claim] ${role} retry also failed`, { claimId: claim.id });
+            return null;
+          }
         }
-      } else {
-        // Non-recoverable error - re-throw to preserve existing error handling
-        console.error('[verify-claim] Gemini grounding call failed (non-recoverable):', {
-          claimId: claim.id,
-          model: effectiveModel,
-          error: firstError instanceof Error ? {
-            name: firstError.name,
-            message: firstError.message,
-            code: (firstError as { code?: string }).code,
-          } : 'Unknown error',
-        });
-        throw firstError;
+        throw firstError; // Non-recoverable — rethrow to outer catch
       }
+    };
+
+    // Run advocate + challenger in parallel (same wall-clock latency as single call)
+    const [advocateResult, challengerResult] = await Promise.all([
+      runAdversarialPass(advocatePrompt, 'advocate'),
+      runAdversarialPass(challengerPrompt, 'challenger'),
+    ]);
+
+    if (advocateResult && challengerResult) {
+      // Both succeeded — synthesize verdicts (D3)
+      const synthesized = synthesizeVerification(advocateResult.data, challengerResult.data);
+      rawVerification = synthesized;
+      inputTokens = advocateResult.inputTokens + challengerResult.inputTokens;
+      outputTokens = advocateResult.outputTokens + challengerResult.outputTokens;
+      // Merge grounding sources from both sides for best URL matching
+      const seenUrls = new Set<string>();
+      sources = [...advocateResult.sources, ...challengerResult.sources].filter((s) => {
+        if (seenUrls.has(s.url)) return false;
+        seenUrls.add(s.url);
+        return true;
+      });
+      console.info('[verify-claim] Synthesis complete:', {
+        claimId: claim.id,
+        advocateStatus: advocateResult.data.status,
+        advocateConf: advocateResult.data.confidence.toFixed(2),
+        challengerStatus: challengerResult.data.status,
+        challengerConf: challengerResult.data.confidence.toFixed(2),
+        synthesizedStatus: synthesized.status,
+      });
+    } else if (advocateResult || challengerResult) {
+      // One succeeded — use it as single-pass result
+      const winner = (advocateResult || challengerResult)!;
+      const role = advocateResult ? 'advocate' : 'challenger';
+      console.warn(`[verify-claim] Only ${role} succeeded, using single-pass`, { claimId: claim.id });
+      rawVerification = {
+        status: winner.data.status,
+        sourceTitle: winner.data.sourceTitle,
+        sourceType: winner.data.sourceType,
+        nuance: winner.data.nuance,
+        evidenceSnippet: winner.data.evidenceSnippet,
+      };
+      inputTokens = winner.inputTokens;
+      outputTokens = winner.outputTokens;
+      sources = winner.sources;
+    } else {
+      // Both failed — graceful fallback
+      console.warn('[verify-claim] Both adversarial passes failed, using fallback', { claimId: claim.id });
+      usedFallback = true;
+      rawVerification = {
+        status: 'partial',
+        sourceTitle: 'Automated check incomplete',
+        sourceType: 'other',
+        nuance: 'Automated verification could not complete; verify this claim independently.',
+        evidenceSnippet: null,
+      };
+      inputTokens = 0;
+      outputTokens = 0;
+      sources = [];
     }
 
     // ---- Validate status ----
-    const validStatuses: VerificationStatus[] = ['supported', 'partial', 'disputed', 'unverifiable'];
     const parsedStatus: VerificationStatus = validStatuses.includes(rawVerification.status as VerificationStatus)
       ? (rawVerification.status as VerificationStatus)
       : 'unverifiable';
@@ -708,6 +892,28 @@ export async function POST(request: NextRequest) {
       claimEmbedding = await generateEmbedding(claim.claimText, customApiKey, 'RETRIEVAL_DOCUMENT');
     }
 
+    // ---- D5: Contradiction detection across related claims ----
+    // If a related claim from another video has a different verdict on a similar topic,
+    // surface the discrepancy so the user can investigate.
+    let contradictionContext: string | undefined;
+    if (relatedClaims.length > 0 && status !== 'unverifiable') {
+      const contradictions = relatedClaims.filter((rc) => {
+        // Skip if same status — no contradiction
+        if (rc.metadata.status === status) return false;
+        // Only flag meaningful disagreements (supported↔disputed, or supported↔partial)
+        const strength = STATUS_STRENGTH[status];
+        const relatedStrength = STATUS_STRENGTH[rc.metadata.status];
+        return Math.abs(strength - relatedStrength) >= 2;
+      });
+      if (contradictions.length > 0) {
+        const c = contradictions[0];
+        contradictionContext = `A previous check from "${c.metadata.videoTitle}" found "${c.metadata.claimText}" was ${c.metadata.status.toUpperCase()}. The discrepancy may reflect different sources, timeframes, or specifics.`;
+        if (contradictionContext.length > MAX_NUANCE_LENGTH) {
+          contradictionContext = contradictionContext.slice(0, MAX_NUANCE_LENGTH - 3) + '...';
+        }
+      }
+    }
+
     const sourceCard: SourceCard = {
       id,
       claim,
@@ -717,6 +923,7 @@ export async function POST(request: NextRequest) {
       sourceType: resolvedSourceType,
       nuance: resolvedNuance,
       ...(evidenceSnippet ? { evidenceSnippet } : {}),
+      ...(contradictionContext ? { contradictionContext } : {}),
       timestampSeconds: claim.timestampSeconds,
       verifiedAt: new Date().toISOString(),
       ...(claimEmbedding.length > 0 ? { embedding: claimEmbedding } : {}),

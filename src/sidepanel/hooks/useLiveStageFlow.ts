@@ -268,6 +268,7 @@ export const useLiveStageFlow = ({
   useEffect(() => {
     if (activeTab === 'live') return;
     clearAllTimers();
+    setStageKeys([]);
     setDockingKeys(new Set());
     setDockedKeys(new Set());
   // eslint-disable-next-line react-hooks/exhaustive-deps
