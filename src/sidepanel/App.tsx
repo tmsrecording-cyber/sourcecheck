@@ -446,7 +446,7 @@ export const App = () => {
           </div>
         </div>
 
-        <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+        <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col pt-0.5">
           {SHOW_DEBUG && (
             <>
               <DebugStatusPanel runtimeState={runtimeState} analysisStatus={displayAnalysisStatus} />

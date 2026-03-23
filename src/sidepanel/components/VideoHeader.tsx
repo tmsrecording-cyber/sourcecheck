@@ -149,7 +149,7 @@ export const VideoHeader = ({
   const statusBadgeStyle = getStatusBadgeStyle(status);
 
   const verificationSummary = useMemo(() => buildVerificationSummary(cards), [cards]);
-  const showSummary = !isLiveTab && verificationSummary;
+  const showSummary = !isLiveTab && verificationSummary && verificationSummary.total > 0;
 
   const anchorTime = isScanning
     ? playbackState?.currentTime ?? lastScannedTimestamp ?? null

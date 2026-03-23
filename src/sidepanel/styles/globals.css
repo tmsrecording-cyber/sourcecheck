@@ -1673,6 +1673,16 @@ body::before {
     opacity: 0.68;
   }
 
+  /* Live Check label — accent-tinted to signal this section is active now */
+  .stage-section-label-live {
+    color: rgba(var(--model-accent-rgb, 138, 180, 248), 0.7);
+    opacity: 1;
+  }
+
+  .stage-section-rule-live {
+    background: rgba(var(--model-accent-rgb, 138, 180, 248), 0.38);
+  }
+
   /* ── Feed Section Labels ── */
   .feed-section-label {
     font-family: var(--font-mono);
@@ -3093,21 +3103,16 @@ body::before {
 .compact-memory-chip {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
-  border: 1px solid rgba(var(--sc-border-rgb), 0.28);
-  background: linear-gradient(
-    180deg,
-    rgba(var(--sc-surface-1-rgb), 0.58),
-    rgba(var(--sc-surface-0-rgb), 0.72)
-  );
-  color: rgba(var(--sc-text-soft-rgb), 0.68);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  padding: 1px 6px;
-  font-size: 9px;
-  line-height: 1.4;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  white-space: nowrap;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--sc-border-rgb), 0.22);
+  color: rgba(var(--sc-muted-rgb), 0.45);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+  cursor: default;
 }
 
 /* A5: Category chip for unverifiable cards — explains WHY, shown in meta row */
@@ -3543,8 +3548,8 @@ body::before {
 }
 
 @keyframes thinkingPulse {
-  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(var(--sc-accent-rgb), 0.4); }
-  50% { opacity: 0.7; transform: scale(0.9); box-shadow: 0 0 0 4px rgba(var(--sc-accent-rgb), 0); }
+  0%, 100% { opacity: 0.9; transform: scale(1);    box-shadow: 0 0 0 0   rgba(var(--sc-accent-rgb), 0.35); }
+  50%       { opacity: 1;   transform: scale(1.05); box-shadow: 0 0 0 4px rgba(var(--sc-accent-rgb), 0); }
 }
 
 /* ── Adversarial Strip (dual-agent verification) ── */

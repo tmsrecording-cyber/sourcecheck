@@ -160,8 +160,8 @@ export const CardFeed = ({
               <div className="px-3 pt-2 pb-1">
                 {(showLiveCheckLabel || (livePhase === 'reading' && readingVariant != null)) && (
                   <div className="stage-section-row ml-[52px] mb-2">
-                    <span className="stage-section-rule" />
-                    <p className="stage-section-label">Live Check</p>
+                    <span className="stage-section-rule stage-section-rule-live" />
+                    <p className="stage-section-label stage-section-label-live">Live Check</p>
                   </div>
                 )}
 

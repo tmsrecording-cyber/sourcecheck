@@ -450,8 +450,8 @@ const CompactContent = ({
               <span className="compact-timestamp">{formatTime(card.timestampSeconds)}</span>
             )}
             {memorySummary && (
-              <span className="compact-memory-chip">
-                Seen before
+              <span className="compact-memory-chip" title={memorySummary}>
+                ↺
               </span>
             )}
           </div>
