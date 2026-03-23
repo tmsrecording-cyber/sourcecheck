@@ -131,6 +131,11 @@ export async function proxy(request: NextRequest) {
     );
   }
 
+  // Health endpoint is public — used by uptime monitors. Bypass auth entirely.
+  if (request.nextUrl.pathname === '/api/health') {
+    return NextResponse.next({ headers: corsHeaders });
+  }
+
   // Debug endpoints bypass auth in development mode (they have their own auth)
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev && request.nextUrl.pathname.startsWith('/api/debug/')) {
@@ -673,9 +678,16 @@ async function applyRateLimit(request: NextRequest, identity: string): Promise<b
       clientIp = request.headers.get('x-real-ip') || 'unknown';
     }
   } else {
-    // Direct connection - don't trust X-Forwarded-For (client can spoof it)
-    // Use the connection remote address if available, otherwise fallback
-    clientIp = 'unknown';
+    // TRUSTED_PROXY_COUNT not configured: read x-real-ip (set by Vercel edge,
+    // cannot be spoofed by the client) then fall back to leftmost XFF entry.
+    const realIp = request.headers.get('x-real-ip')?.trim();
+    if (realIp) {
+      clientIp = realIp;
+    } else {
+      const forwardedFor = request.headers.get('x-forwarded-for');
+      const firstIp = forwardedFor?.split(',')[0]?.trim();
+      clientIp = firstIp || 'unknown';
+    }
   }
   
   const bucketKey = `${identity}:ip:${clientIp}:${path}`;

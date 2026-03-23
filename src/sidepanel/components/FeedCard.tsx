@@ -185,7 +185,7 @@ const stopSourceLinkPropagation = (
 // Status icons
 const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; size?: 'small' | 'normal' }) => {
   const s = size === 'small' ? 10 : 12;
-  const sw = size === 'small' ? 2.2 : 2.6;
+  const sw = size === 'small' ? 1.75 : 2.6;
   const icons = {
     // Authoritative checkmark — heavier stroke, more decisive angle
     supported: (

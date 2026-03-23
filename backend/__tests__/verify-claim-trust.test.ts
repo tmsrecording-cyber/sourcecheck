@@ -461,7 +461,7 @@ describe('Verify-claim trust boundary: ungrounded responses', () => {
     }));
     const json = await res.json();
 
-    expect(mockAskGemini).toHaveBeenCalledTimes(1);
+    expect(mockAskGemini).toHaveBeenCalledTimes(2); // adversarial pipeline: advocate + challenger
     expect(json.sourceCard.status).toBe('partial');
     expect(json.sourceCard.sourceTitle).not.toBe('Needs primary source');
   });
