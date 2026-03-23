@@ -1,5 +1,6 @@
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { formatTime } from '../utils/formatTime';
 import type {
   AskQuestionSource,
   AnalysisStatus,
@@ -101,7 +102,9 @@ export const CardFeed = ({
 }: CardFeedProps) => {
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const enableListLayoutAnimations = !prefersReducedMotion;
+
   const recentChecks = derivedRecentChecks ?? cards;
 
   const isInitialLoading =
@@ -116,6 +119,28 @@ export const CardFeed = ({
     () => (allCards ?? cards).filter((c) => c.status !== 'unverifiable'),
     [allCards, cards],
   );
+
+  const handleExport = useCallback(() => {
+    const STATUS_PREFIX: Record<string, string> = {
+      supported: '✓ SUPPORTED',
+      partial: '~ MIXED',
+      disputed: '✗ UNSUPPORTED',
+      unverifiable: '? UNVERIFIABLE',
+    };
+    const lines: string[] = ['SourceCheck · Fact Check Report', ''];
+    for (const card of historyCards.slice().reverse()) {
+      const prefix = STATUS_PREFIX[card.status] ?? card.status.toUpperCase();
+      lines.push(`${prefix} (${formatTime(card.timestampSeconds)})`);
+      lines.push(card.claim.claimText);
+      if (card.nuance) lines.push(`Verdict: ${card.nuance}`);
+      if (card.sourceTitle) lines.push(`Source: ${card.sourceTitle}`);
+      lines.push('');
+    }
+    void navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [historyCards]);
 
   // Clear expanded card if it leaves recent checks
   useEffect(() => {
@@ -510,15 +535,26 @@ export const CardFeed = ({
                   <div className="ml-1">
                     <p className="feed-section-label">Fact checks</p>
                   </div>
-                  {onClearHistory && (
-                    <button
-                      type="button"
-                      onClick={onClearHistory}
-                      className="text-[10px] text-sc-muted/50 hover:text-sc-muted/80 transition-colors mr-1"
-                    >
-                      Clear
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 mr-1">
+                    {historyCards.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleExport}
+                        className="text-[10px] text-sc-muted/50 hover:text-sc-muted/80 transition-colors"
+                      >
+                        {copied ? 'Copied!' : 'Copy report'}
+                      </button>
+                    )}
+                    {onClearHistory && (
+                      <button
+                        type="button"
+                        onClick={onClearHistory}
+                        className="text-[10px] text-sc-muted/50 hover:text-sc-muted/80 transition-colors"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {historyCards.slice().reverse().map((card, reverseIndex) => (
                   <motion.div

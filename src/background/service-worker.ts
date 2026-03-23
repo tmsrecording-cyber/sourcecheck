@@ -2928,7 +2928,10 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
-    await hydrateState();
+    // PLAYBACK_UPDATE fires every second — skip hydration overhead when already hydrated
+    if (message.type !== 'PLAYBACK_UPDATE' || !hasHydratedState) {
+      await hydrateState();
+    }
 
     if (message.type === 'VIDEO_CHANGED') {
       const nextVideo = {

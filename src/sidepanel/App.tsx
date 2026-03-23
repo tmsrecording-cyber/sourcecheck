@@ -386,11 +386,45 @@ export const App = () => {
 
   if (!runtimeState.currentVideo) {
     return (
-      <PanelShell
-        label="SourceCheck"
-        subcopy="Open a YouTube video to start fact-checking. Claims are checked automatically as you watch — no setup required."
-        disclosureNote="Transcript text and questions you ask are processed server-side using Gemini AI. No account or identity data is collected."
-      />
+      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center bg-sc-bg-0 px-6 font-sc">
+        <div className="w-full max-w-[272px] flex flex-col items-center gap-5">
+          <div className="flex flex-col items-center gap-2">
+            <SourceCheckLogo size={26} />
+            <p className="text-[9px] font-mono font-bold tracking-[0.22em] uppercase text-sc-accent/60">SourceCheck</p>
+          </div>
+
+          <div className="text-center">
+            <h1 className="text-[17px] font-bold tracking-tight text-sc-text">Live fact-checking</h1>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-sc-text-soft/75">Claims are verified automatically as you watch — no setup required.</p>
+          </div>
+
+          <div className="w-full flex flex-col gap-2">
+            {([
+              ['For · Against · Synthesize', 'Each claim is argued both ways before a verdict'],
+              ['Cross-video memory', 'Catches repeated claims across sessions'],
+              ['Ask questions', 'Query the transcript directly at any point'],
+            ] as const).map(([label, sub]) => (
+              <div key={label} className="flex items-start gap-3 px-3 py-2.5 rounded-[6px] border border-sc-border-soft/40 bg-sc-surface-0/50">
+                <span className="mt-[3px] w-1.5 h-1.5 rounded-full bg-sc-accent/30 flex-shrink-0" />
+                <div>
+                  <p className="text-[11.5px] font-semibold text-sc-text/85">{label}</p>
+                  <p className="text-[10.5px] text-sc-muted/55 mt-0.5">{sub}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 text-[10px] text-sc-muted/40">
+            <span className="w-6 h-px bg-sc-border-soft/40" />
+            Open a YouTube video to begin
+            <span className="w-6 h-px bg-sc-border-soft/40" />
+          </div>
+
+          <p className="text-center text-[10px] text-sc-muted/35 leading-relaxed">
+            Transcript text is processed via Gemini AI.<br />No account or identity data is collected.
+          </p>
+        </div>
+      </div>
     );
   }
 
