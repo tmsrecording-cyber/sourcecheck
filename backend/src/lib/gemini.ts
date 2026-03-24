@@ -395,6 +395,18 @@ const buildEmptyResponseError = (finishReason: GeminiFinishReason | undefined, m
   }
 };
 
+export const isRecoverableUpstreamWarning = (error: GeminiError) => {
+  if (error.code !== 'API_ERROR') return false;
+  return (
+    error.message.includes('MAX_TOKENS') ||
+    error.message.includes('finishReason=') ||
+    error.message.includes('returned no text') ||
+    error.message.includes('RECITATION') ||
+    error.message.includes('SAFETY') ||
+    error.message.includes('OTHER')
+  );
+};
+
 const logJsonFailure = ({
   model,
   useGrounding,
@@ -914,11 +926,17 @@ async function callGemini(
       clearTimeout(timeoutId);
     }
   } catch (error: unknown) {
-    console.error('[gemini.ts] Upstream API error:', error instanceof Error ? error.message : String(error));
-    
     if (isGeminiError(error)) {
+      const message = error.message;
+      if (isRecoverableUpstreamWarning(error)) {
+        console.warn('[gemini.ts] Upstream API warning:', message);
+      } else {
+        console.error('[gemini.ts] Upstream API error:', message);
+      }
       throw error;
     }
+
+    console.error('[gemini.ts] Upstream API error:', error instanceof Error ? error.message : String(error));
 
     if (error instanceof Error && error.name === 'AbortError') {
       throw new GeminiError('API_ERROR', `Gemini API request timed out for ${model}.`, 504);
