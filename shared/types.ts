@@ -76,8 +76,8 @@ export function normalizeModel(model: string | null | undefined): GeminiModelOpt
 /** A single timed segment from YouTube's captions */
 export interface TranscriptChunk {
   text: string;
-  startTime: number;   // seconds into the video
-  duration: number;     // length of this segment in seconds
+  startTime: number;   // seconds into the video, fractional precision allowed
+  duration: number;     // segment length in seconds, fractional precision allowed
   index: number;        // chunk index in the full transcript
 }
 
@@ -116,8 +116,8 @@ export interface ActiveVideoContext {
 }
 
 export interface PlaybackState {
-  currentTime: number;
-  duration: number;
+  currentTime: number; // seconds, fractional precision allowed
+  duration: number;    // seconds, fractional precision allowed
   paused: boolean;
   playbackRate?: number;
 }
@@ -239,6 +239,30 @@ export type ClaimType =
   | 'surprising'
   | 'canonical';
 
+export type ClaimPolarity = 'affirmed' | 'negated' | 'uncertain';
+export type ClaimComparisonOperator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'approx' | null;
+export type ClaimTimeSensitivity = 'evergreen' | 'time_bound' | 'breaking';
+export type ClaimAttributionType = 'speaker_assertion' | 'quoted_claim' | 'reported_claim';
+
+export interface ClaimFeatureVector {
+  speaker: string | null;
+  attributedEntity: string | null;
+  subject: string | null;
+  predicate: string | null;
+  object: string | null;
+  polarity: ClaimPolarity;
+  quantityRaw: string | null;
+  quantityValue: number | null;
+  quantityUnit: string | null;
+  comparisonOperator: ClaimComparisonOperator;
+  dateOrPeriodRaw: string | null;
+  dateOrPeriodNormalized: string | null;
+  timeSensitivity: ClaimTimeSensitivity;
+  location: string | null;
+  topicTags: string[];
+  attributionType: ClaimAttributionType;
+}
+
 export interface ExtractedClaim {
   id: string;                        // generated UUID
   claimText: string;                 // the factual assertion
@@ -248,6 +272,35 @@ export interface ExtractedClaim {
   confidence: number;                // 0-1, how confident the LLM is this is a real claim
   /** Embedding vector for semantic similarity / cross-video memory */
   embedding?: number[];
+  normalizedClaimText?: string;
+  checkworthiness?: number;
+  normalizationVersion?: number;
+  claimFeatures?: ClaimFeatureVector;
+}
+
+export type MatchResolutionPath =
+  | 'cached_exact'
+  | 'cached_related'
+  | 'claimreview_match'
+  | 'live_grounded'
+  | 'fallback';
+
+export interface KnownClaimMatchSummary {
+  origin: 'internal_memory' | 'claimreview';
+  matchType: 'exact_truth_conditions' | 'near_duplicate' | 'related_context';
+  confidence: number;
+  canonicalClaimText: string;
+  reviewPublisher?: string;
+  reviewDate?: string;
+  freshnessClass?: 'fresh' | 'stale' | 'evergreen';
+}
+
+export interface ClaimClusterSummary {
+  clusterId: string;
+  occurrenceCount: number;
+  sameVideoCount: number;
+  lastSeenTimestampSeconds: number;
+  clusterType: 'same_claim_same_speaker' | 'same_claim_new_speaker' | 'near_duplicate';
 }
 
 /** What /api/analyze-chunk returns */
@@ -316,6 +369,12 @@ export interface SourceCard {
   advocateNuance?: string;
   /** Raw nuance from the challenger (against) pass — shown in the expanded debate view */
   challengerNuance?: string;
+  /** Where the current verdict came from */
+  resolutionPath?: MatchResolutionPath;
+  /** Match provenance when a prior claim or external fact-check informed the result */
+  matchInfo?: KnownClaimMatchSummary | null;
+  /** Duplicate cluster metadata for repeat-claim suppression / UI context */
+  clusterInfo?: ClaimClusterSummary | null;
 }
 
 /** What /api/verify-claim returns */
@@ -325,6 +384,9 @@ export interface VerifyClaimResponse {
   usedFallback?: boolean;
   /** Similar claims from this user's history */
   similarClaims?: SimilarClaim[];
+  resolutionPath?: MatchResolutionPath;
+  matchInfo?: KnownClaimMatchSummary | null;
+  clusterInfo?: ClaimClusterSummary | null;
 }
 
 /** A similar claim found via cross-video memory */
@@ -438,6 +500,21 @@ export interface DebugEvent {
   summary?: string;
 }
 
+export interface DebugMetricsSummary {
+  transcriptChunksLoaded: number;
+  chunksScannedCount: number;
+  batchesSent: number;
+  itemsEnqueued: number;
+  verifyStarted: number;
+  verifySucceeded: number;
+  verifyDowngradedUnverifiable: number;
+  verifyConflictSurfaced: number;
+  cardsAppended: number;
+  clusterSuppressions: number;
+  finalVisibleCards: number;
+  resolutionPathCounts: Record<string, number>;
+}
+
 export interface WorkerRuntimeState {
   lifecycle: WorkerLifecycle;
   currentVideo: ActiveVideoContext | null;
@@ -460,6 +537,7 @@ export interface WorkerRuntimeState {
   lastProviderError: ProviderErrorState | null;
   lastProcessedIndex: number;
   transcriptLoadDeadlineAt: number | null;
+  debugMetrics: DebugMetricsSummary;
   debugStage: DebugStage;
   eventLog: DebugEvent[];
 }

@@ -6,6 +6,7 @@
  */
 
 import { Index } from '@upstash/vector';
+import type { ClaimFeatureVector } from '@/types/shared';
 
 // Environment variables
 const UPSTASH_VECTOR_REST_URL = process.env.UPSTASH_VECTOR_REST_URL;
@@ -19,6 +20,10 @@ const MAX_RESULTS = 1; // We only need the best match
 interface ClaimVector {
   id: string;
   claimText: string;
+  normalizedClaimText?: string;
+  claimFeatures?: ClaimFeatureVector;
+  checkworthiness?: number;
+  normalizationVersion?: number;
   status: 'supported' | 'partial' | 'disputed' | 'unverifiable';
   nuance: string;
   sourceTitle: string;
@@ -70,12 +75,27 @@ function getVectorClient(): Index | null {
  */
 const EXPECTED_VECTOR_DIMENSION = 768;
 
+const validateEmbedding = (embedding: number[]): void => {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error('embedding must be a non-empty array');
+  }
+
+  if (embedding.some((value) => !Number.isFinite(value))) {
+    throw new Error('embedding contains non-finite values');
+  }
+};
+
 /**
  * Project high-dimensional embedding to expected dimension using averaging.
  * This preserves semantic meaning while matching index configuration.
  */
 function projectEmbedding(embedding: number[], targetDim: number): number[] {
+  validateEmbedding(embedding);
+
   if (embedding.length === targetDim) return embedding;
+  if (embedding.length < targetDim) {
+    throw new Error(`embedding dimension ${embedding.length} is smaller than target ${targetDim}`);
+  }
   
   // Simple averaging projection: group dimensions and average
   const ratio = embedding.length / targetDim;
@@ -84,15 +104,38 @@ function projectEmbedding(embedding: number[], targetDim: number): number[] {
   for (let i = 0; i < targetDim; i++) {
     const start = Math.floor(i * ratio);
     const end = Math.floor((i + 1) * ratio);
+    const width = end - start;
+    if (width <= 0) {
+      throw new Error(`invalid projection bucket width at index ${i}`);
+    }
     let sum = 0;
     for (let j = start; j < end; j++) {
       sum += embedding[j];
     }
-    projected.push(sum / (end - start));
+    const average = sum / width;
+    if (!Number.isFinite(average)) {
+      throw new Error(`projection produced non-finite value at index ${i}`);
+    }
+    projected.push(average);
   }
   
   return projected;
 }
+
+const getProjectedEmbedding = (
+  embedding: number[],
+  context: 'upsert' | 'findSimilar' | 'findRelated',
+): number[] | null => {
+  try {
+    return projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+  } catch (error) {
+    console.warn(
+      `[vector-store] Skipping ${context}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+    return null;
+  }
+};
 
 /**
  * Upsert a claim vector to the index
@@ -105,8 +148,8 @@ export async function upsertClaimVector(
   const client = getVectorClient();
   if (!client) return;
   
-  // Project embedding to match index dimension
-  const projectedEmbedding = projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+  const projectedEmbedding = getProjectedEmbedding(embedding, 'upsert');
+  if (!projectedEmbedding) return;
   
   try {
     await client.upsert({
@@ -114,6 +157,10 @@ export async function upsertClaimVector(
       vector: projectedEmbedding,
       metadata: {
         claimText: claimData.claimText,
+        ...(claimData.normalizedClaimText ? { normalizedClaimText: claimData.normalizedClaimText } : {}),
+        ...(claimData.claimFeatures ? { claimFeatures: claimData.claimFeatures } : {}),
+        ...(typeof claimData.checkworthiness === 'number' ? { checkworthiness: claimData.checkworthiness } : {}),
+        ...(typeof claimData.normalizationVersion === 'number' ? { normalizationVersion: claimData.normalizationVersion } : {}),
         status: claimData.status,
         nuance: claimData.nuance,
         sourceTitle: claimData.sourceTitle,
@@ -145,8 +192,8 @@ export async function findSimilarClaim(
   const client = getVectorClient();
   if (!client) return null;
   
-  // Project embedding to match index dimension
-  const projectedEmbedding = projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+  const projectedEmbedding = getProjectedEmbedding(embedding, 'findSimilar');
+  if (!projectedEmbedding) return null;
   
   try {
     const results = await client.query({
@@ -192,7 +239,8 @@ export async function findRelatedClaims(
   const client = getVectorClient();
   if (!client) return [];
 
-  const projectedEmbedding = projectEmbedding(embedding, EXPECTED_VECTOR_DIMENSION);
+  const projectedEmbedding = getProjectedEmbedding(embedding, 'findRelated');
+  if (!projectedEmbedding) return [];
 
   try {
     const results = await client.query({

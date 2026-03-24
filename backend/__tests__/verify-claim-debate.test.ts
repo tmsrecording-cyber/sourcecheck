@@ -12,7 +12,9 @@ import { setupSessionAuthEnv, createAuthHeaders, TEST_EXTENSION_ID, mockCryptoSu
 const mockAskGemini = vi.fn();
 const mockGenerateEmbedding = vi.fn();
 const mockFindSimilarClaim = vi.fn();
+const mockFindRelatedClaims = vi.fn();
 const mockUpsertClaimVector = vi.fn();
+const mockSearchClaimReviewMatches = vi.fn();
 vi.mock('../src/lib/gemini', () => ({
   askGeminiJSONWithSearch: (...args: unknown[]) => mockAskGemini(...args),
   isGeminiError: () => false,
@@ -20,10 +22,23 @@ vi.mock('../src/lib/gemini', () => ({
 }));
 vi.mock('../src/lib/vector-store', () => ({
   findSimilarClaim: (...args: unknown[]) => mockFindSimilarClaim(...args),
+  findRelatedClaims: (...args: unknown[]) => mockFindRelatedClaims(...args),
   upsertClaimVector: (...args: unknown[]) => mockUpsertClaimVector(...args),
 }));
 
+vi.mock('../src/lib/claimreview', () => ({
+  searchClaimReviewMatches: (...args: unknown[]) => mockSearchClaimReviewMatches(...args),
+  mapClaimReviewRatingToStatus: (rating?: string) => {
+    if (!rating) return null;
+    if (/false|incorrect|fake/i.test(rating)) return 'disputed';
+    if (/true|correct|accurate/i.test(rating)) return 'supported';
+    if (/misleading|mixed|half true|partly/i.test(rating)) return 'partial';
+    return null;
+  },
+}));
+
 import { POST } from '../src/app/api/verify-claim/route';
+import { resetRecentVerificationCacheForTests } from '../src/lib/recent-verification-cache';
 import type { NextRequest } from 'next/server';
 
 async function makeRequest(overrides: Record<string, unknown> = {}) {
@@ -55,15 +70,19 @@ function mockBothPasses(
 describe('E2: Debate view — advocate + challenger nuances', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRecentVerificationCacheForTests();
     setupSessionAuthEnv();
     mockCryptoSubtle();
     mockGenerateEmbedding.mockResolvedValue([]);
     mockFindSimilarClaim.mockResolvedValue(null);
+    mockFindRelatedClaims.mockResolvedValue([]);
     mockUpsertClaimVector.mockResolvedValue(undefined);
+    mockSearchClaimReviewMatches.mockResolvedValue([]);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetRecentVerificationCacheForTests();
   });
 
   it('includes advocateNuance and challengerNuance when both passes return distinct findings', async () => {

@@ -11,6 +11,8 @@
  * - Local logging only — no external observability services
  */
 
+import type { MatchResolutionPath, VerificationStatus, KnownClaimMatchSummary } from '@/types/shared';
+
 export type FailureCategory =
   | 'auth_error'
   | 'quota_exhausted'
@@ -24,9 +26,9 @@ export type FailureCategory =
   | 'transcript_fetch_failed'
   | 'transcript_parse_failed';
 
-export type SafeProviderType = 'gemini' | 'byok' | 'unknown';
+export type SafeProviderType = 'gemini' | 'byok' | 'fact_check_tools' | 'unknown';
 
-export type TelemetryEvent = {
+type FailureTelemetryEvent = {
   name: 'route_failure' | 'session_init_failure' | 'provider_error' | 'rate_limit_hit' | 'transcript_failure';
   timestamp: number;
   // Safe metadata only — no PII
@@ -41,6 +43,33 @@ export type TelemetryEvent = {
   context?: string;
 };
 
+type VerificationResolutionSource =
+  | 'recent_verification_cache'
+  | 'internal_memory'
+  | 'claimreview'
+  | 'live_grounded'
+  | 'fallback';
+
+type VerificationResolutionTelemetryEvent = {
+  name: 'verification_resolution';
+  timestamp: number;
+  route: '/api/verify-claim';
+  resolutionPath: MatchResolutionPath;
+  resolutionSource: VerificationResolutionSource;
+  status: VerificationStatus;
+  conflictDetected: boolean;
+  conflictReason?: string;
+  matchOrigin?: KnownClaimMatchSummary['origin'];
+  matchType?: KnownClaimMatchSummary['matchType'];
+  freshnessClass?: NonNullable<KnownClaimMatchSummary['freshnessClass']>;
+  context?: string;
+};
+
+export type TelemetryEvent = FailureTelemetryEvent | VerificationResolutionTelemetryEvent;
+type BufferedTelemetryEvent =
+  | Omit<FailureTelemetryEvent, 'timestamp'>
+  | Omit<VerificationResolutionTelemetryEvent, 'timestamp'>;
+
 // Simple in-memory ring buffer for recent events (development/debug only)
 const MAX_BUFFERED_EVENTS = 100;
 const eventBuffer: TelemetryEvent[] = [];
@@ -49,11 +78,11 @@ const eventBuffer: TelemetryEvent[] = [];
  * Log a structured telemetry event.
  * Events are logged to console and optionally buffered for debugging.
  */
-export function logTelemetryEvent(event: Omit<TelemetryEvent, 'timestamp'>): void {
-  const fullEvent: TelemetryEvent = {
+function pushTelemetryEvent(event: BufferedTelemetryEvent): void {
+  const fullEvent = {
     ...event,
     timestamp: Date.now(),
-  };
+  } as TelemetryEvent;
 
   // Add to ring buffer
   eventBuffer.push(fullEvent);
@@ -65,13 +94,17 @@ export function logTelemetryEvent(event: Omit<TelemetryEvent, 'timestamp'>): voi
   const logLine = `[sourcecheck.telemetry] ${JSON.stringify(fullEvent)}`;
   
   // Use appropriate log level based on severity
-  if (event.category === 'internal_error' || event.category === 'upstream_parse_error') {
+  if ('category' in event && (event.category === 'internal_error' || event.category === 'upstream_parse_error')) {
     console.error(logLine);
-  } else if (event.category === 'rate_limited' || event.category === 'quota_exhausted') {
+  } else if ('category' in event && (event.category === 'rate_limited' || event.category === 'quota_exhausted')) {
     console.warn(logLine);
   } else {
     console.log(logLine);
   }
+}
+
+export function logTelemetryEvent(event: Omit<FailureTelemetryEvent, 'timestamp'>): void {
+  pushTelemetryEvent(event);
 }
 
 /**
@@ -86,6 +119,32 @@ export function getRecentEvents(limit: number = 50): TelemetryEvent[] {
  */
 export function clearEventBuffer(): void {
   eventBuffer.length = 0;
+}
+
+export function logVerificationResolution(params: {
+  resolutionPath: MatchResolutionPath;
+  resolutionSource: VerificationResolutionSource;
+  status: VerificationStatus;
+  conflictDetected: boolean;
+  conflictReason?: string;
+  matchOrigin?: KnownClaimMatchSummary['origin'];
+  matchType?: KnownClaimMatchSummary['matchType'];
+  freshnessClass?: NonNullable<KnownClaimMatchSummary['freshnessClass']>;
+  context?: string;
+}): void {
+  pushTelemetryEvent({
+    name: 'verification_resolution',
+    route: '/api/verify-claim',
+    resolutionPath: params.resolutionPath,
+    resolutionSource: params.resolutionSource,
+    status: params.status,
+    conflictDetected: params.conflictDetected,
+    ...(params.conflictReason ? { conflictReason: params.conflictReason } : {}),
+    ...(params.matchOrigin ? { matchOrigin: params.matchOrigin } : {}),
+    ...(params.matchType ? { matchType: params.matchType } : {}),
+    ...(params.freshnessClass ? { freshnessClass: params.freshnessClass } : {}),
+    ...(params.context ? { context: params.context } : {}),
+  });
 }
 
 /**

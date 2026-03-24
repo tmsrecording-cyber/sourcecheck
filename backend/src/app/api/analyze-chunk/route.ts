@@ -6,6 +6,7 @@ import { checkRateLimit, createRateLimitResponse } from '@/lib/rate-limit';
 import { verifyBearerSessionToken } from '@/proxy';
 import { logRouteFailure, logProviderError, classifyGeminiErrorCode, isRetryableCategory } from '@/lib/observability';
 import { validateClientSecretAuth } from '@/lib/client-secret-auth';
+import { normalizeExtractedClaim } from '@/lib/claim-normalization';
 import type {
   AnalyzeChunkRequest,
   AnalyzeChunkResponse,
@@ -36,6 +37,10 @@ const MAX_CHUNKS_PER_REQUEST = 20;
 const MAX_CHUNK_TEXT_LENGTH = 1200;
 const MAX_COMBINED_TRANSCRIPT_LENGTH = 16_000;
 const MAX_METADATA_FIELD_LENGTH = 300;
+const EXTRACTION_OVERLOAD_RETRY_COUNT = 1;
+const EXTRACTION_OVERLOAD_RETRY_DELAY_MS = 250;
+const EXTRACTION_OVERLOAD_BUFFERING_REASON =
+  'Claim extraction is delayed due to provider load. Retrying shortly.';
 
 const CLAIM_EXTRACTION_SCHEMA = {
   type: 'object',
@@ -147,13 +152,24 @@ function jsonWithCors<T>(
   return response;
 }
 
-
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function buildChunkRange(chunks: TranscriptChunk[]): { startIndex: number; endIndex: number } {
   return {
     startIndex: chunks[0].index,
     endIndex: chunks[chunks.length - 1].index,
   };
+}
+
+function summarizeTranscriptWindow(chunks: TranscriptChunk[]) {
+  return chunks.map((chunk) => ({
+    index: chunk.index,
+    startTime: chunk.startTime,
+    duration: chunk.duration,
+    text: chunk.text.slice(0, 140),
+  }));
 }
 
 const normalizeText = (text: string) =>
@@ -463,6 +479,23 @@ async function normalizeClaimResult(
         ]
       : [];
 
+  if (claims.length > 0) {
+    try {
+      claims[0] = {
+        ...claims[0],
+        ...normalizeExtractedClaim({
+          claimText: claims[0].claimText,
+          claimType: claims[0].claimType,
+        }),
+      };
+    } catch (error) {
+      console.warn(
+        '[analyze-chunk] Claim normalization failed; continuing with raw extracted claim.',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
   return {
     claimText,
     exactQuote,
@@ -641,6 +674,12 @@ export async function POST(request: NextRequest) {
       hasCustomKey: !!customApiKey,
       chunkCount: parsedBody.chunks.length,
     });
+    console.log('[analyze-chunk:window]', {
+      videoId: parsedBody.videoId,
+      currentTimestamp: parsedBody.currentTimestamp,
+      chunkRange: buildChunkRange(parsedBody.chunks),
+      chunks: summarizeTranscriptWindow(parsedBody.chunks),
+    });
 
     // -------------------------------------------------------------------------
     // PHASE 5: Build prompt
@@ -667,19 +706,68 @@ export async function POST(request: NextRequest) {
     // -------------------------------------------------------------------------
     // Extraction always uses flash-lite — structured output, no grounding needed
     const effectiveModel = 'gemini-3.1-flash-lite-preview';
-    
-    const {
-      data: rawExtraction,
-      inputTokens,
-      outputTokens,
-    } = await askGeminiJSON<RawExtraction>(
-      prompt,
-      2000,
-      CLAIM_EXTRACTION_SCHEMA,
-      effectiveModel,
-      customApiKey,
-      '/api/analyze-chunk'
-    );
+    let rawExtraction: RawExtraction | null = null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for (let attempt = 0; attempt <= EXTRACTION_OVERLOAD_RETRY_COUNT; attempt += 1) {
+      try {
+        const extraction = await askGeminiJSON<RawExtraction>(
+          prompt,
+          2000,
+          CLAIM_EXTRACTION_SCHEMA,
+          effectiveModel,
+          customApiKey,
+          '/api/analyze-chunk'
+        );
+        rawExtraction = extraction.data;
+        inputTokens = extraction.inputTokens;
+        outputTokens = extraction.outputTokens;
+        break;
+      } catch (error: unknown) {
+        const isOverloaded = isGeminiError(error) && error.code === 'OVERLOADED';
+
+        if (!isOverloaded) {
+          throw error;
+        }
+
+        if (attempt < EXTRACTION_OVERLOAD_RETRY_COUNT) {
+          console.warn('[analyze-chunk] Extraction model overloaded, retrying once.', {
+            model: effectiveModel,
+            delayMs: EXTRACTION_OVERLOAD_RETRY_DELAY_MS,
+          });
+          await sleep(EXTRACTION_OVERLOAD_RETRY_DELAY_MS);
+          continue;
+        }
+
+        logProviderError({
+          category: classifyGeminiErrorCode(error.code),
+          route: '/api/analyze-chunk',
+          model: effectiveModel,
+          providerType: customApiKey ? 'byok' : 'gemini',
+          retryable: isRetryableCategory(classifyGeminiErrorCode(error.code)),
+          context: 'code=OVERLOADED retry_exhausted=true',
+        });
+
+        console.warn('[analyze-chunk] Extraction model still overloaded after retry; returning buffering response.', {
+          model: effectiveModel,
+        });
+
+        return jsonWithCors<AnalyzeChunkResponse>(request, {
+          entities: [],
+          has_claim: false,
+          claim_text: null,
+          action_state: 'BUFFERING',
+          reason: EXTRACTION_OVERLOAD_BUFFERING_REASON,
+          claims: [],
+          chunkRange: buildChunkRange(parsedBody.chunks),
+        });
+      }
+    }
+
+    if (!rawExtraction) {
+      throw new Error('Extraction response missing after overload handling.');
+    }
 
     // -------------------------------------------------------------------------
     // PHASE 7: Normalize entities

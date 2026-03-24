@@ -204,6 +204,65 @@ describe('Fix 4: PARSE_ERROR surfaces as distinct action_state instead of BUFFER
     expect(body.has_claim).toBe(true);
     expect(body.claims).toHaveLength(1);
     expect(body.claims[0].claimText).toBe('Drinking coffee reduces cancer risk by 40 percent.');
+    expect(body.claims[0].normalizedClaimText).toBe('Drinking coffee reduces cancer risk by 40 percent.');
+    expect(body.claims[0].normalizationVersion).toBe(1);
+    expect(body.claims[0].checkworthiness).toBeGreaterThan(0.5);
+    expect(body.claims[0].claimFeatures?.quantityValue).toBe(40);
+    expect(body.claims[0].claimFeatures?.quantityUnit).toBe('percent');
+  });
+
+  it('PASS: OVERLOADED retries once and succeeds without returning 500', async () => {
+    mockAskGeminiJSON
+      .mockRejectedValueOnce(
+        new GeminiError('OVERLOADED', 'Gemini API is temporarily overloaded.', 503)
+      )
+      .mockResolvedValueOnce({
+        data: {
+          entities: ['coffee', 'cancer'],
+          has_claim: true,
+          action_state: 'VERIFYING',
+          reason: 'Quantified health claim with specific percentage.',
+          candidates: [
+            {
+              claim_text: 'Drinking coffee reduces cancer risk by 40 percent.',
+              exact_quote: 'drinking coffee reduces cancer risk by 40 percent',
+              claim_type: 'study',
+              verifiability: 0.9,
+              value: 0.9,
+              speaker_confidence: 0.9,
+              reason: 'Quantified claim with percentage.',
+            },
+          ],
+        },
+        inputTokens: 120,
+        outputTokens: 60,
+      });
+
+    const response = await POST(await fakeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.action_state).toBe('VERIFYING');
+    expect(body.has_claim).toBe(true);
+    expect(mockAskGeminiJSON).toHaveBeenCalledTimes(2);
+  });
+
+  it('PASS: repeated OVERLOADED returns structured BUFFERING instead of 500', async () => {
+    mockAskGeminiJSON.mockRejectedValue(
+      new GeminiError('OVERLOADED', 'Gemini API is temporarily overloaded.', 503)
+    );
+
+    const response = await POST(await fakeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.action_state).toBe('BUFFERING');
+    expect(body.has_claim).toBe(false);
+    expect(body.claim_text).toBeNull();
+    expect(body.claims).toHaveLength(0);
+    expect(body.reason).toContain('provider load');
+    expect(body.chunkRange).toEqual({ startIndex: 0, endIndex: 0 });
+    expect(mockAskGeminiJSON).toHaveBeenCalledTimes(2);
   });
 
   it('PASS: has_claim=true without usable claim_text is downgraded to a non-claim response', async () => {
