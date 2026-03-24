@@ -1,5 +1,10 @@
 import { ALLOWED_MODELS, FREEMIUM_MODEL, BYOK_DEFAULT_MODEL, normalizeModel, type GeminiModelOption } from '../types-shared';
-import { recordParseError, type ParseErrorRoute, type ParseErrorType } from './parse-evidence';
+import {
+  recordParseError,
+  shouldWarnForParseEvidence,
+  type ParseErrorRoute,
+  type ParseErrorType,
+} from './parse-evidence';
 
 const DEFAULT_THINKING_BUDGET = 128;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -412,13 +417,16 @@ const logJsonFailure = ({
   useGrounding,
   rawText,
   validationError,
+  route,
 }: {
   model: string;
   useGrounding: boolean;
   rawText: string;
   validationError?: string;
+  route?: ParseErrorRoute;
 }) => {
-  console.error('[gemini.ts] JSON response failure:', {
+  const log = route && shouldWarnForParseEvidence(route) ? console.warn : console.error;
+  log('[gemini.ts] JSON response failure:', {
     model,
     useGrounding,
     validationError: validationError ?? null,
@@ -550,6 +558,7 @@ const parseGeminiJsonResponse = <T>(
       model: response.model,
       useGrounding,
       rawText,
+      route,
     });
     if (route) {
       recordParseError({
@@ -620,6 +629,7 @@ const parseGeminiJsonResponse = <T>(
         useGrounding,
         rawText,
         validationError,
+        route,
       });
       if (route) {
         recordParseError({

@@ -36,6 +36,9 @@ const parseErrorCounters = new Map<string, number>();
 const parseErrorSamples: ParseErrorEvidence[] = [];
 const MAX_SAMPLES = 50;
 
+export const shouldWarnForParseEvidence = (route: ParseErrorRoute): boolean =>
+  route === '/api/verify-claim' || route === '/api/analyze-chunk';
+
 /**
  * Record a parse/schema error for evidence.
  * Called from gemini.ts when JSON parsing fails.
@@ -56,8 +59,10 @@ export function recordParseError(evidence: Omit<ParseErrorEvidence, 'timestamp'>
     parseErrorSamples.shift();
   }
 
-  // Structured log for aggregation
-  console.error('[parse-evidence]', JSON.stringify({
+  // Structured log for aggregation. Verify/analyze parse churn is often recoverable
+  // or surfaced as structured 200 responses, so keep it out of error-level noise.
+  const log = shouldWarnForParseEvidence(evidence.route) ? console.warn : console.error;
+  log('[parse-evidence]', JSON.stringify({
     ...fullEvidence,
     rawLength: evidence.rawLength, // Already safe (just length, not content)
   }));
