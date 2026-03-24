@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc --noEmit",
     "build:dev": "vite build --mode development",
     "build": "rm -rf dist && tsc && vite build && node scripts/check-release-dist.mjs",
     "check:dist-release": "node scripts/check-release-dist.mjs",

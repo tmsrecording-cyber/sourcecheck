@@ -30,7 +30,13 @@ describe('hardenStorageAccessLevels', () => {
       },
     });
 
-    await hardenStorageAccessLevels();
+    await expect(hardenStorageAccessLevels()).resolves.toEqual({
+      degraded: false,
+      areas: [
+        { area: 'local', status: 'hardened' },
+        { area: 'session', status: 'hardened' },
+      ],
+    });
 
     expect(localSetAccessLevel).toHaveBeenCalledWith({ accessLevel: 'TRUSTED_CONTEXTS' });
     expect(sessionSetAccessLevel).toHaveBeenCalledWith({ accessLevel: 'TRUSTED_CONTEXTS' });
@@ -44,7 +50,13 @@ describe('hardenStorageAccessLevels', () => {
       },
     });
 
-    await expect(hardenStorageAccessLevels()).resolves.toBeUndefined();
+    await expect(hardenStorageAccessLevels()).resolves.toEqual({
+      degraded: false,
+      areas: [
+        { area: 'local', status: 'unsupported' },
+        { area: 'session', status: 'unsupported' },
+      ],
+    });
   });
 
   it('does not throw when a storage area rejects', async () => {
@@ -55,6 +67,12 @@ describe('hardenStorageAccessLevels', () => {
       },
     });
 
-    await expect(hardenStorageAccessLevels()).resolves.toBeUndefined();
+    await expect(hardenStorageAccessLevels()).resolves.toEqual({
+      degraded: true,
+      areas: [
+        { area: 'local', status: 'failed' },
+        { area: 'session', status: 'failed' },
+      ],
+    });
   });
 });

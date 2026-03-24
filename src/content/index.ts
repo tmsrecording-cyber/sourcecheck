@@ -4,7 +4,10 @@ import { youTubeAdapter } from './adapters/youtube';
 import { meetAdapter } from './adapters/meet';
 import type { TranscriptAdapter } from './adapters/transcript-adapter';
 import type { TranscriptDebugState, TranscriptFetchDebugEntry } from '../../shared/types';
-import './remote-logger'; // Auto-starts remote logging if SC_LOG_ENDPOINT is set
+
+if (import.meta.env.DEV || import.meta.env.MODE === 'development') {
+  void import('./remote-logger');
+}
 
 // ---------------------------------------------------------------------------
 // Adapter registry — ordered, first match wins
@@ -217,6 +220,26 @@ const isTerminalTranscriptFailure = (debug: TranscriptDebugState) =>
   debug.reason !== 'pending' &&
   debug.reason !== 'caption-tracks-found' &&
   debug.reason !== 'loaded';
+
+const getPerfNow = () =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+
+const roundPerfMs = (value: number) => Math.round(value * 10) / 10;
+
+const DEBUG_CONTENT_PERF_LOGS =
+  new URLSearchParams(window.location.search).get('sourcecheck_debug_logs') === '1';
+
+const logContentPerf = (event: string, details: Record<string, unknown>) => {
+  if (!DEBUG_CONTENT_PERF_LOGS) {
+    return;
+  }
+  console.log('[SourceCheck][perf]', {
+    event,
+    ...details,
+  });
+};
 
 const getTerminalFailureDebug = (attemptCount: number): TranscriptDebugState =>
   isTerminalTranscriptFailure(lastTranscriptDebug)
@@ -590,6 +613,7 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
       !panelFallbackAttempted &&
       !panelFallbackSucceeded &&
       !autoPanelOpenDisabledAfterFailure;
+    const attemptStartedAt = getPerfNow();
     const extractionResult = await withTimeout(
       (activeAdapter ?? youTubeAdapter).extractTranscript(videoId, signal, (entry) => {
         void deliverTranscriptFetchDebug(videoId, {
@@ -610,6 +634,16 @@ const scheduleTranscriptLoad = (videoId: string, attempt = 0) => {
       attempt: transcriptAttemptCount,
       debug: extractionResult?.debug ?? null,
       transcriptLength: extractionResult?.transcript?.length ?? 0,
+    });
+    logContentPerf('transcript-attempt', {
+      videoId,
+      attempt: transcriptAttemptCount,
+      totalMs: roundPerfMs(getPerfNow() - attemptStartedAt),
+      transcriptLength: extractionResult?.transcript?.length ?? 0,
+      debugReason: extractionResult?.debug?.reason ?? null,
+      allowAutoPanelFallback,
+      panelFallbackAttempted: extractionResult?.panelFallbackAttempted ?? false,
+      panelFallbackSucceeded: extractionResult?.panelFallbackSucceeded ?? false,
     });
     if (isStaleVideoWork(videoId)) {
       transcriptRetryTimer = null;

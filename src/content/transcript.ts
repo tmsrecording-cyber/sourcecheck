@@ -258,6 +258,41 @@ type TranscriptExtractionOptions = {
 
 type TranscriptFetchDebugStep = TranscriptFetchDebugEntry['step'];
 
+const PANEL_POLL_INTERVAL_MS = 250;
+const PANEL_POLL_INTERVAL_ACTIVE_PLAYBACK_MS = 400;
+
+const getPerfNow = () =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+
+const roundPerfMs = (value: number) => Math.round(value * 10) / 10;
+
+const logTranscriptPerf = (event: string, details: Record<string, unknown>) => {
+  if (!DEBUG_TRANSCRIPT_DETAIL_LOGS) {
+    return;
+  }
+  console.log('[SourceCheck][perf]', {
+    event,
+    ...details,
+  });
+};
+
+const isVideoActivelyPlaying = () => {
+  const video = document.querySelector('video');
+  return (
+    video instanceof HTMLVideoElement &&
+    !video.paused &&
+    !video.ended &&
+    Number.isFinite(video.currentTime)
+  );
+};
+
+const getPanelPollIntervalMs = (intervalMs: number) =>
+  isVideoActivelyPlaying()
+    ? Math.max(intervalMs, PANEL_POLL_INTERVAL_ACTIVE_PLAYBACK_MS)
+    : intervalMs;
+
 type TranscriptFetchDebugLogger = (
   entry: Omit<TranscriptFetchDebugEntry, 'at'>
 ) => void;
@@ -1314,6 +1349,15 @@ const scrapeTranscriptPanel = (): TranscriptChunk[] => {
   return [];
 };
 
+const measureTranscriptScrape = () => {
+  const startedAt = getPerfNow();
+  const segments = scrapeTranscriptPanel();
+  return {
+    segments,
+    durationMs: roundPerfMs(getPerfNow() - startedAt),
+  };
+};
+
 const findTranscriptOpenButton = () => {
   for (const selector of TRANSCRIPT_BUTTON_SELECTORS) {
     const candidates = Array.from(document.querySelectorAll<HTMLElement>(selector));
@@ -1498,21 +1542,35 @@ const clickElement = (element: HTMLElement): boolean => {
   }
 };
 
-const waitForTranscriptPanel = async (attempts = 20, intervalMs = 250, signal?: AbortSignal) => {
+const waitForTranscriptPanel = async (attempts = 20, intervalMs = PANEL_POLL_INTERVAL_MS, signal?: AbortSignal) => {
   let maxAttempts = attempts;
+  let pollCount = 0;
+  let totalScrapeMs = 0;
+  let maxScrapeMs = 0;
+  const startedAt = getPerfNow();
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    await sleep(intervalMs, signal);
-    const panelSegments = scrapeTranscriptPanel();
+    const pollIntervalMs = getPanelPollIntervalMs(intervalMs);
+    await sleep(pollIntervalMs, signal);
+    pollCount += 1;
+    const initialScrape = measureTranscriptScrape();
+    totalScrapeMs += initialScrape.durationMs;
+    maxScrapeMs = Math.max(maxScrapeMs, initialScrape.durationMs);
+    const panelSegments = initialScrape.segments;
     if (panelSegments.length > 0) {
       let bestSegments = panelSegments;
       let bestNodeCount = getTranscriptSegmentElements().length;
       let stablePolls = 0;
 
       for (let settleAttempt = 0; settleAttempt < 6; settleAttempt += 1) {
-        await sleep(intervalMs, signal);
+        const settleIntervalMs = getPanelPollIntervalMs(intervalMs);
+        await sleep(settleIntervalMs, signal);
+        pollCount += 1;
         const nextNodeCount = getTranscriptSegmentElements().length;
-        const nextSegments = scrapeTranscriptPanel();
+        const settleScrape = measureTranscriptScrape();
+        totalScrapeMs += settleScrape.durationMs;
+        maxScrapeMs = Math.max(maxScrapeMs, settleScrape.durationMs);
+        const nextSegments = settleScrape.segments;
         if (nextSegments.length > bestSegments.length) {
           bestSegments = nextSegments;
         }
@@ -1529,6 +1587,15 @@ const waitForTranscriptPanel = async (attempts = 20, intervalMs = 250, signal?: 
         }
       }
 
+      logTranscriptPerf('panel-wait', {
+        found: true,
+        polls: pollCount,
+        totalMs: roundPerfMs(getPerfNow() - startedAt),
+        scrapeMs: roundPerfMs(totalScrapeMs),
+        maxScrapeMs: roundPerfMs(maxScrapeMs),
+        segments: bestSegments.length,
+        activePlayback: isVideoActivelyPlaying(),
+      });
       return bestSegments;
     }
 
@@ -1537,6 +1604,15 @@ const waitForTranscriptPanel = async (attempts = 20, intervalMs = 250, signal?: 
     }
   }
 
+  logTranscriptPerf('panel-wait', {
+    found: false,
+    polls: pollCount,
+    totalMs: roundPerfMs(getPerfNow() - startedAt),
+    scrapeMs: roundPerfMs(totalScrapeMs),
+    maxScrapeMs: roundPerfMs(maxScrapeMs),
+    segments: 0,
+    activePlayback: isVideoActivelyPlaying(),
+  });
   return null;
 };
 
@@ -1953,6 +2029,7 @@ const fetchTranscriptChunks = async (
   signal?: AbortSignal,
   onFetchDebug?: TranscriptFetchDebugLogger,
 ): Promise<TranscriptFetchAttemptResult> => {
+  const totalStartedAt = getPerfNow();
   const candidates = [
     // Try the original URL first — YouTube may serve a valid format by default
     // without any &fmt override. Deduped later if it matches a variant URL.
@@ -1973,6 +2050,9 @@ const fetchTranscriptChunks = async (
   };
 
   for (const candidate of candidates) {
+    const candidateStartedAt = getPerfNow();
+    let fetchDurationMs = 0;
+    let parseDurationMs = 0;
     logTranscriptDetail('html', 'fetchUrl', {
       format: candidate.format,
       url: candidate.url,
@@ -1980,6 +2060,7 @@ const fetchTranscriptChunks = async (
     emitTranscriptFetchDebug(onFetchDebug, 'html', 'fetch_started', `${candidate.format} ${candidate.url}`);
 
     try {
+      const fetchStartedAt = getPerfNow();
       const response = await fetch(candidate.url, {
         credentials: candidate.credentials,
         signal
@@ -1988,6 +2069,7 @@ const fetchTranscriptChunks = async (
       // Get content-type header for debugging
       const contentType = response.headers.get('content-type') || 'unknown';
       const bodyText = await response.text();
+      fetchDurationMs = roundPerfMs(getPerfNow() - fetchStartedAt);
 
       logTranscriptDetail('html', 'fetchStatus', {
         format: candidate.format,
@@ -2092,13 +2174,16 @@ const fetchTranscriptChunks = async (
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'parse_started', candidate.format);
         
         let parseResult;
+        const parseStartedAt = getPerfNow();
         try {
           parseResult = candidate.format === 'xml'
             ? analyzeXmlTranscript(bodyText)
             : candidate.format === 'json3'
               ? analyzeJson3Transcript(bodyText)
               : analyzeSrv3Transcript(bodyText);
+          parseDurationMs = roundPerfMs(getPerfNow() - parseStartedAt);
         } catch (parseError) {
+          parseDurationMs = roundPerfMs(getPerfNow() - parseStartedAt);
           emitTranscriptFetchDebug(
             onFetchDebug,
             'html',
@@ -2114,12 +2199,27 @@ const fetchTranscriptChunks = async (
           bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
             ? failure
             : bestFailure;
+          logTranscriptPerf('fetch-parse', {
+            format: candidate.format,
+            result: 'parse-threw',
+            fetchMs: fetchDurationMs,
+            parseMs: parseDurationMs,
+            totalMs: roundPerfMs(getPerfNow() - candidateStartedAt),
+          });
           continue;
         }
         
         const { chunks } = parseResult;
 
         if (chunks.length > 0) {
+          logTranscriptPerf('fetch-parse', {
+            format: candidate.format,
+            result: 'loaded',
+            fetchMs: fetchDurationMs,
+            parseMs: parseDurationMs,
+            totalMs: roundPerfMs(getPerfNow() - candidateStartedAt),
+            chunks: chunks.length,
+          });
           emitTranscriptFetchDebug(
             onFetchDebug,
             'html',
@@ -2161,6 +2261,14 @@ const fetchTranscriptChunks = async (
         bestFailure = getFailurePriority(failure.reason as TranscriptFetchFailureReason) >= getFailurePriority(getAttemptFailureReason(bestFailure) ?? 'fetch-failed')
           ? failure
           : bestFailure;
+        logTranscriptPerf('fetch-parse', {
+          format: candidate.format,
+          result: reason,
+          fetchMs: fetchDurationMs,
+          parseMs: parseDurationMs,
+          totalMs: roundPerfMs(getPerfNow() - candidateStartedAt),
+          chunks: 0,
+        });
         console.log(`[SourceCheck] Transcript ${candidate.format} parsed 0 usable chunks reason=${emptyReason} rawCount=${parseResult.rawCount}, trying next format.`);
         console.log(`[SourceCheck] Transcript ${candidate.format} parsed but contained no usable chunks, trying next format.`);
       } catch (error) {
@@ -2187,6 +2295,13 @@ const fetchTranscriptChunks = async (
               detail: getErrorMessage(error),
             }
           : bestFailure;
+        logTranscriptPerf('fetch-parse', {
+          format: candidate.format,
+          result: 'parse-error',
+          fetchMs: fetchDurationMs,
+          parseMs: parseDurationMs,
+          totalMs: roundPerfMs(getPerfNow() - candidateStartedAt),
+        });
         console.log(`[SourceCheck] Failed to parse transcript ${candidate.format} response, trying next format.`, error);
       }
     } catch (error) {
@@ -2221,10 +2336,21 @@ const fetchTranscriptChunks = async (
         format: candidate.format,
         detail: getErrorMessage(error),
       };
+      logTranscriptPerf('fetch-parse', {
+        format: candidate.format,
+        result: isAbortError ? 'fetch-aborted' : 'fetch-failed',
+        fetchMs: fetchDurationMs,
+        parseMs: parseDurationMs,
+        totalMs: roundPerfMs(getPerfNow() - candidateStartedAt),
+      });
       // Continue to next format candidate instead of throwing
       continue;
     }
   }
+  logTranscriptPerf('fetch-parse-total', {
+    totalMs: roundPerfMs(getPerfNow() - totalStartedAt),
+    result: bestFailure.reason ?? 'fetch-failed',
+  });
   return bestFailure;
 };
 
@@ -2234,6 +2360,7 @@ export const extractTranscriptData = async (
   onFetchDebug?: TranscriptFetchDebugLogger,
   options?: TranscriptExtractionOptions,
 ): Promise<TranscriptExtractionResult> => {
+  const acquisitionStartedAt = getPerfNow();
   // Default to false to prevent auto-opening transcript panel on first attempt.
   // Caller must explicitly pass allowPanelAutoOpen: true for fallback attempts.
   const allowPanelAutoOpen = options?.allowPanelAutoOpen ?? false;
@@ -2274,13 +2401,27 @@ export const extractTranscriptData = async (
     if (latchedTranscript?.length) {
       const bufferedChunks = bufferTranscriptChunks(latchedTranscript);
       emitTranscriptFetchDebug(onFetchDebug, 'panel', 'parse_success', `latched-panel chunks=${bufferedChunks.length} (from ${latchedTranscript.length})`);
+      logTranscriptPerf('transcript-acquire', {
+        videoId,
+        source: 'latched-panel',
+        totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+        transcriptChunks: bufferedChunks.length,
+      });
       return withPanelState({
         transcript: bufferedChunks,
         debug: createTranscriptDebug('panel', 'loaded'),
       });
     }
 
-    const alreadyVisiblePanelTranscript = scrapeTranscriptPanel();
+    const visiblePanelScrape = measureTranscriptScrape();
+    const alreadyVisiblePanelTranscript = visiblePanelScrape.segments;
+    if (visiblePanelScrape.durationMs >= 8) {
+      logTranscriptPerf('dom-scrape', {
+        source: 'visible-panel-check',
+        durationMs: visiblePanelScrape.durationMs,
+        segments: alreadyVisiblePanelTranscript.length,
+      });
+    }
     if (alreadyVisiblePanelTranscript.length > 0) {
       const bufferedChunks = bufferTranscriptChunks(alreadyVisiblePanelTranscript);
       setLatchedPanelTranscript(videoId, bufferedChunks);
@@ -2290,6 +2431,12 @@ export const extractTranscriptData = async (
         'parse_success',
         `visible-panel chunks=${bufferedChunks.length} (from ${alreadyVisiblePanelTranscript.length})`
       );
+      logTranscriptPerf('transcript-acquire', {
+        videoId,
+        source: 'visible-panel',
+        totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+        transcriptChunks: bufferedChunks.length,
+      });
       return withPanelState({
         transcript: bufferedChunks,
         debug: createTranscriptDebug('panel', 'loaded'),
@@ -2324,12 +2471,24 @@ export const extractTranscriptData = async (
         
         const chunks = bufferedChunks.length > 0 ? bufferedChunks : rawChunks;
         setLatchedPanelTranscript(videoId, chunks);
+        logTranscriptPerf('transcript-acquire', {
+          videoId,
+          source: 'panel-fallback',
+          totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+          transcriptChunks: chunks.length,
+        });
         return withPanelState({
           transcript: chunks,
           debug: createTranscriptDebug('panel', 'loaded'),
         });
       }
 
+      logTranscriptPerf('transcript-acquire', {
+        videoId,
+        source: panelResult.reason,
+        totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+        transcriptChunks: 0,
+      });
       return withPanelState({
         transcript: null,
         debug: createTranscriptDebug('panel', panelResult.reason),
@@ -2348,6 +2507,12 @@ export const extractTranscriptData = async (
         return tryPanelFallback();
       }
 
+      logTranscriptPerf('transcript-acquire', {
+        videoId,
+        source: 'tracks-missing',
+        totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+        transcriptChunks: 0,
+      });
       return withPanelState({
         transcript: null,
         debug,
@@ -2410,6 +2575,14 @@ export const extractTranscriptData = async (
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'first_chunk_preview', getChunkPreview(chunks[0]));
         emitTranscriptFetchDebug(onFetchDebug, 'html', 'last_chunk_preview', getChunkPreview(chunks[chunks.length - 1]));
         console.log(`[SourceCheck] Extracted ${rawChunks.length} transcript chunks, buffered to ${chunks.length}.`);
+        logTranscriptPerf('transcript-acquire', {
+          videoId,
+          source: 'caption-track',
+          totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+          transcriptChunks: chunks.length,
+          trackIndex: index + 1,
+          trackCount: trackCandidates.length,
+        });
         return withPanelState({
           transcript: chunks,
           debug,
@@ -2495,6 +2668,12 @@ export const extractTranscriptData = async (
       console.warn(`[SourceCheck] Caption tracks found but none produced a usable transcript. tracks=${trackCandidates.length} reason=${finalReason}`);
     }
     
+    logTranscriptPerf('transcript-acquire', {
+      videoId,
+      source: finalReason,
+      totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+      transcriptChunks: 0,
+    });
     return withPanelState({
       transcript: null,
       debug: createTranscriptDebug('html', finalReason),
@@ -2504,6 +2683,11 @@ export const extractTranscriptData = async (
       // Expected abort - video changed or extraction cancelled by new attempt
       // Log at debug level only, not as an error
       console.log('[SourceCheck] Transcript extraction cancelled (video changed or new attempt).');
+      logTranscriptPerf('transcript-acquire', {
+        videoId,
+        source: 'cancelled',
+        totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+      });
       return withPanelState({
         transcript: null,
         debug: createTranscriptDebug(null, 'pending'),
@@ -2521,6 +2705,12 @@ export const extractTranscriptData = async (
     }
 
     emitTranscriptFetchDebug(onFetchDebug, 'html', 'error', errorMessage);
+    logTranscriptPerf('transcript-acquire', {
+      videoId,
+      source: 'error',
+      totalMs: roundPerfMs(getPerfNow() - acquisitionStartedAt),
+      error: errorMessage,
+    });
     return withPanelState({
       transcript: null,
       debug: createTranscriptDebug('html', 'fetch-failed'),

@@ -20,6 +20,7 @@ import {
   WorkerRuntimeState,
   DebugEvent,
 } from '../../shared/types';
+import { normalizeSeconds, secondsFromMilliseconds } from '../../shared/time';
 import {
   API_BASE,
   CHUNK_INTERVAL_MS,
@@ -36,11 +37,18 @@ import {
   shouldShowSettings,
   type ClassifiedError,
 } from './utils/api';
+import { getSourceIdFromTabUrl } from './utils/sourceTabId';
+import {
+  estimateByteSize,
+  truncateTranscriptToFit,
+  wouldExceedQuota,
+} from './utils/storageQuota';
 import { readProviderApiKey } from './providers/types';
 import {
   isMetadataOnlyVideoChange,
   shouldPreserveStateOnRefresh,
 } from './utils/session-transition';
+import { applyClaimClusterUpdate } from './utils/claimCluster';
 import { logTranscriptFailure, logProviderError, logRetryExhausted } from './telemetry';
 import { hardenStorageAccessLevels } from '../utils/storageAccess';
 
@@ -54,6 +62,7 @@ const MAX_CONCURRENT_VERIFICATIONS = 4;
 const THROTTLED_CONCURRENT_VERIFICATIONS = 2;
 const CONSECUTIVE_429_THROTTLE_THRESHOLD = 3;
 const PLAYHEAD_LEASH_SECONDS = 15;
+const MIN_TRANSCRIPT_DURATION_SECONDS = 0.001;
 const MAX_SOURCE_CARDS = 20;  // Aligned with backend ask-video limit
 const MAX_ASK_SOURCE_CARDS = 12;
 const MAX_ASK_TRANSCRIPT_CHUNKS = 18;
@@ -275,8 +284,11 @@ const metricsAccumulator = {
   verifyStarted: 0,
   verifySucceeded: 0,
   verifyDowngradedUnverifiable: 0,
+  verifyConflictSurfaced: 0,
   cardsAppended: 0,
+  clusterSuppressions: 0,
   finalVisibleCards: 0,
+  resolutionPathCounts: {} as Record<string, number>,
   // Detailed skip reasons
   skipReasons: {} as Record<string, number>,
   // Batch-level detail
@@ -301,8 +313,11 @@ const metricsAccumulator = {
     this.verifyStarted = 0;
     this.verifySucceeded = 0;
     this.verifyDowngradedUnverifiable = 0;
+    this.verifyConflictSurfaced = 0;
     this.cardsAppended = 0;
+    this.clusterSuppressions = 0;
     this.finalVisibleCards = 0;
+    this.resolutionPathCounts = {};
     this.skipReasons = {};
     this.batchDetails = [];
   },
@@ -329,10 +344,17 @@ const metricsAccumulator = {
     console.log(`[METRICS] ║   Verify started:             ${this.verifyStarted.toString().padStart(5)}                    ║`);
     console.log(`[METRICS] ║   Verify succeeded:           ${this.verifySucceeded.toString().padStart(5)}                    ║`);
     console.log(`[METRICS] ║   Downgraded (no grounding):  ${this.verifyDowngradedUnverifiable.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Conflicts surfaced:         ${this.verifyConflictSurfaced.toString().padStart(5)}                    ║`);
     console.log(`[METRICS] ║ ──────────────────────────────────────────────────────── ║`);
     console.log(`[METRICS] ║ CARDS:                                                   ║`);
     console.log(`[METRICS] ║   Appended to sourceCards:    ${this.cardsAppended.toString().padStart(5)}                    ║`);
+    console.log(`[METRICS] ║   Cluster suppressions:       ${this.clusterSuppressions.toString().padStart(5)}                    ║`);
     console.log(`[METRICS] ║   Final visible:              ${this.finalVisibleCards.toString().padStart(5)}                    ║`);
+    console.log('[METRICS] ╠══════════════════════════════════════════════════════════╣');
+    console.log('[METRICS] ║ RESOLUTION PATHS:                                        ║');
+    Object.entries(this.resolutionPathCounts).forEach(([path, count]) => {
+      console.log(`[METRICS] ║   ${path.slice(0, 44).padEnd(44)} ${count.toString().padStart(3)} ║`);
+    });
     console.log('[METRICS] ╠══════════════════════════════════════════════════════════╣');
     console.log('[METRICS] ║ DETAILED SKIP REASONS:                                   ║');
     Object.entries(this.skipReasons).forEach(([reason, count]) => {
@@ -341,6 +363,21 @@ const metricsAccumulator = {
     console.log('[METRICS] ╚══════════════════════════════════════════════════════════╝');
   }
 };
+
+const buildDebugMetricsSummary = (): WorkerRuntimeState['debugMetrics'] => ({
+  transcriptChunksLoaded: metricsAccumulator.transcriptChunksLoaded,
+  chunksScannedCount: metricsAccumulator.chunksScannedCount,
+  batchesSent: metricsAccumulator.batchesSent,
+  itemsEnqueued: metricsAccumulator.itemsEnqueued,
+  verifyStarted: metricsAccumulator.verifyStarted,
+  verifySucceeded: metricsAccumulator.verifySucceeded,
+  verifyDowngradedUnverifiable: metricsAccumulator.verifyDowngradedUnverifiable,
+  verifyConflictSurfaced: metricsAccumulator.verifyConflictSurfaced,
+  cardsAppended: metricsAccumulator.cardsAppended,
+  clusterSuppressions: metricsAccumulator.clusterSuppressions,
+  finalVisibleCards: sourceCards.length,
+  resolutionPathCounts: { ...metricsAccumulator.resolutionPathCounts },
+});
 
 let transcriptFetchLog: TranscriptFetchDebugEntry[] = [];
 let pendingTranscriptBuffer: PendingTranscriptBuffer | null = null;
@@ -381,6 +418,7 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   lastProviderError: null,
   lastProcessedIndex: -1,
   transcriptLoadDeadlineAt: null,
+  debugMetrics: buildDebugMetricsSummary(),
   debugStage: 'idle',
   eventLog: [],
 };
@@ -600,6 +638,7 @@ const dispatch = (event: WorkerEvent) => {
     lastProviderError: runtimeState.lastProviderError,
     lastProcessedIndex,
     transcriptLoadDeadlineAt,
+    debugMetrics: buildDebugMetricsSummary(),
     pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
   };
 
@@ -634,55 +673,6 @@ const setLastProviderError = (
 
 const clearLastProviderError = () => {
   setLastProviderError(null);
-};
-
-/**
- * Estimate the byte size of a value when serialized to JSON.
- * This is approximate but sufficient for quota protection.
- */
-const estimateByteSize = (value: unknown): number => {
-  try {
-    const json = JSON.stringify(value);
-    // chrome.storage uses UTF-8 encoding — use Blob for accurate byte count
-    return new Blob([json]).size;
-  } catch {
-    return Infinity;
-  }
-};
-
-/**
- * Check if storing data would exceed the quota.
- * Note: This is a best-effort check - actual quota may vary by browser.
- */
-const wouldExceedQuota = (data: Record<string, unknown>, quotaBytes: number): boolean => {
-  const totalSize = Object.entries(data).reduce((sum, [, value]) => sum + estimateByteSize(value), 0);
-  return totalSize > quotaBytes;
-};
-
-/**
- * Truncate a transcript to fit within a byte limit.
- * Keeps the most recent chunks since they're most relevant.
- */
-const truncateTranscriptToFit = (
-  transcript: TranscriptChunk[],
-  maxBytes: number
-): TranscriptChunk[] => {
-  let low = 0;
-  let high = transcript.length;
-  
-  // Binary search for the maximum number of chunks that fit
-  while (low < high) {
-    const mid = Math.floor((low + high + 1) / 2);
-    // Keep the most recent mid chunks
-    const candidate = transcript.slice(-mid);
-    if (estimateByteSize(candidate) <= maxBytes) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  
-  return transcript.slice(-low);
 };
 
 const abortActiveRequests = () => {
@@ -1069,8 +1059,8 @@ const readTranscriptFromSnapshot = (
     )
     .map((chunk) => ({
       text: chunk.text,
-      startTime: Math.max(0, Math.floor(chunk.startTime)),
-      duration: Math.max(1, Math.floor(chunk.duration)),
+      startTime: normalizeSeconds(chunk.startTime),
+      duration: normalizeSeconds(chunk.duration, { fallback: MIN_TRANSCRIPT_DURATION_SECONDS, min: MIN_TRANSCRIPT_DURATION_SECONDS }),
       index: Math.max(0, Math.floor(chunk.index)),
     }));
 };
@@ -1101,6 +1091,9 @@ const persistTranscriptSnapshot = (videoId: string | null, transcript: Transcrip
       `Truncating to fit within ${STORAGE_TRANSCRIPT_MAX_BYTES} bytes.`
     );
     const truncatedTranscript = truncateTranscriptToFit(transcript, STORAGE_TRANSCRIPT_MAX_BYTES - 1024); // Leave headroom for metadata
+    if (truncatedTranscript.length === 0 && transcript.length > 0) {
+      console.warn('[SourceCheck/SW] Transcript snapshot dropped: no chunks fit within quota.');
+    }
     dataToStore = { videoId, transcript: truncatedTranscript };
   }
   
@@ -1757,8 +1750,11 @@ const dumpMetrics = () => {
     verifyStarted: metricsAccumulator.verifyStarted,
     verifySucceeded: metricsAccumulator.verifySucceeded,
     verifyDowngradedUnverifiable: metricsAccumulator.verifyDowngradedUnverifiable,
+    verifyConflictSurfaced: metricsAccumulator.verifyConflictSurfaced,
     cardsAppended: metricsAccumulator.cardsAppended,
+    clusterSuppressions: metricsAccumulator.clusterSuppressions,
     finalVisibleCards: sourceCards.length,
+    resolutionPathCounts: metricsAccumulator.resolutionPathCounts,
     skipReasons: metricsAccumulator.skipReasons,
     // MILESTONE 2: Persistence performance metrics
     persistWriteCount,
@@ -1805,6 +1801,7 @@ const buildPersistableRuntimeState = (): WorkerRuntimeState => ({
   lastProcessedIndex,
   // TRANSIENT TIMEOUT: clear for persistence
   transcriptLoadDeadlineAt: null,
+  debugMetrics: buildDebugMetricsSummary(),
   pendingTranscriptBufferSummary: getPendingTranscriptBufferSummary(),
   // DEBUG UI STATE: reset to idle for persistence
   debugStage: 'idle',
@@ -1835,6 +1832,7 @@ const flushPersistPanelState = (options: {
     currentScanActionState,
     currentScanReason,
     transcriptLoadDeadlineAt,
+    debugMetrics: buildDebugMetricsSummary(),
     debugStage,
     eventLog: runtimeState.eventLog,
   };
@@ -2287,6 +2285,12 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
     
     // Track verification outcome
     metricsAccumulator.verifySucceeded++;
+    if (sourceCard.contradictionContext?.trim()) {
+      metricsAccumulator.verifyConflictSurfaced++;
+    }
+    const resolutionPath = sourceCard.resolutionPath || 'unknown';
+    metricsAccumulator.resolutionPathCounts[resolutionPath] =
+      (metricsAccumulator.resolutionPathCounts[resolutionPath] || 0) + 1;
     if (sourceCard.status === 'unverifiable') {
       metricsAccumulator.verifyDowngradedUnverifiable++;
 
@@ -2304,8 +2308,6 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
         return;
       }
     }
-    metricsAccumulator.cardsAppended++;
-
     if (runGeneration !== verificationGeneration || currentVideoInfo?.videoId !== item.videoId) {
       console.warn(
         `[SourceCheck/SW] skipped card insert because session changed video=${item.videoId} ` +
@@ -2316,7 +2318,20 @@ const verifyOneItem = async (item: VerificationQueueItem, runGeneration: number)
 
     removePendingClaimByKey(item.key);
     if (!hasCardForClaim(sourceCard.claim)) {
-      allSourceCards = [sourceCard, ...allSourceCards].slice(0, MAX_SOURCE_CARDS);
+      const clustered = applyClaimClusterUpdate(allSourceCards, sourceCard);
+      if (clustered.suppressed) {
+        console.info(
+          `[SourceCheck/SW] suppressed repeated same-video claim video=${item.videoId} ` +
+          `timestamp=${item.claim.timestampSeconds}`
+        );
+        metricsAccumulator.clusterSuppressions++;
+        allSourceCards = clustered.cards.slice(0, MAX_SOURCE_CARDS);
+      } else {
+        allSourceCards = clustered.cards.length > 0
+          ? clustered.cards.slice(0, MAX_SOURCE_CARDS)
+          : [sourceCard, ...allSourceCards].slice(0, MAX_SOURCE_CARDS);
+        metricsAccumulator.cardsAppended++;
+      }
     }
 
     syncVisibleTimelineState(currentPlaybackState?.currentTime ?? null);
@@ -3087,12 +3102,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'ignored' });
         return;
       }
-      
+
+      const nextPlaybackState: PlaybackState = {
+        currentTime: normalizeSeconds(message.payload?.currentTime),
+        duration: normalizeSeconds(message.payload?.duration),
+        paused: Boolean(message.payload?.paused),
+        playbackRate: normalizeSeconds(message.payload?.playbackRate, { fallback: 1, min: 0.1 }),
+      };
+
       // Capture timestamp at message receipt time to prevent stale state
-      const messageTime = message.payload.currentTime;
+      const messageTime = nextPlaybackState.currentTime;
       const messageVideoId = currentVideoInfo?.videoId;
-      
-      currentPlaybackState = message.payload as PlaybackState;
+
+      currentPlaybackState = nextPlaybackState;
       syncVisibleTimelineState(messageTime);
       dispatch({ type: 'PLAYBACK_UPDATED', currentTime: messageTime });
       persistPanelState();
@@ -3109,7 +3131,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       const nextTime = Number.isFinite(message.payload?.currentTime)
-        ? Math.max(0, Math.floor(message.payload.currentTime))
+        ? normalizeSeconds(message.payload.currentTime)
         : 0;
       if (currentPlaybackState) {
         currentPlaybackState = { ...currentPlaybackState, currentTime: nextTime };
@@ -3162,10 +3184,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Normalize transcript format (batched chunks have startMs/durationMs, direct has startTime/duration)
       currentTranscript = rawTranscript.map((chunk: { text: string; startMs?: number; startTime?: number; durationMs?: number; duration?: number }, index: number) => ({
         text: chunk.text,
-        startTime: typeof chunk.startMs === 'number' ? Math.floor(chunk.startMs / 1000) : (chunk.startTime || 0),
+        startTime: typeof chunk.startMs === 'number'
+          ? secondsFromMilliseconds(chunk.startMs)
+          : normalizeSeconds(chunk.startTime),
         duration: typeof chunk.durationMs === 'number' 
-          ? Math.max(1, Math.floor(chunk.durationMs / 1000)) 
-          : Math.max(1, chunk.duration || 1),
+          ? secondsFromMilliseconds(chunk.durationMs, {
+              fallback: MIN_TRANSCRIPT_DURATION_SECONDS,
+              min: MIN_TRANSCRIPT_DURATION_SECONDS,
+            })
+          : normalizeSeconds(chunk.duration, {
+              fallback: MIN_TRANSCRIPT_DURATION_SECONDS,
+              min: MIN_TRANSCRIPT_DURATION_SECONDS,
+            }),
         index,
       }));
       clearTranscriptLoadTimeout();
@@ -3233,8 +3263,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       const newChunk: TranscriptChunk = {
         text: raw.text,
-        startTime: Math.floor(raw.startMs / 1000),
-        duration: Math.max(1, Math.floor(raw.durationMs / 1000)),
+        startTime: secondsFromMilliseconds(raw.startMs),
+        duration: secondsFromMilliseconds(raw.durationMs, {
+          fallback: MIN_TRANSCRIPT_DURATION_SECONDS,
+          min: MIN_TRANSCRIPT_DURATION_SECONDS,
+        }),
         index: currentTranscript.length,
       };
       currentTranscript.push(newChunk);
@@ -3312,8 +3345,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      const urlObj = targetTab.url ? new URL(targetTab.url) : null;
-      const urlVideoId = urlObj?.searchParams.get('v');
+      const urlVideoId = getSourceIdFromTabUrl(
+        targetTab.url,
+        currentVideoInfo?.sourceContext?.type,
+      );
       if (urlVideoId !== videoId) {
         sendResponse({ status: 'error', error: 'The source tab no longer matches the active video.' });
         return;
@@ -3353,8 +3388,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      const urlObj = targetTab.url ? new URL(targetTab.url) : null;
-      const urlVideoId = urlObj?.searchParams.get('v');
+      const urlVideoId = getSourceIdFromTabUrl(
+        targetTab.url,
+        currentVideoInfo?.sourceContext?.type,
+      );
       if (urlVideoId !== videoId) {
         sendResponse({ status: 'error', error: 'The source tab no longer matches the active video.' });
         return;

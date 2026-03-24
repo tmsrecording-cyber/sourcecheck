@@ -1,12 +1,16 @@
 /**
- * Remote Logger Client - Sends logs to local HTTP server
- * 
+ * Remote Logger Client - Sends logs to a loopback HTTP server in dev builds only.
+ *
  * Setup:
  *   1. Run: node scripts/log-server.cjs
- *   2. In Chrome DevTools console: 
- *      localStorage.setItem('SC_LOG_ENDPOINT', 'http://localhost:9223/log')
+ *   2. Set chrome.storage.session['scRemoteLogEndpoint'] = 'http://localhost:9223/log'
  *   3. Reload extension
  */
+
+import {
+  getRemoteLoggerEndpointFromStorage,
+  REMOTE_LOG_ENDPOINT_KEY,
+} from './remoteLoggerConfig';
 
 declare global {
   interface Window {
@@ -22,20 +26,15 @@ interface LogEntry {
 }
 
 class RemoteLogger {
-  private endpoint: string | null = null;
+  private readonly endpoint: string;
   private queue: LogEntry[] = [];
   private flushTimer: number | null = null;
-  private enabled = false;
 
-  constructor() {
-    this.endpoint = localStorage.getItem('SC_LOG_ENDPOINT');
-    this.enabled = !!this.endpoint;
-    
-    if (this.enabled) {
-      this.patchConsole();
-      this.startFlushTimer();
-      console.log('[RemoteLogger] Enabled, endpoint:', this.endpoint);
-    }
+  constructor(endpoint: string) {
+    this.endpoint = endpoint;
+    this.patchConsole();
+    this.startFlushTimer();
+    console.log('[RemoteLogger] Enabled, endpoint:', this.endpoint);
   }
 
   private patchConsole() {
@@ -127,9 +126,28 @@ class RemoteLogger {
   }
 }
 
-// Auto-init in browser context
-if (typeof window !== 'undefined') {
-  window.__scRemoteLogger = new RemoteLogger();
+export async function initRemoteLogger(): Promise<RemoteLogger | null> {
+  if (typeof window === 'undefined' || typeof chrome === 'undefined') {
+    return null;
+  }
+
+  const endpoint = await getRemoteLoggerEndpointFromStorage(chrome.storage?.session);
+  if (!endpoint) {
+    return null;
+  }
+
+  const existingLogger = window.__scRemoteLogger;
+  if (existingLogger) {
+    return existingLogger;
+  }
+
+  const logger = new RemoteLogger(endpoint);
+  window.__scRemoteLogger = logger;
+  return logger;
 }
 
-export { RemoteLogger };
+if (typeof window !== 'undefined') {
+  void initRemoteLogger();
+}
+
+export { RemoteLogger, REMOTE_LOG_ENDPOINT_KEY };

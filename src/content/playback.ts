@@ -1,6 +1,9 @@
+import { normalizeSeconds } from '../../shared/time';
+
 let trackedVideo: HTMLVideoElement | null = null;
 let timeUpdateListener: (() => void) | null = null;
 let seekedListener: (() => void) | null = null;
+let forceSyncListener: (() => void) | null = null;
 let currentVideoId: string | null = null;
 let videoElementObserver: MutationObserver | null = null;
 let visibilityListener: (() => void) | null = null;
@@ -43,6 +46,8 @@ const SEEK_BACKWARD_THRESHOLD_SECONDS = 0.5;
 const SEEK_FORWARD_THRESHOLD_SECONDS = 8;
 const INITIAL_SEND_RETRIES = 10;
 const INITIAL_SEND_RETRY_DELAY_MS = 600;
+const PLAYBACK_UPDATE_INTERVAL_MS = 1000;
+const MIN_PROGRESS_DELTA_SECONDS = 0.25;
 
 const safeSendMessage = (message: unknown) => {
   try {
@@ -61,8 +66,8 @@ const sendPlaybackUpdateWithRetry = (video: HTMLVideoElement, boundVideoId: stri
 
   const payload = {
     videoId: currentVideoId,
-    currentTime: Number.isFinite(video.currentTime) ? Math.floor(video.currentTime) : 0,
-    duration: Number.isFinite(video.duration) ? Math.floor(video.duration) : 0,
+    currentTime: normalizeSeconds(video.currentTime),
+    duration: normalizeSeconds(video.duration),
     paused: video.paused,
     playbackRate: Number.isFinite(video.playbackRate) && video.playbackRate > 0 ? video.playbackRate : 1,
   };
@@ -87,10 +92,10 @@ const sendPlaybackUpdateWithRetry = (video: HTMLVideoElement, boundVideoId: stri
 };
 
 const sendPlaybackUpdate = (video: HTMLVideoElement) => {
-  const currentTime = Number.isFinite(video.currentTime) ? Math.floor(video.currentTime) : 0;
-  const duration = Number.isFinite(video.duration) ? Math.floor(video.duration) : 0;
+  const currentTime = normalizeSeconds(video.currentTime);
+  const duration = normalizeSeconds(video.duration);
   const playbackRate = Number.isFinite(video.playbackRate) && video.playbackRate > 0
-    ? video.playbackRate
+    ? normalizeSeconds(video.playbackRate, { fallback: 1, min: 0.1 })
     : 1;
 
   safeSendMessage({
@@ -131,11 +136,17 @@ export const stopPlaybackTracking = () => {
   if (trackedVideo && seekedListener) {
     trackedVideo.removeEventListener('seeked', seekedListener);
   }
+  if (trackedVideo && forceSyncListener) {
+    trackedVideo.removeEventListener('ratechange', forceSyncListener);
+    trackedVideo.removeEventListener('play', forceSyncListener);
+    trackedVideo.removeEventListener('pause', forceSyncListener);
+  }
   stopVideoElementObserver();
   stopVisibilityListener();
   trackedVideo = null;
   timeUpdateListener = null;
   seekedListener = null;
+  forceSyncListener = null;
 };
 
 export const initPlaybackTracking = () => {
@@ -155,16 +166,21 @@ export const initPlaybackTracking = () => {
   if (trackedVideo && seekedListener) {
     trackedVideo.removeEventListener('seeked', seekedListener);
   }
+  if (trackedVideo && forceSyncListener) {
+    trackedVideo.removeEventListener('ratechange', forceSyncListener);
+    trackedVideo.removeEventListener('play', forceSyncListener);
+    trackedVideo.removeEventListener('pause', forceSyncListener);
+  }
 
   trackedVideo = video;
 
   let lastUpdate = 0;
-  let lastReportedTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  let lastReportedTime = normalizeSeconds(video.currentTime);
   let lastPausedState = video.paused;
   timeUpdateListener = () => {
     const now = Date.now();
-    const rawCurrentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-    const currentTime = Math.floor(rawCurrentTime);
+    const rawCurrentTime = normalizeSeconds(video.currentTime);
+    const currentTime = rawCurrentTime;
     const delta = rawCurrentTime - lastReportedTime;
     const pausedChanged = video.paused !== lastPausedState;
 
@@ -184,15 +200,15 @@ export const initPlaybackTracking = () => {
       return;
     }
 
-    // Throttle updates: max once per 2 seconds
-    if (now - lastUpdate <= 2000) {
+    // Throttle steady-state updates to avoid flooding the service worker.
+    if (now - lastUpdate <= PLAYBACK_UPDATE_INTERVAL_MS) {
       return;
     }
 
     // MILESTONE 2: Skip update if time hasn't changed meaningfully and paused state is same
     // This reduces message passing during video playback when time advances smoothly
     const timeDelta = Math.abs(rawCurrentTime - lastReportedTime);
-    if (!pausedChanged && timeDelta < 1.0) {
+    if (!pausedChanged && timeDelta < MIN_PROGRESS_DELTA_SECONDS) {
       // Still update lastUpdate to prevent checking every frame, but don't send message
       lastUpdate = now;
       return;
@@ -205,8 +221,8 @@ export const initPlaybackTracking = () => {
   };
 
   seekedListener = () => {
-    const rawCurrentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-    const currentTime = Math.floor(rawCurrentTime);
+    const rawCurrentTime = normalizeSeconds(video.currentTime);
+    const currentTime = rawCurrentTime;
     safeSendMessage({
       type: 'VIDEO_SEEKED',
       payload: { videoId: currentVideoId, currentTime },
@@ -216,8 +232,18 @@ export const initPlaybackTracking = () => {
     sendPlaybackUpdate(video);
   };
 
+  forceSyncListener = () => {
+    lastReportedTime = normalizeSeconds(video.currentTime);
+    lastPausedState = video.paused;
+    lastUpdate = Date.now();
+    sendPlaybackUpdate(video);
+  };
+
   video.addEventListener('timeupdate', timeUpdateListener);
   video.addEventListener('seeked', seekedListener);
+  video.addEventListener('ratechange', forceSyncListener);
+  video.addEventListener('play', forceSyncListener);
+  video.addEventListener('pause', forceSyncListener);
   sendPlaybackUpdateWithRetry(video, currentVideoId);
   startVideoElementObserver();
   startVisibilityListener();
