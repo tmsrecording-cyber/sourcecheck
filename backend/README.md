@@ -12,13 +12,14 @@ cp .env.example .env.local
 # Edit .env.local with your API keys
 ```
 
-To try Gemini 2.5 Pro, add this line to `.env.local` and restart the backend:
+Model policy:
 
-```bash
-GEMINI_MODEL=gemini-2.5-pro
-```
+- Freemium / managed backend verification stays on `gemini-2.5-flash`
+- BYOK users may select `gemini-2.5-flash`, `gemini-3.1-flash-lite-preview`, or `gemini-3-flash-preview`
+- Verification requests normalize `gemini-3.1-flash-lite-preview` back to `gemini-2.5-flash` for grounded fact checking
+- `analyze-chunk` currently uses `gemini-3.1-flash-lite-preview` for fast extraction
 
-If `GEMINI_MODEL` is unset, the backend falls back to the current fast default in code.
+If `GEMINI_MODEL` is unset, the backend falls back to the managed default in code.
 
 If you deploy the backend anywhere other than `localhost`, set:
 
@@ -26,6 +27,12 @@ If you deploy the backend anywhere other than `localhost`, set:
 - `SESSION_SECRET` (enables backend-issued bearer session tokens)
 - `REDIS_URL` (recommended for durable rate limits across restarts/instances)
 - `TRUSTED_PROXY_COUNT` (number of trusted proxy hops; required for accurate per-IP rate limiting behind CDNs/proxies)
+
+Optional match-first env vars:
+
+- `FACT_CHECK_TOOLS_API_KEY` — enables Google Fact Check Tools / ClaimReview lookup for public claims
+- `FACT_CHECK_TOOLS_TIMEOUT_MS` — timeout for external fact-check lookup
+- `VERIFY_CLAIM_CACHE_TTL_MS` — short-lived cache for repeated public `verify-claim` results
 
 The extension must be built with `VITE_API_BASE` pointing at the deployed API origin so the
 manifest `host_permissions` line up with runtime requests.
@@ -92,6 +99,7 @@ Structured events are logged to console for critical failure paths:
 - `session_init_failure` — Session token issuance failures
 - `route_failure` — API route failures (auth, rate limit, validation)
 - `provider_error` — Gemini/BYOK provider errors (auth, quota, rate limit, parse errors)
+- `verification_resolution` — resolved verify path for public/private-safe operational monitoring
 
 ### What is NOT logged
 
@@ -117,6 +125,23 @@ Events are logged as structured JSON prefixed with `[sourcecheck.telemetry]`:
 }
 ```
 
+Example resolution event:
+
+```json
+{
+  "name": "verification_resolution",
+  "timestamp": 1712345678901,
+  "route": "/api/verify-claim",
+  "resolutionPath": "claimreview_match",
+  "resolutionSource": "claimreview",
+  "status": "disputed",
+  "conflictDetected": false,
+  "matchOrigin": "claimreview",
+  "matchType": "exact_truth_conditions",
+  "freshnessClass": "fresh"
+}
+```
+
 ### Failure categories
 
 - `auth_error` — Authentication/authorization failures
@@ -131,3 +156,39 @@ Events are logged as structured JSON prefixed with `[sourcecheck.telemetry]`:
 ### Viewing logs
 
 In development, logs appear in the terminal. On Vercel, view function logs in the dashboard.
+
+### Debug endpoints
+
+Two in-memory debug endpoints exist for operator checks:
+
+- `/api/debug/parse-errors`
+- `/api/debug/telemetry`
+
+Behavior:
+- in development, both are available without auth
+- outside development, both require `?token=<DEBUG_TOKEN>`
+
+`/api/debug/telemetry` is the fastest way to inspect recent:
+- `route_failure`
+- `provider_error`
+- `verification_resolution`
+
+The buffer is in-memory only and resets on deploy/restart.
+
+## Current verify-claim order
+
+`/api/verify-claim` currently resolves claims in this order:
+
+1. short-TTL recent verification cache
+2. internal cross-video memory
+3. ClaimReview / Google Fact Check Tools
+4. fresh grounded verification
+5. conflict resolution and graceful fallback
+
+The sidepanel provenance labels map to this backend behavior:
+
+- `Earlier in this video`
+- `Seen before`
+- `Previously fact-checked`
+- `Related claim`
+- `Verified live`
