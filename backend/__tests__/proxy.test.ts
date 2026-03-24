@@ -237,16 +237,19 @@ describe('Fix 3: All extension requests rejected when ALLOWED_EXTENSION_IDS is u
 // ---------------------------------------------------------------------------
 describe('Session auth: deployed backend requires a valid session token', () => {
   const TEST_SECRET = 'test-session-secret-for-proxy-tests';
+  const TEST_CLIENT_SECRET = 'test-client-secret-for-proxy-tests';
 
   beforeEach(() => {
     vi.resetModules();
     process.env.ALLOWED_EXTENSION_IDS = 'trusted-ext-id';
     process.env.SESSION_SECRET = TEST_SECRET;
+    process.env.CLIENT_SECRET = TEST_CLIENT_SECRET;
   });
 
   afterEach(() => {
     delete process.env.ALLOWED_EXTENSION_IDS;
     delete process.env.SESSION_SECRET;
+    delete process.env.CLIENT_SECRET;
   });
 
   it('FAIL: deployed backend rejects request with no session token', async () => {
@@ -330,12 +333,42 @@ describe('Session auth: deployed backend requires a valid session token', () => 
     expect(res.status).not.toBe(401);
   });
 
-  it('FAIL: session/init is still rejected when extension ID is not in allowlist', async () => {
+  it('PASS: session/init bypasses proxy allowlist checks and defers auth to the route', async () => {
     const { proxy } = await import('../src/proxy');
 
     const req = makeRequest(SESSION_INIT_URL, {
       headers: {
         'x-extension-id': 'unlisted-ext-id',
+      },
+    });
+
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
+  it('PASS: session/init on deployed host accepts valid client secret even when allowlist misses', async () => {
+    process.env.ALLOWED_EXTENSION_IDS = 'different-ext-id';
+    const { proxy } = await import('../src/proxy');
+
+    const req = makeRequest(SESSION_INIT_URL, {
+      headers: {
+        'x-extension-id': 'trusted-ext-id',
+        'x-sourcecheck-client-secret': TEST_CLIENT_SECRET,
+      },
+    });
+
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
+  it('PASS: deployed analyze-chunk still requires a bearer token even with valid client secret', async () => {
+    process.env.ALLOWED_EXTENSION_IDS = 'different-ext-id';
+    const { proxy } = await import('../src/proxy');
+
+    const req = makeRequest(DEPLOYED_ANALYZE_URL, {
+      headers: {
+        'x-extension-id': 'trusted-ext-id',
+        'x-sourcecheck-client-secret': TEST_CLIENT_SECRET,
       },
     });
 

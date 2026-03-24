@@ -145,12 +145,15 @@ export const App = () => {
   const lastTranscriptFallbackNoticeAtRef = useRef(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => {
-    isMountedRef.current = false;
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -207,6 +210,7 @@ export const App = () => {
       : resolvedDisplayAnalysisStatus;
   const livePendingClaims =
     runtimeState.allPendingClaims.length > 0 ? runtimeState.allPendingClaims : runtimeState.pendingClaims;
+  const livePendingClaimCount = livePendingClaims.length;
   const liveFlow = useLiveStageFlow({
     activeTab,
     currentVideoId: runtimeState.currentVideo?.videoId ?? null,
@@ -275,7 +279,7 @@ export const App = () => {
       displayAnalysisStatus,
       askHistory.length,
       runtimeState.sourceCards.length,
-      runtimeState.pendingClaims.length,
+      livePendingClaimCount,
       liveFlow.livePhase,
       liveFlow.stageEntries.length,
       Array.from(liveFlow.dockedKeys).sort().join(','),
@@ -285,7 +289,7 @@ export const App = () => {
     displayAnalysisStatus,
     askHistory.length,
     runtimeState.sourceCards.length,
-    runtimeState.pendingClaims.length,
+    livePendingClaimCount,
     liveFlow.livePhase,
     liveFlow.stageEntries.length,
     liveFlow.dockedKeys,

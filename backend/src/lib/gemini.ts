@@ -976,12 +976,12 @@ export async function askGeminiJSON<T = unknown>(
   // Tier is determined by presence of customApiKey (BYOK = pro, managed = free)
   const effectiveModel = getEffectiveModel(model, customApiKey ? 'pro' : 'free', customApiKey);
   
-  // FIX: gemini-3.1-flash-lite-preview produces severely truncated JSON (43-53 chars)
-  // when both responseMimeType:'application/json' AND responseJsonSchema are provided.
-  // Skip the API-level schema constraint for lite models and rely on prompt-based JSON
+  // Lite models have been brittle with full schema-constrained decoding, but
+  // plain JSON mode is still valuable because it reduces markdown wrappers and
+  // free-form prose around the payload.
   const isLiteModel = effectiveModel.includes('lite');
   const response = await askGemini(prompt, maxTokens, {
-    ...(!isLiteModel ? { responseMimeType: 'application/json' } : {}),
+    responseMimeType: 'application/json',
     ...(!isLiteModel && schema ? { responseJsonSchema: schema } : {}),
     model: effectiveModel,
     ...(customApiKey ? { customApiKey } : {}),

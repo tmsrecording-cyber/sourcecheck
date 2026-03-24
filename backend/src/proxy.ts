@@ -4,6 +4,7 @@ import {
   InMemoryRateLimitStore,
   RedisRateLimitStore,
 } from '@/lib/rate-limit-store';
+import { hasValidClientSecret } from '@/lib/client-secret-auth';
 
 const DEFAULT_MAX_REQUEST_BYTES = 120_000;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -341,14 +342,35 @@ async function authorizeExtensionServiceWorker(
   request: NextRequest,
   extensionId: string
 ): Promise<AuthResult> {
-  if (!isAllowedExtensionOrigin(extensionId, request.nextUrl.hostname)) {
-    return { authorized: false };
-  }
-
   const identity = `ext:${extensionId}`;
 
-  // Session init is the token issuance point — no session token required.
-  if (request.nextUrl.pathname === SESSION_INIT_PATH || !requiresSessionToken(request)) {
+  // Session token issuance is protected inside the route by the shared client
+  // gate and extensionId consistency checks. Do not hard-block it here on the
+  // preview allowlist, or a drifted ALLOWED_EXTENSION_IDS env will deadlock
+  // the entire pipeline before the route can authenticate the caller.
+  if (request.nextUrl.pathname === SESSION_INIT_PATH) {
+    return { authorized: true, identity };
+  }
+
+  if (!isAllowedExtensionOrigin(extensionId, request.nextUrl.hostname)) {
+    // Preview deployments are easy to misconfigure because the extension
+    // allowlist lives in environment variables, while the extension always
+    // sends the shared client gate header. If the caller proves knowledge of
+    // CLIENT_SECRET, allow the request into the normal session-token flow.
+    //
+    // This does NOT replace the bearer session token requirement for
+    // non-session-init paths; it only prevents the proxy from hard-failing
+    // before the extension can authenticate itself.
+    if (!hasValidClientSecret(request)) {
+      return { authorized: false };
+    }
+
+    console.warn(
+      `[SourceCheck/auth] Falling back to client secret for extension ${extensionId} on ${request.nextUrl.hostname}`
+    );
+  }
+
+  if (!requiresSessionToken(request)) {
     return { authorized: true, identity };
   }
 

@@ -64,6 +64,28 @@ function validateClientSecret(request: NextRequest): boolean {
 }
 
 /**
+ * Strict client-secret validation for middleware fallbacks.
+ *
+ * Unlike validateClientSecretAuth(), this never fails open in dev/test when
+ * the secret is missing. It is only true when both:
+ * - CLIENT_SECRET is configured
+ * - the request provides the exact matching secret header
+ */
+export function hasValidClientSecret(request: NextRequest): boolean {
+  const expectedSecret = getExpectedClientSecret();
+  if (!expectedSecret) {
+    return false;
+  }
+
+  const providedSecret = request.headers.get(CLIENT_SECRET_HEADER)?.trim() || '';
+  if (!providedSecret) {
+    return false;
+  }
+
+  return timingSafeEqual(providedSecret, expectedSecret);
+}
+
+/**
  * Timing-safe string comparison using HMAC hashing.
  * Both strings are hashed with a fresh random key so the comparison is always
  * over equal-length digests — this eliminates the length timing oracle that

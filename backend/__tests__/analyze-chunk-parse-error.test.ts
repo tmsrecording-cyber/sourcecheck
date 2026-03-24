@@ -211,6 +211,134 @@ describe('Fix 4: PARSE_ERROR surfaces as distinct action_state instead of BUFFER
     expect(body.claims[0].claimFeatures?.quantityUnit).toBe('percent');
   });
 
+  it('PASS: moderate-verifiability factual claims still verify', async () => {
+    mockAskGeminiJSON.mockResolvedValue({
+      data: {
+        entities: ['NVIDIA', 'CUDA'],
+        has_claim: true,
+        action_state: 'VERIFYING',
+        reason: 'Specific technical claim with named entity.',
+        candidates: [
+          {
+            claim_text: 'NVIDIA created CUDA in 2006 for GPU computing.',
+            exact_quote: 'NVIDIA created CUDA in 2006 for GPU computing',
+            claim_type: 'historical',
+            verifiability: 0.58,
+            value: 0.7,
+            speaker_confidence: 0.8,
+            reason: 'Historical technical claim.',
+          },
+        ],
+      },
+      inputTokens: 110,
+      outputTokens: 55,
+    });
+
+    const response = await POST(await fakeRequest({
+      ...VALID_BODY,
+      chunks: [
+        {
+          index: 0,
+          startTime: 60,
+          duration: 5,
+          text: 'NVIDIA created CUDA in 2006 for GPU computing.',
+        },
+      ],
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.action_state).toBe('VERIFYING');
+    expect(body.has_claim).toBe(true);
+    expect(body.claims).toHaveLength(1);
+  });
+
+  it('PASS: concise technical claims are not rejected by the quality filter', async () => {
+    mockAskGeminiJSON.mockResolvedValue({
+      data: {
+        entities: ['Apple II'],
+        has_claim: true,
+        action_state: 'VERIFYING',
+        reason: 'Specific technical spec claim.',
+        candidates: [
+          {
+            claim_text: 'Apple II used 4 KB memory.',
+            exact_quote: 'Apple II used 4 KB memory',
+            claim_type: 'statistic',
+            verifiability: 0.6,
+            value: 0.75,
+            speaker_confidence: 0.85,
+            reason: 'Technical specification.',
+          },
+        ],
+      },
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+
+    const response = await POST(await fakeRequest({
+      ...VALID_BODY,
+      chunks: [
+        {
+          index: 0,
+          startTime: 60,
+          duration: 5,
+          text: 'Apple II used 4 KB memory.',
+        },
+      ],
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.action_state).toBe('VERIFYING');
+    expect(body.has_claim).toBe(true);
+    expect(body.claims).toHaveLength(1);
+    expect(body.claims[0].claimText).toBe('Apple II used 4 KB memory.');
+  });
+
+  it('PASS: anchor validation ignores punctuation differences between transcript and exact_quote', async () => {
+    mockAskGeminiJSON.mockResolvedValue({
+      data: {
+        entities: ['cold water', 'dopamine'],
+        has_claim: true,
+        action_state: 'VERIFYING',
+        reason: 'Specific quantified health claim.',
+        candidates: [
+          {
+            claim_text: 'Cold water exposure increases dopamine levels.',
+            exact_quote: 'Cold water exposure increases dopamine levels.',
+            claim_type: 'study',
+            verifiability: 0.72,
+            value: 0.76,
+            speaker_confidence: 0.84,
+            reason: 'Concrete physiological claim.',
+          },
+        ],
+      },
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+
+    const response = await POST(await fakeRequest({
+      ...VALID_BODY,
+      chunks: [
+        {
+          index: 0,
+          startTime: 60,
+          duration: 5,
+          text: 'Cold water exposure increases dopamine levels',
+        },
+      ],
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.action_state).toBe('VERIFYING');
+    expect(body.has_claim).toBe(true);
+    expect(body.claims).toHaveLength(1);
+    expect(body._metrics?.anchorFiltered).toBe(0);
+  });
+
   it('PASS: OVERLOADED retries once and succeeds without returning 500', async () => {
     mockAskGeminiJSON
       .mockRejectedValueOnce(

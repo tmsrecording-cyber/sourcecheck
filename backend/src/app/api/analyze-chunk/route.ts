@@ -41,6 +41,8 @@ const EXTRACTION_OVERLOAD_RETRY_COUNT = 1;
 const EXTRACTION_OVERLOAD_RETRY_DELAY_MS = 250;
 const EXTRACTION_OVERLOAD_BUFFERING_REASON =
   'Claim extraction is delayed due to provider load. Retrying shortly.';
+const MIN_CLAIM_WORD_COUNT = 5;
+const MIN_VERIFIABILITY_SCORE = 0.55;
 
 const CLAIM_EXTRACTION_SCHEMA = {
   type: 'object',
@@ -173,7 +175,12 @@ function summarizeTranscriptWindow(chunks: TranscriptChunk[]) {
 }
 
 const normalizeText = (text: string) =>
-  text.toLowerCase().replace(/\s+/g, ' ').trim();
+  text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 function resolveClaimTimestamp(
   chunks: TranscriptChunk[],
@@ -267,16 +274,17 @@ function passesQualityFilter(candidate: RawCandidate): { passes: boolean; reason
   const claimText = typeof candidate.claim_text === 'string' ? candidate.claim_text.trim() : '';
   const exactQuote = typeof candidate.exact_quote === 'string' ? candidate.exact_quote.trim() : '';
   
-  // 1. Minimum length check (6 words - allowing concise factual claims)
+  // 1. Minimum length check. Keep short, specific factual claims viable.
   const wordCount = claimText.split(/\s+/).filter(w => w.length > 0).length;
-  if (wordCount < 6) {
-    return { passes: false, reason: `Claim too short (${wordCount} words, min 6)` };
+  if (wordCount < MIN_CLAIM_WORD_COUNT) {
+    return { passes: false, reason: `Claim too short (${wordCount} words, min ${MIN_CLAIM_WORD_COUNT})` };
   }
   
   // 2. Must contain substance: proper noun, date, year, OR number
-  // RELAXED: Also allows clear factual statements with causal/mechanistic language
+  // RELAXED: Also allows technical / institutional claims that lack dates or percentages.
   const hasProperNoun = /\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/.test(claimText) || // Full names
-                       /\b(Google|Microsoft|Apple|Amazon|Tesla|Biden|Trump|China|Russia|Europe|NASA|WHO|FDA|CDC|UN|EU|MIT|Stanford|Harvard)\b/.test(claimText);
+                       /\b(Google|Microsoft|Apple|Amazon|Tesla|Biden|Trump|China|Russia|Europe|NASA|WHO|FDA|CDC|UN|EU|MIT|Stanford|Harvard)\b/.test(claimText) ||
+                       /\b[A-Z]{2,}(?:\s+[A-Z]{2,})*\b/.test(claimText);
   const hasDate = /\b(19|20)\d{2}\b/.test(claimText) || // Years 1900-2099
                  /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}/.test(claimText);
   const hasNumber = /\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?\s*(?:million|billion|trillion)?|\b\d+\s*(?:million|billion|trillion|percent|%)\b/i.test(claimText) ||
@@ -284,9 +292,10 @@ function passesQualityFilter(candidate: RawCandidate): { passes: boolean; reason
   // Factual indicators: causal claims, scientific mechanisms, definitive statements
   const hasFactualIndicator = /\b(causes?|caused|increases?|decreases?|reduces?|prevents?|triggers?|leads?\s+to|results?\s+in|linked\s+to|associated\s+with)\b/i.test(claimText) ||
                               /\b(is|are|was|were)\s+(a|an|the)?\s*(known|proven|shown|established|documented|scientific)\b/i.test(claimText);
+  const hasTechnicalIndicator = /\b(program|software|hardware|chip|processor|memory|bytes?|kb|mb|gb|dataset|model|algorithm|server|network|database|pipeline|protocol)\b/i.test(claimText);
   
-  if (!hasProperNoun && !hasDate && !hasNumber && !hasFactualIndicator) {
-    return { passes: false, reason: 'Claim lacks substance (no proper noun, date, number, or clear factual indicator)' };
+  if (!hasProperNoun && !hasDate && !hasNumber && !hasFactualIndicator && !hasTechnicalIndicator) {
+    return { passes: false, reason: 'Claim lacks substance (no entity, date, number, factual indicator, or technical detail)' };
   }
   
   // 3. Reject questions
@@ -306,8 +315,8 @@ function passesQualityFilter(candidate: RawCandidate): { passes: boolean; reason
   
   // 5. Verifiability check
   const verifiability = typeof candidate.verifiability === 'number' ? candidate.verifiability : 0;
-  if (verifiability < 0.65) {
-    return { passes: false, reason: `Verifiability too low (${verifiability.toFixed(2)} < 0.65)` };
+  if (verifiability < MIN_VERIFIABILITY_SCORE) {
+    return { passes: false, reason: `Verifiability too low (${verifiability.toFixed(2)} < ${MIN_VERIFIABILITY_SCORE.toFixed(2)})` };
   }
   
   return { passes: true, reason: 'Quality checks passed' };
@@ -385,9 +394,9 @@ async function normalizeClaimResult(
         }
         return true;
       })
-      // Filter out low-verifiability candidates (< 0.65) - not concrete enough to check
+      // Filter out low-verifiability candidates. Keep moderate-confidence factual claims viable.
       .filter((scored) => {
-        const passes = scored.verifiability >= 0.65;
+        const passes = scored.verifiability >= MIN_VERIFIABILITY_SCORE;
         if (!passes) candidatesFilteredByVerifiability++;
         return passes;
       })

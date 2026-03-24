@@ -1264,11 +1264,28 @@ const getTranscriptSegmentElements = () => {
 const hasTranscriptDataInDom = () =>
   getTranscriptSegmentElements().length > 0 || scrapeTranscriptPanel().length > 0;
 
+export const isTranscriptRootVisible = (node: Element | null): node is HTMLElement => {
+  if (!(node instanceof HTMLElement)) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') {
+    return false;
+  }
+
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+};
+
 const getTranscriptRoots = () => {
   const roots: HTMLElement[] = [];
 
   for (const selector of TRANSCRIPT_ROOT_SELECTORS) {
     for (const node of document.querySelectorAll<HTMLElement>(selector)) {
+      if (!isTranscriptRootVisible(node)) {
+        continue;
+      }
       if (!roots.includes(node)) {
         roots.push(node);
       }
@@ -1663,6 +1680,39 @@ const openTranscriptFromOverflowMenu = async (signal?: AbortSignal): Promise<Tra
   return { transcript: null, reason: 'panel-open-exhausted' };
 };
 
+const recoverTranscriptPanelAfterEmptyRoot = async (
+  signal?: AbortSignal
+): Promise<TranscriptPanelLoadResult> => {
+  logTranscriptLookup('panel', 'panel-root-present-no-segments', { recovery: 'retry-open' });
+
+  const transcriptButton = findTranscriptOpenButton();
+  if (transcriptButton) {
+    const transcriptButtonClicked = clickElement(transcriptButton);
+    const panelSegments = await waitForTranscriptPanel(24, 250, signal);
+    if (panelSegments?.length) {
+      logTranscriptLookup('panel', 'caption-tracks-found', {
+        segments: panelSegments.length,
+        recovery: 'direct-open',
+      });
+      closeTranscriptPanelIfOpen();
+      return { transcript: panelSegments, reason: 'caption-tracks-found' };
+    }
+
+    if (!transcriptButtonClicked) {
+      logTranscriptLookup('panel', 'panel-open-click-failed', { recovery: 'direct-open' });
+    }
+  }
+
+  const overflowResult = await openTranscriptFromOverflowMenu(signal);
+  if (overflowResult.transcript?.length) {
+    closeTranscriptPanelIfOpen();
+    return overflowResult;
+  }
+
+  logTranscriptLookup('panel', 'panel-root-present-no-segments', { recovery: 'exhausted' });
+  return { transcript: null, reason: 'panel-root-present-no-segments' };
+};
+
 const loadTranscriptFromPanel = async (
   signal?: AbortSignal,
   options?: { allowAutoOpen?: boolean }
@@ -1693,8 +1743,7 @@ const loadTranscriptFromPanel = async (
       return { transcript: alreadyOpenSegments, reason: 'caption-tracks-found' };
     }
     console.warn('[SourceCheck] Transcript panel root present but no segments rendered.');
-    logTranscriptLookup('panel', 'panel-root-present-no-segments');
-    return { transcript: null, reason: 'panel-root-present-no-segments' };
+    return recoverTranscriptPanelAfterEmptyRoot(signal);
   }
 
   const transcriptButton = findTranscriptOpenButton();

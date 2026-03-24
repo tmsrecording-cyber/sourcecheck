@@ -46,5 +46,42 @@ describe('Flash 3.0 parse regression', () => {
     expect(data).toHaveProperty('status', 'supported');
     expect(data).toHaveProperty('sourceTitle', 'Test');
   });
-});
 
+  it('PASS: lite extraction requests still force application/json while omitting schema constraints', async () => {
+    let requestBody: any = null;
+    global.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBody = init?.body ? JSON.parse(String(init.body)) : null;
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { text: '{"status":"supported","sourceTitle":"Test","sourceType":"other","nuance":"Text"}' }
+                ]
+              },
+              finishReason: 'STOP'
+            }
+          ],
+          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 20 }
+        })
+      } as Response;
+    };
+
+    await askGeminiJSON(
+      'test prompt',
+      1000,
+      {
+        type: 'object',
+        properties: { status: { type: 'string' } },
+        required: ['status'],
+      },
+      'gemini-3.1-flash-lite-preview',
+      'custom-key'
+    );
+
+    expect(requestBody?.generationConfig?.responseMimeType).toBe('application/json');
+    expect(requestBody?.generationConfig?.responseJsonSchema).toBeUndefined();
+  });
+});

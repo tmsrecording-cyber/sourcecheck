@@ -2849,19 +2849,25 @@ const processPlayback = async (currentTime: number, expectedVideoId?: string) =>
       console.log('[Pipeline] Generation mismatch or video changed, aborting.');
       return;
     }
-    // Advance only after a successful parse — malformed 200 bodies fall through
-    // to the catch block which explicitly does NOT advance lastProcessedIndex.
-    lastProcessedIndex = endIndex;
-    logAnalysisResult(requestVideoId, startIndex, endIndex, chunksToProcess, extraction);
-
-    // Log PARSE_ERROR distinctly so it is visible in monitoring / debug logs
-    // rather than silently disappearing into the normal buffering path.
     if (extraction.action_state === 'PARSE_ERROR') {
+      const parseError = Object.assign(
+        new Error(
+          `Model output failed validation for analyze-chunk: ${extraction.reason || 'unknown parse error'}`
+        ),
+        { code: 'PARSE_ERROR' as const }
+      );
       console.warn(
         `[SourceCheck/SW] PARSE_ERROR from analyze-chunk — model output failed validation. ` +
         `video=${requestVideoId} chunkRange=${startIndex}-${endIndex} reason=${extraction.reason}`
       );
+      throw parseError;
     }
+
+    // Advance only after a successful parse. Structured PARSE_ERROR responses
+    // are treated as failures so the same transcript window is not consumed
+    // and lost without ever producing a claim.
+    lastProcessedIndex = endIndex;
+    logAnalysisResult(requestVideoId, startIndex, endIndex, chunksToProcess, extraction);
 
     const { claims } = extraction;
     const analysisTimestamp = chunksToProcess[chunksToProcess.length - 1]?.startTime ?? currentTime;
