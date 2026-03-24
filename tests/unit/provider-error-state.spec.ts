@@ -30,6 +30,17 @@ describe('worker runtime provider error state', () => {
   it('sanitizes debug metrics during hydration', () => {
     const runtimeState = sanitizeWorkerRuntimeState({
       ...INITIAL_RUNTIME_STATE,
+      allPendingClaims: [
+        {
+          id: 'claim-1',
+          claimText: 'The Apple I shipped with 4 KB of memory.',
+          claimType: 'historical',
+          timestampSeconds: 236,
+          confidence: 0.82,
+          state: 'verifying',
+          normalizedClaimText: 'the apple i shipped with 4 kb of memory',
+        },
+      ],
       debugMetrics: {
         verifyStarted: 4,
         verifySucceeded: 3,
@@ -49,5 +60,7 @@ describe('worker runtime provider error state', () => {
       live_grounded: 2,
       cached_exact: 1,
     });
+    expect(runtimeState.allPendingClaims).toHaveLength(1);
+    expect(runtimeState.allPendingClaims[0]?.state).toBe('verifying');
   });
 });

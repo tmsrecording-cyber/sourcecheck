@@ -409,6 +409,7 @@ const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   sourceCards: [],
   allSourceCards: [],
   pendingClaims: [],
+  allPendingClaims: [],
   chunksScanned: 0,
   lastScannedTimestamp: null,
   currentScanPreview: null,
@@ -1790,6 +1791,7 @@ const buildPersistableRuntimeState = (): WorkerRuntimeState => ({
   sourceCards: sourceCards.slice(0, MAX_SOURCE_CARDS),
   allSourceCards: allSourceCards.slice(0, MAX_SOURCE_CARDS),
   pendingClaims: pendingClaims.slice(0, MAX_PENDING_CLAIMS),
+  allPendingClaims: allPendingClaims.slice(0, MAX_PENDING_CLAIMS),
   // PROGRESS TRACKING: essential for restore
   chunksScanned,
   lastScannedTimestamp,
@@ -1827,6 +1829,7 @@ const flushPersistPanelState = (options: {
     transcriptFetchLog,
     sourceCards,
     pendingClaims,
+    allPendingClaims,
     currentScanPreview,
     currentScanEntities,
     currentScanActionState,
@@ -1876,6 +1879,7 @@ const flushPersistPanelState = (options: {
     (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = [];
     (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allSourceCards = [];
     (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = [];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allPendingClaims = [];
   }
 
   // Check if payload would exceed session storage quota
@@ -1890,6 +1894,7 @@ const flushPersistPanelState = (options: {
     (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).sourceCards = payload.sourceCards as SourceCard[];
     (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).pendingClaims = payload.pendingClaims as PendingClaimPreview[];
     (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allSourceCards = payload.allSourceCards as SourceCard[];
+    (payload[WORKER_RUNTIME_STATE_KEY] as WorkerRuntimeState).allPendingClaims = payload.allPendingClaims as PendingClaimPreview[];
 
     // If still too large after first pass, emergency truncation to 5 cards
     if (wouldExceedQuota(payload, STORAGE_SESSION_QUOTA_BYTES)) {
@@ -1909,6 +1914,7 @@ const flushPersistPanelState = (options: {
           sourceCards: emergencySourceCards,
           pendingClaims: emergencyPendingClaims,
           allSourceCards: emergencyAllSourceCards,
+          allPendingClaims: emergencyAllPendingClaims,
         } as WorkerRuntimeState,
         sourceCards: emergencySourceCards,
         pendingClaims: emergencyPendingClaims,

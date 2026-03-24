@@ -528,6 +528,8 @@ export interface WorkerRuntimeState {
   /** Complete card history (unfiltered by leash) for HISTORY tab */
   allSourceCards: SourceCard[];
   pendingClaims: PendingClaimPreview[];
+  /** Complete pending claim list, including claims outside the visible live leash. */
+  allPendingClaims: PendingClaimPreview[];
   chunksScanned: number;
   lastScannedTimestamp: number | null;
   currentScanPreview: string | null;

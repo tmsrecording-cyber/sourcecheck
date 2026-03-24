@@ -198,20 +198,22 @@ export const App = () => {
     previousStatus: previousDisplayAnalysisStatusRef.current,
     nextStatus: analysisStatus,
     sourceCardCount: runtimeState.sourceCards.length,
-    pendingClaimCount: runtimeState.pendingClaims.length,
+    pendingClaimCount: runtimeState.allPendingClaims.length || runtimeState.pendingClaims.length,
     transcriptChunkCount: runtimeState.transcriptChunkCount,
   });
   const displayAnalysisStatus =
     isRetryingTranscript && analysisStatus === 'no-transcript'
       ? 'loading'
       : resolvedDisplayAnalysisStatus;
+  const livePendingClaims =
+    runtimeState.allPendingClaims.length > 0 ? runtimeState.allPendingClaims : runtimeState.pendingClaims;
   const liveFlow = useLiveStageFlow({
     activeTab,
     currentVideoId: runtimeState.currentVideo?.videoId ?? null,
     status: displayAnalysisStatus,
     playbackState: runtimeState.playbackState,
     cards: runtimeState.sourceCards,
-    pendingClaims: runtimeState.pendingClaims,
+    pendingClaims: livePendingClaims,
     currentScanPreview: runtimeState.currentScanPreview,
     currentScanEntities: runtimeState.currentScanEntities,
     currentScanActionState: runtimeState.currentScanActionState,

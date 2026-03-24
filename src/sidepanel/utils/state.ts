@@ -19,6 +19,7 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   sourceCards: [],
   allSourceCards: [],
   pendingClaims: [],
+  allPendingClaims: [],
   chunksScanned: 0,
   lastScannedTimestamp: null,
   currentScanPreview: null,
@@ -126,6 +127,11 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
     sourceCards: Array.isArray(candidate.sourceCards) ? candidate.sourceCards : INITIAL_RUNTIME_STATE.sourceCards,
     allSourceCards: Array.isArray(candidate.allSourceCards) ? candidate.allSourceCards : INITIAL_RUNTIME_STATE.allSourceCards,
     pendingClaims: Array.isArray(candidate.pendingClaims) ? candidate.pendingClaims : INITIAL_RUNTIME_STATE.pendingClaims,
+    allPendingClaims: Array.isArray(candidate.allPendingClaims)
+      ? candidate.allPendingClaims
+      : Array.isArray(candidate.pendingClaims)
+        ? candidate.pendingClaims
+        : INITIAL_RUNTIME_STATE.allPendingClaims,
     chunksScanned: Number.isFinite(candidate.chunksScanned)
       ? Math.max(0, Math.floor(candidate.chunksScanned as number))
       : INITIAL_RUNTIME_STATE.chunksScanned,
