@@ -252,6 +252,55 @@ export const heroCardEntry = {
 };
 
 /**
+ * Inner hero content morphing between listening/checking/resolved states.
+ */
+export const heroContentMorph = {
+  initial: { opacity: 0, y: 4 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -3 },
+  transition: {
+    duration: 0.2,
+    ease: SOFT_SPRING,
+  },
+};
+
+/**
+ * Hero verdict settle — slightly more deliberate than the normal content morph.
+ */
+export const heroVerdictSettle = {
+  initial: { opacity: 0, y: 3, scale: 1.01 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, scale: 0.97 },
+  transition: {
+    duration: 0.28,
+    ease: SOFT_SPRING,
+  },
+};
+
+/**
+ * Overlay ghost handoff from hero slot into Recent checks.
+ */
+export const handoffGhostMotion = {
+  transition: {
+    duration: 0.36,
+    ease: [0.18, 0.84, 0.24, 1] as [number, number, number, number],
+  },
+  startScale: 1,
+  midScale: 0.985,
+  endScale: 0.972,
+};
+
+/**
+ * Receiving stack card settle — the stack should quietly receive, not pop.
+ */
+export const stackReceiveSettle = {
+  transition: {
+    duration: 0.22,
+    ease: SOFT_SPRING,
+  },
+};
+
+/**
  * Conveyor entry — new cards arrive at top of feed and slide down into position.
  * Existing cards shift down via `layout` animation.
  */

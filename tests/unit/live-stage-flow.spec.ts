@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import type { PlaybackState } from '../../shared/types';
 import {
+  CHECKING_HOLD_MS,
   DOCK_COLLAPSE_MS,
+  FILING_GHOST_MS,
+  FILING_HERO_FADE_MS,
+  FILING_STACK_SETTLE_MS,
   RESOLVED_HOLD_MS,
   RESOLVED_HOLD_QUEUED_MS,
   RESOLVED_HOLD_TRIVIAL_MS,
   RESOLVED_HOLD_TRIVIAL_QUEUED_MS,
   buildLiveStripCopy,
+  canPromoteQueuedClaim,
   deriveReadingVariant,
+  resolveHeroVisualState,
   resolveLivePhase,
 } from '../../src/sidepanel/hooks/useLiveStageFlow';
 
@@ -101,15 +107,45 @@ describe('useLiveStageFlow helpers', () => {
     });
   });
 
+  describe('visual phase helpers', () => {
+    it('reports filing as the dominant hero visual state', () => {
+      expect(
+        resolveHeroVisualState({
+          isFiling: true,
+          livePhase: 'reading',
+        }),
+      ).toBe('filing');
+    });
+
+    it('blocks queued-claim promotion while filing is active', () => {
+      expect(
+        canPromoteQueuedClaim({
+          activeTab: 'live',
+          stageCount: 0,
+          isDocking: false,
+          isFiling: true,
+        }),
+      ).toBe(false);
+    });
+  });
+
   describe('buildLiveStripCopy', () => {
-    it('never emits Caught up while reading', () => {
+    it('suppresses header state copy while the live card is active', () => {
       expect(
         buildLiveStripCopy({
           status: 'ready',
           livePhase: 'reading',
           anchorTime: null,
         }),
-      ).toBe('Listening');
+      ).toBeNull();
+
+      expect(
+        buildLiveStripCopy({
+          status: 'verifying',
+          livePhase: 'checking',
+          anchorTime: 42,
+        }),
+      ).toBeNull();
     });
 
     it('returns null during resolved docking', () => {
@@ -125,11 +161,15 @@ describe('useLiveStageFlow helpers', () => {
   });
 
   it('documents the live-flow timing contract', () => {
+    expect(CHECKING_HOLD_MS).toBe(1200);
     expect(RESOLVED_HOLD_MS).toBe(3000);
     expect(RESOLVED_HOLD_QUEUED_MS).toBe(1500);
-    expect(RESOLVED_HOLD_TRIVIAL_MS).toBe(320);
-    expect(RESOLVED_HOLD_TRIVIAL_QUEUED_MS).toBe(160);
-    expect(DOCK_COLLAPSE_MS).toBe(400); // Calmer transition - increased from 180
+    expect(RESOLVED_HOLD_TRIVIAL_MS).toBe(900);
+    expect(RESOLVED_HOLD_TRIVIAL_QUEUED_MS).toBe(550);
+    expect(FILING_GHOST_MS).toBe(360);
+    expect(FILING_HERO_FADE_MS).toBe(220);
+    expect(FILING_STACK_SETTLE_MS).toBe(240);
+    expect(DOCK_COLLAPSE_MS).toBe(360); // filing duration now defines the full handoff window
     // trivial hold must be shorter than full hold in both queue states
     expect(RESOLVED_HOLD_TRIVIAL_MS).toBeLessThan(RESOLVED_HOLD_MS);
     expect(RESOLVED_HOLD_TRIVIAL_QUEUED_MS).toBeLessThan(RESOLVED_HOLD_QUEUED_MS);

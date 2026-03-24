@@ -4,9 +4,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import type { PendingClaimPreview, SourceCard } from '../../shared/types';
 import {
-  DOCK_COLLAPSE_MS,
-  RESOLVED_HOLD_MS,
-  RESOLVED_HOLD_QUEUED_MS,
+  CHECKING_HOLD_MS,
   getClaimKey,
   useLiveStageFlow,
 } from '../../src/sidepanel/hooks/useLiveStageFlow';
@@ -47,7 +45,7 @@ describe('useLiveStageFlow hook', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  describe('dual-slot promotion', () => {
+  describe('single-slot promotion', () => {
     it('promotes a single pending claim to stageEntries[0]', () => {
       const claim = makePending('The earth is flat');
       const { result } = renderHook(() =>
@@ -58,18 +56,18 @@ describe('useLiveStageFlow hook', () => {
       expect(result.current.stageEntries[0].checkingClaim).toEqual(claim);
     });
 
-    it('promotes up to 2 pending claims simultaneously', () => {
+    it('keeps only one active stage entry and leaves the next claim queued', () => {
       const c1 = makePending('Claim one', 10);
       const c2 = makePending('Claim two', 20);
       const { result } = renderHook(() =>
         useLiveStageFlow({ ...BASE, pendingClaims: [c1, c2] }),
       );
-      expect(result.current.stageEntries).toHaveLength(2);
+      expect(result.current.stageEntries).toHaveLength(1);
       expect(result.current.stageEntries[0].claimKey).toBe(c1.id);
-      expect(result.current.stageEntries[1].claimKey).toBe(c2.id);
+      expect(result.current.queuedCount).toBe(1);
     });
 
-    it('reports queuedCount only for claims beyond the 2 visible slots', () => {
+    it('reports queuedCount for claims beyond the single visible stage slot', () => {
       const claims = [
         makePending('Claim one', 10),
         makePending('Claim two', 20),
@@ -78,8 +76,8 @@ describe('useLiveStageFlow hook', () => {
       const { result } = renderHook(() =>
         useLiveStageFlow({ ...BASE, pendingClaims: claims }),
       );
-      expect(result.current.stageEntries).toHaveLength(2);
-      expect(result.current.queuedCount).toBe(1);
+      expect(result.current.stageEntries).toHaveLength(1);
+      expect(result.current.queuedCount).toBe(2);
     });
   });
 
@@ -94,7 +92,7 @@ describe('useLiveStageFlow hook', () => {
       expect(result.current.recentChecks).toHaveLength(0);
     });
 
-    it('both stage claim keys are excluded from recentChecks simultaneously', () => {
+    it('excludes only the single active stage claim from recentChecks', () => {
       const c1 = makePending('Claim one', 10);
       const c2 = makePending('Claim two', 20);
       const card1 = makeCard('Claim one', 10);
@@ -102,9 +100,9 @@ describe('useLiveStageFlow hook', () => {
       const { result } = renderHook(() =>
         useLiveStageFlow({ ...BASE, pendingClaims: [c1, c2], cards: [card1, card2] }),
       );
-      expect(result.current.stageEntries).toHaveLength(2);
-      // Both are in stage → neither should be in recentChecks
-      expect(result.current.recentChecks).toHaveLength(0);
+      expect(result.current.stageEntries).toHaveLength(1);
+      expect(result.current.recentChecks).toHaveLength(1);
+      expect(result.current.recentChecks[0].id).toBe(card2.id);
     });
 
     it('includes cards whose keys are NOT in stageKeys', () => {
@@ -147,18 +145,48 @@ describe('useLiveStageFlow hook', () => {
   });
 
   describe('resolved card detection', () => {
-    it('marks entry as resolved when a matching card arrives', () => {
+    it('marks entry as resolved when a matching card arrives after the checking hold clears', () => {
       const claim = makePending('Verifiable claim', 15);
       const card = makeCard('Verifiable claim', 15);
 
       const { result, rerender } = renderHook(
-        (cards: SourceCard[]) =>
-          useLiveStageFlow({ ...BASE, pendingClaims: [claim], cards }),
-        { initialProps: [] as SourceCard[] },
+        ({ pendingClaims, cards }: { pendingClaims: PendingClaimPreview[]; cards: SourceCard[] }) =>
+          useLiveStageFlow({ ...BASE, pendingClaims, cards }),
+        { initialProps: { pendingClaims: [claim], cards: [] as SourceCard[] } },
       );
 
       expect(result.current.stageEntries[0].resolvedCard).toBeNull();
-      rerender([card]);
+      rerender({ pendingClaims: [], cards: [card] });
+      act(() => {
+        vi.advanceTimersByTime(CHECKING_HOLD_MS + 1);
+      });
+      expect(result.current.stageEntries[0].resolvedCard).toEqual(card);
+    });
+
+    it('holds the checking stage briefly when a claim resolves immediately', () => {
+      const claim = makePending('Fast resolve claim', 18);
+      const card = makeCard('Fast resolve claim', 18);
+
+      const { result, rerender } = renderHook(
+        ({ pendingClaims, cards }: { pendingClaims: PendingClaimPreview[]; cards: SourceCard[] }) =>
+          useLiveStageFlow({ ...BASE, pendingClaims, cards }),
+        { initialProps: { pendingClaims: [claim], cards: [] as SourceCard[] } },
+      );
+
+      expect(result.current.livePhase).toBe('checking');
+      expect(result.current.stageEntries[0].checkingClaim).toEqual(claim);
+
+      rerender({ pendingClaims: [], cards: [card] });
+      expect(result.current.livePhase).toBe('checking');
+      expect(result.current.stageEntries[0].checkingClaim).toEqual(claim);
+      expect(result.current.stageEntries[0].resolvedCard).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(CHECKING_HOLD_MS + 1);
+      });
+
+      expect(result.current.livePhase).toBe('resolved');
+      expect(result.current.stageEntries[0].checkingClaim).toBeNull();
       expect(result.current.stageEntries[0].resolvedCard).toEqual(card);
     });
 
@@ -176,12 +204,14 @@ describe('useLiveStageFlow hook', () => {
     });
   });
 
-  // NOTE: Dock/collapse timer tests (hold → recentChecks, shorter hold with queue,
-  // tab-change mid-dock) cannot be reliably automated here. React 18 uses
+  // NOTE: Dock/collapse/f filing timer tests (hold → recentChecks, filing, shorter
+  // hold with queue, tab-change mid-dock) cannot be reliably automated here. React 18 uses
   // MessageChannel for its internal scheduler, which vitest's fake timer system
   // does not intercept. Timer callbacks fire but state updates don't flush before
   // assertions regardless of act() variant used. These paths are covered by:
   //   • code review of useLiveStageFlow.ts (hold/collapse timer setup)
+  //   • helper tests in live-stage-flow.spec.ts (timing constants + filing guard)
+  //   • component tests in card-handoff-visual.spec.tsx (ghost + receiving state)
   //   • the three bug-fix commits (recentChecks exclusion, tab-change reset,
   //     per-claim timer isolation)
   //   • manual QA of the dock animation in the running extension

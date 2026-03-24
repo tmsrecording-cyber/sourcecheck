@@ -28,6 +28,20 @@ export const INITIAL_RUNTIME_STATE: WorkerRuntimeState = {
   lastProviderError: null,
   lastProcessedIndex: -1,
   transcriptLoadDeadlineAt: null,
+  debugMetrics: {
+    transcriptChunksLoaded: 0,
+    chunksScannedCount: 0,
+    batchesSent: 0,
+    itemsEnqueued: 0,
+    verifyStarted: 0,
+    verifySucceeded: 0,
+    verifyDowngradedUnverifiable: 0,
+    verifyConflictSurfaced: 0,
+    cardsAppended: 0,
+    clusterSuppressions: 0,
+    finalVisibleCards: 0,
+    resolutionPathCounts: {},
+  },
   debugStage: 'idle',
   eventLog: [],
 };
@@ -140,6 +154,56 @@ export const sanitizeWorkerRuntimeState = (value: unknown): WorkerRuntimeState =
     transcriptLoadDeadlineAt: Number.isFinite(candidate.transcriptLoadDeadlineAt)
       ? candidate.transcriptLoadDeadlineAt as number
       : null,
+    debugMetrics: (() => {
+      const metrics = candidate.debugMetrics;
+      if (!metrics || typeof metrics !== 'object') {
+        return INITIAL_RUNTIME_STATE.debugMetrics;
+      }
+      const m = metrics as Partial<WorkerRuntimeState['debugMetrics']>;
+      const resolutionPathCounts = m.resolutionPathCounts && typeof m.resolutionPathCounts === 'object'
+        ? Object.fromEntries(
+            Object.entries(m.resolutionPathCounts).filter(
+              ([key, value]) => typeof key === 'string' && Number.isFinite(value),
+            ).map(([key, value]) => [key, Math.max(0, Math.floor(value as number))]),
+          )
+        : INITIAL_RUNTIME_STATE.debugMetrics.resolutionPathCounts;
+      return {
+        transcriptChunksLoaded: Number.isFinite(m.transcriptChunksLoaded)
+          ? Math.max(0, Math.floor(m.transcriptChunksLoaded as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.transcriptChunksLoaded,
+        chunksScannedCount: Number.isFinite(m.chunksScannedCount)
+          ? Math.max(0, Math.floor(m.chunksScannedCount as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.chunksScannedCount,
+        batchesSent: Number.isFinite(m.batchesSent)
+          ? Math.max(0, Math.floor(m.batchesSent as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.batchesSent,
+        itemsEnqueued: Number.isFinite(m.itemsEnqueued)
+          ? Math.max(0, Math.floor(m.itemsEnqueued as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.itemsEnqueued,
+        verifyStarted: Number.isFinite(m.verifyStarted)
+          ? Math.max(0, Math.floor(m.verifyStarted as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.verifyStarted,
+        verifySucceeded: Number.isFinite(m.verifySucceeded)
+          ? Math.max(0, Math.floor(m.verifySucceeded as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.verifySucceeded,
+        verifyDowngradedUnverifiable: Number.isFinite(m.verifyDowngradedUnverifiable)
+          ? Math.max(0, Math.floor(m.verifyDowngradedUnverifiable as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.verifyDowngradedUnverifiable,
+        verifyConflictSurfaced: Number.isFinite(m.verifyConflictSurfaced)
+          ? Math.max(0, Math.floor(m.verifyConflictSurfaced as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.verifyConflictSurfaced,
+        cardsAppended: Number.isFinite(m.cardsAppended)
+          ? Math.max(0, Math.floor(m.cardsAppended as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.cardsAppended,
+        clusterSuppressions: Number.isFinite(m.clusterSuppressions)
+          ? Math.max(0, Math.floor(m.clusterSuppressions as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.clusterSuppressions,
+        finalVisibleCards: Number.isFinite(m.finalVisibleCards)
+          ? Math.max(0, Math.floor(m.finalVisibleCards as number))
+          : INITIAL_RUNTIME_STATE.debugMetrics.finalVisibleCards,
+        resolutionPathCounts,
+      };
+    })(),
     debugStage: typeof candidate.debugStage === 'string' ? candidate.debugStage : INITIAL_RUNTIME_STATE.debugStage,
     eventLog: Array.isArray(candidate.eventLog) ? candidate.eventLog : INITIAL_RUNTIME_STATE.eventLog,
   };

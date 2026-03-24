@@ -8,13 +8,20 @@ const STORAGE_KEY = 'cardHistory';
  * Accumulates resolved source cards across video changes,
  * persisted in chrome.storage.session (survives panel close, cleared on tab close).
  */
-export const useCardHistory = (incomingCards: SourceCard[]) => {
+export const useCardHistory = (incomingCards: SourceCard[], isPrivate = false) => {
   const [cardHistory, setCardHistory] = useState<SourceCard[]>([]);
   const hasRestoredRef = useRef(false);
   const mergedIdsRef = useRef(new Set<string>());
 
   // Restore from session storage on mount
   useEffect(() => {
+    if (isPrivate) {
+      hasRestoredRef.current = false;
+      setCardHistory([]);
+      mergedIdsRef.current.clear();
+      return;
+    }
+
     if (hasRestoredRef.current) return;
     hasRestoredRef.current = true;
     chrome.storage.session.get([STORAGE_KEY]).then((result) => {
@@ -24,10 +31,11 @@ export const useCardHistory = (incomingCards: SourceCard[]) => {
         for (const c of stored) mergedIdsRef.current.add(c.id);
       }
     }).catch(() => {});
-  }, []);
+  }, [isPrivate]);
 
   // Accumulate new cards as they arrive
   useEffect(() => {
+    if (isPrivate) return;
     if (!incomingCards?.length) return;
     const newCards = incomingCards.filter((c) => !mergedIdsRef.current.has(c.id));
     if (newCards.length === 0) return;
@@ -45,7 +53,7 @@ export const useCardHistory = (incomingCards: SourceCard[]) => {
       chrome.storage.session.set({ [STORAGE_KEY]: merged }).catch(() => {});
       return merged;
     });
-  }, [incomingCards]);
+  }, [incomingCards, isPrivate]);
 
   const clearHistory = useCallback(() => {
     setCardHistory([]);

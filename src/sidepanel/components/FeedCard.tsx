@@ -99,6 +99,10 @@ interface FeedCardBaseProps {
   accentRgb?: string;
   glow?: boolean;
   suppressEntry?: boolean;
+  currentVideoId?: string | null;
+  emphasis?: 'primary' | 'secondary';
+  showRail?: boolean;
+  surfaceMode?: 'default' | 'receiving' | 'ghost';
 }
 
 // Scanning state: showing transcript preview
@@ -162,18 +166,167 @@ const STATUS_META: Record<VerificationStatus, { label: string; rgb: string }> = 
   unverifiable: { label: 'Cannot verify', rgb: '154, 160, 166' },
 };
 
-const buildSimilarClaimSummary = (similarClaims: SimilarClaim[]): string | null => {
+const SIMILAR_CLAIM_MIN_SIMILARITY = 0.85;
+const SIMILAR_CLAIM_STOP_WORDS = new Set([
+  'about', 'after', 'again', 'against', 'between', 'could', 'every', 'from',
+  'into', 'just', 'more', 'most', 'much', 'other', 'over', 'same', 'should',
+  'some', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they',
+  'this', 'those', 'through', 'under', 'very', 'what', 'when', 'where', 'which',
+  'while', 'with', 'would', 'years',
+]);
+
+const tokenizeClaimText = (text: string): Set<string> => {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4 && !SIMILAR_CLAIM_STOP_WORDS.has(token)),
+  );
+};
+
+const hasMaterialClaimOverlap = (currentClaimTokens: Set<string>, similarClaimText: string): boolean => {
+  const similarClaimTokens = tokenizeClaimText(similarClaimText);
+  if (currentClaimTokens.size < 2 || similarClaimTokens.size < 2) {
+    return false;
+  }
+
+  let sharedTokenCount = 0;
+  for (const token of currentClaimTokens) {
+    if (similarClaimTokens.has(token)) {
+      sharedTokenCount += 1;
+    }
+  }
+
+  const overlapRatio = sharedTokenCount / Math.min(currentClaimTokens.size, similarClaimTokens.size);
+  return sharedTokenCount >= 2 && overlapRatio >= 0.5;
+};
+
+const getEligibleSimilarClaims = (claimText: string, similarClaims: SimilarClaim[]): SimilarClaim[] => {
   if (similarClaims.length === 0) {
+    return [];
+  }
+
+  const currentClaimTokens = tokenizeClaimText(claimText);
+  return similarClaims.filter((similarClaim) => {
+    const similarClaimText = similarClaim.claimText?.trim();
+    const videoTitle = similarClaim.videoTitle?.trim();
+
+    if (!similarClaimText || !videoTitle || !similarClaim.videoId?.trim()) {
+      return false;
+    }
+
+    if (!Number.isFinite(similarClaim.timestampSeconds) || !Number.isFinite(similarClaim.similarity)) {
+      return false;
+    }
+
+    if (similarClaim.similarity < SIMILAR_CLAIM_MIN_SIMILARITY) {
+      return false;
+    }
+
+    return hasMaterialClaimOverlap(currentClaimTokens, similarClaimText);
+  });
+};
+
+type SimilarClaimContext = {
+  kicker: string;
+  summary: string;
+};
+
+const formatReviewDate = (value?: string | null) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed);
+};
+
+const buildLegacySimilarClaimContext = (
+  claimText: string,
+  similarClaims: SimilarClaim[],
+  currentVideoId?: string | null,
+): SimilarClaimContext | null => {
+  const eligibleClaims = getEligibleSimilarClaims(claimText, similarClaims);
+  if (eligibleClaims.length === 0) {
     return null;
   }
 
-  const leadClaim = similarClaims[0];
-  const leadLabel = `${leadClaim.videoTitle} · ${formatTime(leadClaim.timestampSeconds)}`;
-  if (similarClaims.length === 1) {
-    return leadLabel;
+  if (currentVideoId) {
+    const sameVideoClaims = eligibleClaims.filter((similarClaim) => similarClaim.videoId === currentVideoId);
+    if (sameVideoClaims.length > 0) {
+      const leadClaim = sameVideoClaims[0];
+      return {
+        kicker: 'Earlier in this video',
+        summary:
+          sameVideoClaims.length === 1
+            ? formatTime(leadClaim.timestampSeconds)
+            : `${formatTime(leadClaim.timestampSeconds)} +${sameVideoClaims.length - 1} more`,
+      };
+    }
   }
 
-  return `${leadLabel} +${similarClaims.length - 1} more`;
+  const leadClaim = eligibleClaims[0];
+  const leadLabel = `${leadClaim.videoTitle} · ${formatTime(leadClaim.timestampSeconds)}`;
+  return {
+    kicker: 'Seen before',
+    summary: eligibleClaims.length === 1 ? leadLabel : `${leadLabel} +${eligibleClaims.length - 1} more`,
+  };
+};
+
+const buildProvenanceContext = (
+  card: SourceCardRecord,
+  currentVideoId?: string | null,
+): SimilarClaimContext | null => {
+  if (card.clusterInfo && card.clusterInfo.sameVideoCount > 1) {
+    const lastSeenLabel = formatTime(card.clusterInfo.lastSeenTimestampSeconds);
+    const occurrenceLabel = card.clusterInfo.sameVideoCount === 2
+      ? '2 occurrences'
+      : `${card.clusterInfo.sameVideoCount} occurrences`;
+    return {
+      kicker: 'Earlier in this video',
+      summary: `${lastSeenLabel} · ${occurrenceLabel}`,
+    };
+  }
+
+  if (card.resolutionPath === 'claimreview_match' && card.matchInfo?.origin === 'claimreview') {
+    const publisher = card.matchInfo.reviewPublisher?.trim() || 'Published fact-check';
+    const reviewDate = formatReviewDate(card.matchInfo.reviewDate);
+    return {
+      kicker: 'Previously fact-checked',
+      summary: reviewDate ? `${publisher} · ${reviewDate}` : publisher,
+    };
+  }
+
+  if (card.resolutionPath === 'cached_exact' && card.matchInfo?.origin === 'internal_memory') {
+    const legacyContext = buildLegacySimilarClaimContext(card.claim.claimText, card.similarClaims ?? [], currentVideoId);
+    return legacyContext || {
+      kicker: 'Seen before',
+      summary: 'Reused from a previous verified SourceCheck result.',
+    };
+  }
+
+  if (card.resolutionPath === 'live_grounded') {
+    const legacyContext = buildLegacySimilarClaimContext(card.claim.claimText, card.similarClaims ?? [], currentVideoId);
+    if (legacyContext) {
+      return {
+        kicker: 'Related claim',
+        summary: legacyContext.summary,
+      };
+    }
+
+    return {
+      kicker: 'Verified live',
+      summary: 'Grounded against live web sources.',
+    };
+  }
+
+  if (card.similarClaims?.length) {
+    return buildLegacySimilarClaimContext(card.claim.claimText, card.similarClaims, currentVideoId);
+  }
+
+  return null;
 };
 
 const stopSourceLinkPropagation = (
@@ -221,26 +374,15 @@ const StatusIcon = ({ status, size = 'normal' }: { status: VerificationStatus; s
   );
 };
 
-const CLAIM_TYPE_LABELS: Record<string, string> = {
-  factual: 'Factual claim',
-  statistical: 'Statistic',
-  historical: 'Historical claim',
-  prediction: 'Prediction',
-  causal: 'Causal claim',
-  quote: 'Quote check',
-};
-
 // Adversarial strip — shows dual-agent verification activity
 const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
-  const synthesizing = elapsed >= 8;
   const reducedMotion = useReducedMotion();
-  const phaseText = synthesizing ? 'merging' : 'checking';
 
   return (
     <div className="adversarial-strip">
       {/* Advocate agent */}
       <div className="adversarial-agent-group">
-        <span className={`adversarial-node adversarial-node-for${reducedMotion ? '' : ' animated'}${synthesizing ? ' done' : ''}`} />
+        <span className={`adversarial-node adversarial-node-for${reducedMotion ? '' : ' animated'}`} />
         <span className="adversarial-agent-label adversarial-agent-label-for">for</span>
       </div>
 
@@ -248,20 +390,16 @@ const AdversarialStrip = ({ elapsed }: { elapsed: number }) => {
 
       {/* Challenger agent */}
       <div className="adversarial-agent-group">
-        <span className={`adversarial-node adversarial-node-against${reducedMotion ? '' : ' animated'}${synthesizing ? ' done' : ''}`} />
+        <span className={`adversarial-node adversarial-node-against${reducedMotion ? '' : ' animated'}`} />
         <span className="adversarial-agent-label adversarial-agent-label-against">against</span>
       </div>
-
-      <span className={`adversarial-phase${synthesizing ? ' synth' : ''}`}>
-        {phaseText}
-      </span>
       <span className="adversarial-timer">{elapsed}s</span>
     </div>
   );
 };
 
 // Verifying card — shows elapsed time so the user knows something real is happening
-const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimType?: string }) => {
+const VerifyingContent = ({ claimText }: { claimText: string }) => {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -269,18 +407,11 @@ const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimTy
     return () => clearInterval(interval);
   }, []);
 
-  const claimTypeLabel = claimType ? (CLAIM_TYPE_LABELS[claimType] ?? null) : null;
-
   return (
     <>
       <div className="flex items-center gap-2">
         <span className="thinking-pulse-dot" />
         <span className="status-badge status-badge-live">Verifying</span>
-        {claimTypeLabel && (
-          <span className="text-[10px] font-medium text-sc-muted/50 tracking-[0.02em]">
-            {claimTypeLabel}
-          </span>
-        )}
       </div>
 
       <p className="mt-3 text-[16px] font-semibold leading-[1.42] tracking-[-0.016em] text-textMain">
@@ -293,7 +424,7 @@ const VerifyingContent = ({ claimText, claimType }: { claimText: string; claimTy
 };
 
 // Hero resolved card
-const HeroContent = ({ card }: { card: SourceCardRecord }) => {
+const HeroContent = ({ card, currentVideoId }: { card: SourceCardRecord; currentVideoId?: string | null }) => {
   const meta = STATUS_META[card.status];
   const nuance = stripLegacyCachePrefix(card.nuance);
   const resolvedSourceTitle = resolveSourceTitle(card.sourceTitle);
@@ -302,7 +433,7 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
   const contradictionContext = card.contradictionContext?.trim() || '';
   const safeSourceUrl = sanitizeUrl(card.sourceUrl);
   const hasSourceLink = Boolean(safeSourceUrl && resolvedSourceTitle);
-  const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
+  const provenanceContext = buildProvenanceContext(card, currentVideoId);
 
   return (
     <>
@@ -360,10 +491,10 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
         )}
       </div>
 
-      {memorySummary && (
+      {provenanceContext && (
         <div className="feed-card-memory mt-3">
-          <p className="feed-card-memory-kicker">Seen before</p>
-          <p className="feed-card-memory-copy">{memorySummary}</p>
+          <p className="feed-card-memory-kicker">{provenanceContext.kicker}</p>
+          <p className="feed-card-memory-copy">{provenanceContext.summary}</p>
         </div>
       )}
     </>
@@ -374,11 +505,15 @@ const HeroContent = ({ card }: { card: SourceCardRecord }) => {
 const CompactContent = ({ 
   card, 
   isExpanded, 
-  onToggle 
+  onToggle,
+  currentVideoId,
+  subdued = false,
 }: { 
   card: SourceCardRecord; 
   isExpanded?: boolean; 
   onToggle?: () => void;
+  currentVideoId?: string | null;
+  subdued?: boolean;
 }) => {
   const meta = STATUS_META[card.status];
   const nuance = stripLegacyCachePrefix(card.nuance);
@@ -388,7 +523,7 @@ const CompactContent = ({
   const contradictionContext = card.contradictionContext?.trim() || '';
   const safeSourceUrlCompact = sanitizeUrl(card.sourceUrl);
   const hasSourceLink = Boolean(safeSourceUrlCompact && resolvedSourceTitleCompact);
-  const memorySummary = buildSimilarClaimSummary(card.similarClaims ?? []);
+  const provenanceContext = buildProvenanceContext(card, currentVideoId);
   const isInteractive = Boolean(onToggle);
   
   // Extract first sentence of nuance for primary display (truncate at first period, or use full nuance)
@@ -414,6 +549,7 @@ const CompactContent = ({
   return (
     <div 
       className="compact-card-inner"
+      data-subdued={subdued ? 'true' : undefined}
       onClick={onToggle}
       onKeyDown={
         isInteractive
@@ -447,8 +583,8 @@ const CompactContent = ({
             {card.timestampSeconds !== null && card.timestampSeconds !== undefined && (
               <span className="compact-timestamp">{formatTime(card.timestampSeconds)}</span>
             )}
-            {memorySummary && (
-              <span className="compact-memory-chip" title={memorySummary}>
+            {provenanceContext && provenanceContext.kicker !== 'Verified live' && (
+              <span className="compact-memory-chip" title={`${provenanceContext.kicker}: ${provenanceContext.summary}`}>
                 ↺
               </span>
             )}
@@ -530,9 +666,9 @@ const CompactContent = ({
                   ⚠ {contradictionContext}
                 </p>
               )}
-              {memorySummary && (
+              {provenanceContext && (
                 <p className="compact-memory-copy">
-                  Seen before: {memorySummary}
+                  {provenanceContext.kicker}: {provenanceContext.summary}
                 </p>
               )}
             </motion.div>
@@ -685,10 +821,21 @@ const SkeletonContent = () => (
 
 // Main FeedCard component
 export const FeedCard = (props: FeedCardProps) => {
-  const { timestampSeconds, size, accentRgb = '138, 180, 248', glow = false, suppressEntry = false } = props;
+  const {
+    timestampSeconds,
+    size,
+    accentRgb = '138, 180, 248',
+    glow = false,
+    suppressEntry = false,
+    currentVideoId = null,
+    emphasis = 'primary',
+    showRail: showRailOverride,
+    surfaceMode = 'default',
+  } = props;
   const prefersReducedMotion = useReducedMotion();
   const status = props.size === 'hero' || props.size === 'compact' ? props.card.status : undefined;
   const tone = props.size === 'state' ? (props.tone ?? 'muted') : undefined;
+  const isSecondaryEmphasis = emphasis === 'secondary';
   // Determine content based on size
   const content = (() => {
     switch (props.size) {
@@ -703,15 +850,17 @@ export const FeedCard = (props: FeedCardProps) => {
           />
         );
       case 'verifying':
-        return <VerifyingContent claimText={props.claimText} claimType={props.claimType} />;
+        return <VerifyingContent claimText={props.claimText} />;
       case 'hero':
-        return <HeroContent card={props.card} />;
+        return <HeroContent card={props.card} currentVideoId={currentVideoId} />;
       case 'compact':
         return (
           <CompactContent 
             card={props.card} 
             isExpanded={props.isExpanded}
             onToggle={props.onToggle}
+            currentVideoId={currentVideoId}
+            subdued={isSecondaryEmphasis}
           />
         );
       case 'state':
@@ -743,12 +892,13 @@ export const FeedCard = (props: FeedCardProps) => {
   const isCompact = size === 'compact';
   const isScanning = size === 'scanning';
   const isPassiveCard = size === 'state' || size === 'skeleton';
-  // State and skeleton cards span full width with no timeline context
-  const showRail = !isPassiveCard;
+  // State and skeleton cards span full width with no timeline context unless explicitly overridden.
+  const showRail = showRailOverride ?? !isPassiveCard;
 
   return (
     <div
-      className="feed-card-wrapper feed-card-wrapper-rail"
+      className={`feed-card-wrapper ${showRail ? 'feed-card-wrapper-rail' : ''}`}
+      data-emphasis={emphasis}
       style={{ '--rail-left': '52px' } as CSSProperties}
     >
       {showRail && (
@@ -774,9 +924,9 @@ export const FeedCard = (props: FeedCardProps) => {
             ].filter(Boolean).join(' ')}
             style={isCompact ? {
               // Compact: small solid-fill verdict dot
-              backgroundColor: `rgba(${accentRgb}, 0.9)`,
-              borderColor: `rgba(${accentRgb}, 0.30)`,
-              boxShadow: `0 0 4px rgba(${accentRgb}, 0.22)`,
+              backgroundColor: `rgba(${accentRgb}, ${isSecondaryEmphasis ? 0.62 : 0.9})`,
+              borderColor: `rgba(${accentRgb}, ${isSecondaryEmphasis ? 0.16 : 0.30})`,
+              boxShadow: isSecondaryEmphasis ? 'none' : `0 0 4px rgba(${accentRgb}, 0.22)`,
             } : {
               // Stage cards: dark interior + accent border — visually breaks the spine
               // so the line reads as "terminating" at the node, not passing through it
@@ -807,21 +957,23 @@ export const FeedCard = (props: FeedCardProps) => {
         data-size={size}
         data-status={status}
         data-tone={tone}
+        data-emphasis={emphasis}
+        data-surface-mode={surfaceMode !== 'default' ? surfaceMode : undefined}
         data-action={size === 'scanning' && props.size === 'scanning' ? (props.actionState ?? undefined) : undefined}
         data-testid={size === 'compact' || size === 'hero' ? 'source-card' : undefined}
         initial={prefersReducedMotion || isCompact || suppressEntry ? false : { y: DISTANCE.enterY, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: DURATION.heroEnter, ease: SOFT_SPRING }}
-        layout={size !== 'scanning' && size !== 'skeleton'}
+        layout={size !== 'scanning' && size !== 'skeleton' && surfaceMode !== 'ghost'}
         whileHover={
-          prefersReducedMotion || isPassiveCard
+          prefersReducedMotion || isPassiveCard || isSecondaryEmphasis || surfaceMode !== 'default'
             ? undefined
             : isCompact || isScanning
               ? hoverLiftCompact
               : hoverLift
         }
         whileTap={
-          prefersReducedMotion || isPassiveCard || isScanning
+          prefersReducedMotion || isPassiveCard || isScanning || isSecondaryEmphasis || surfaceMode !== 'default'
             ? undefined
             : pressSettle
         }

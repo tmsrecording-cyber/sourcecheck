@@ -27,6 +27,8 @@ describe('verifying operation trace', () => {
   it('verifying card uses elapsed timer, not fake step trace', () => {
     expect(feedCard).toContain('elapsed');
     expect(feedCard).toContain('status-badge-live');
+    expect(feedCard).not.toContain('Historical claim');
+    expect(feedCard).not.toContain('merging');
     expect(feedCard).not.toContain('verify-trace-step');
     expect(feedCard).not.toContain('verifying-pips');
     expect(feedCard).not.toContain('verifying-nodes');
@@ -357,14 +359,24 @@ describe('ambient heartbeat animation', () => {
 describe('rail node visibility', () => {
   it('rail nodes scale on card hover', () => {
     expect(css).toContain('.feed-card-wrapper:hover .rail-node');
-    // B4: Updated to 1.2x scale (was 1.15) for more visible hover feedback
-    expect(css).toContain('scale(1.2)');
+    expect(css).toContain('scale(1.08)');
   });
 
   it('verifying card rail node has expanding ring pulse', () => {
     // B4: Active verification communicated via expanding ring on the rail node
     expect(css).toContain('.rail-node-active');
     expect(css).toContain('@keyframes railNodeRingPulse');
+  });
+});
+
+describe('handoff surfaces', () => {
+  it('CSS defines a dedicated ghost overlay surface', () => {
+    expect(css).toContain('.handoff-ghost');
+  });
+
+  it('CSS defines receiving-state recent stack styling', () => {
+    expect(css).toContain('.live-recent-stack[data-visual-mode="receiving"]');
+    expect(css).toContain('.feed-card[data-surface-mode="receiving"]');
   });
 });
 

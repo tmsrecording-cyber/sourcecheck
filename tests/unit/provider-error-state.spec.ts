@@ -26,4 +26,28 @@ describe('worker runtime provider error state', () => {
 
     expect(runtimeState.lastProviderError).toBeNull();
   });
+
+  it('sanitizes debug metrics during hydration', () => {
+    const runtimeState = sanitizeWorkerRuntimeState({
+      ...INITIAL_RUNTIME_STATE,
+      debugMetrics: {
+        verifyStarted: 4,
+        verifySucceeded: 3,
+        clusterSuppressions: 1,
+        resolutionPathCounts: {
+          live_grounded: 2,
+          cached_exact: 1,
+          invalid: 'bad',
+        },
+      },
+    });
+
+    expect(runtimeState.debugMetrics.verifyStarted).toBe(4);
+    expect(runtimeState.debugMetrics.verifySucceeded).toBe(3);
+    expect(runtimeState.debugMetrics.clusterSuppressions).toBe(1);
+    expect(runtimeState.debugMetrics.resolutionPathCounts).toEqual({
+      live_grounded: 2,
+      cached_exact: 1,
+    });
+  });
 });

@@ -1,5 +1,5 @@
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { formatTime } from '../utils/formatTime';
 import type {
   AskQuestionSource,
@@ -13,13 +13,18 @@ import {
   getStackEntryVariants,
   SOFT_SPRING,
   DURATION,
+  heroContentMorph,
+  heroVerdictSettle,
+  stackReceiveSettle,
 } from '../styles/motionTokens';
 import {
   getCardClaimKey,
+  type HeroVisualState,
   type LivePhase,
   type ReadingVariant,
   type StageEntryDerived,
 } from '../hooks/useLiveStageFlow';
+import { HandoffGhost } from './HandoffGhost';
 
 
 /** @deprecated — kept for API compatibility; the stage now owns this logic */
@@ -27,6 +32,13 @@ export type HeroSlotState =
   | { mode: 'verifying'; claimText: string; timestampSeconds: number | null }
   | { mode: 'scanning'; timestampSeconds: number | null }
   | { mode: 'idle'; };
+
+type HandoffRects = {
+  source: DOMRect | null;
+  target: DOMRect | null;
+};
+
+type RecentStackVisualMode = 'normal' | 'subdued' | 'receiving';
 
 interface CardFeedProps {
   askHistory?: Array<{
@@ -44,16 +56,21 @@ interface CardFeedProps {
   readingVariant?: ReadingVariant;
   readingPreview?: string | null;
   readingTimestamp?: number | null;
+  heroVisualState?: HeroVisualState;
   stageEntries?: StageEntryDerived[];
   dockedKeys?: ReadonlySet<string>;
   recentChecks?: SourceCard[];
   queuedCount?: number;
+  filingClaimKey?: string | null;
+  filingCard?: SourceCard | null;
+  isFiling?: boolean;
   showLiveCheckLabel?: boolean;
   isPinned?: boolean;
   pinToTop?: () => void;
   onRetryTranscript?: () => void;
   onClearHistory?: () => void;
   activeTab?: 'live' | 'history';
+  currentVideoId?: string | null;
   /** @deprecated — no longer used; stage owns its own state */
   onHeroStateChange?: (state: HeroSlotState) => void;
 }
@@ -88,14 +105,19 @@ export const CardFeed = ({
   readingVariant = null,
   readingPreview = null,
   readingTimestamp = null,
+  heroVisualState = 'idle',
   stageEntries = [],
   dockedKeys,
   recentChecks: derivedRecentChecks,
   queuedCount = 0,
+  filingClaimKey = null,
+  filingCard = null,
+  isFiling = false,
   showLiveCheckLabel = false,
   isPinned = true,
   pinToTop,
   activeTab = 'live',
+  currentVideoId = null,
   allCards,
   onRetryTranscript,
   onClearHistory,
@@ -103,7 +125,11 @@ export const CardFeed = ({
   const prefersReducedMotion = useReducedMotion();
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [handoffRects, setHandoffRects] = useState<HandoffRects>({ source: null, target: null });
   const enableListLayoutAnimations = !prefersReducedMotion;
+  const filingHeroRef = useRef<HTMLDivElement | null>(null);
+  const landingShelfRef = useRef<HTMLDivElement | null>(null);
+  const recentTargetRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const recentChecks = derivedRecentChecks ?? cards;
 
@@ -149,7 +175,25 @@ export const CardFeed = ({
   }, [expandedClaimId, recentChecks]);
 
   const anyDocking = (dockedKeys?.size ?? 0) > 0 || stageEntries.some((e) => e.isDocking);
+  const isHeroFiling = heroVisualState === 'filing' && isFiling;
+  const hasActiveTopSlot =
+    stageEntries.some((entry) => entry.checkingClaim !== null || entry.resolvedCard !== null) ||
+    anyDocking ||
+    isHeroFiling;
   const isLiveReading = livePhase !== 'idle' || anyDocking;
+  const recentStackVisualMode: RecentStackVisualMode = isFiling
+    ? 'receiving'
+    : hasActiveTopSlot
+      ? 'subdued'
+      : 'normal';
+  const shouldShowLandingShelf =
+    activeTab === 'live' &&
+    isFiling &&
+    Boolean(filingCard) &&
+    !recentChecks.some((card) => getCardClaimKey(card) === filingClaimKey);
+  const shouldShowRecentChecks = activeTab === 'live'
+    ? recentChecks.length > 0 || shouldShowLandingShelf
+    : recentChecks.length > 0;
   const showResumeLive =
     !isPinned &&
     isLiveReading &&
@@ -168,6 +212,37 @@ export const CardFeed = ({
     : anyDocking
       ? STAGE_SHELL_MIN_HEIGHT.checking  // Hold stage open while docking card is still visible
       : STAGE_SHELL_MIN_HEIGHT[livePhase];
+
+  useEffect(() => {
+    if (activeTab !== 'live' || !hasActiveTopSlot || !expandedClaimId) return;
+    setExpandedClaimId(null);
+  }, [activeTab, expandedClaimId, hasActiveTopSlot]);
+
+  useLayoutEffect(() => {
+    if (prefersReducedMotion || !isFiling || !filingCard || !filingClaimKey || activeTab !== 'live') {
+      setHandoffRects({ source: null, target: null });
+      return;
+    }
+
+    const sourceNode = filingHeroRef.current;
+    const targetNode = recentTargetRefs.current.get(filingClaimKey) ?? landingShelfRef.current;
+    if (!sourceNode || !targetNode) {
+      setHandoffRects({ source: null, target: null });
+      return;
+    }
+
+    setHandoffRects({
+      source: sourceNode.getBoundingClientRect(),
+      target: targetNode.getBoundingClientRect(),
+    });
+  }, [
+    activeTab,
+    filingCard,
+    filingClaimKey,
+    isFiling,
+    prefersReducedMotion,
+    recentChecks.length,
+  ]);
 
   const modelCssVars = buildModelCssVars('gemini-3.1-flash-lite-preview');
 
@@ -216,7 +291,7 @@ export const CardFeed = ({
                         key="live-primary" never changes while the stage is active, so the
                         outer wrapper stays mounted. Only the inner content crossfades.
                         This gives the "one card morphing" feel instead of a sequential swap. */}
-                    {!isInitialLoading && ((livePhase === 'reading' && readingVariant != null) || !!stageEntries[0]) && (
+                    {!isInitialLoading && (((livePhase === 'reading' && readingVariant != null && !anyDocking) && !isHeroFiling) || !!stageEntries[0] || isHeroFiling) && (
                       <motion.div
                         key="live-primary"
                         initial={{ opacity: 0 }}
@@ -228,19 +303,43 @@ export const CardFeed = ({
                             mode="wait" keeps exiting elements in flow so the shell
                             height stays stable — no layout jump between phases. */}
                         <AnimatePresence mode="wait" initial={false}>
-                          {livePhase === 'reading' && readingVariant != null && !stageEntries[0] && (
+                          {isHeroFiling && filingCard && (
+                            <motion.div
+                              key="filing"
+                              ref={filingHeroRef}
+                              initial={false}
+                              animate={prefersReducedMotion
+                                ? { opacity: 0.18, scale: 0.992 }
+                                : { opacity: 0.08, y: 6, scale: 0.986 }}
+                              exit={{ opacity: 0 }}
+                              transition={{ duration: 0.22, ease: SOFT_SPRING }}
+                            >
+                              <FeedCard
+                                size="compact"
+                                card={filingCard}
+                                timestampSeconds={filingCard.timestampSeconds}
+                                accentRgb={STATUS_RGB[filingCard.status] ?? '154, 160, 166'}
+                                currentVideoId={currentVideoId}
+                                emphasis="primary"
+                                suppressEntry
+                              />
+                            </motion.div>
+                          )}
+                          {livePhase === 'reading' && readingVariant != null && !stageEntries[0] && !isHeroFiling && (
                             <motion.div
                               key="scanning"
-                              initial={{ opacity: 0, y: 4 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: -3, transition: { duration: 0.14, ease: SOFT_SPRING } }}
-                              transition={{ duration: 0.22, ease: SOFT_SPRING }}
+                              initial={heroContentMorph.initial}
+                              animate={heroContentMorph.animate}
+                              exit={heroContentMorph.exit}
+                              transition={heroContentMorph.transition}
                             >
                               <FeedCard
                                 size="scanning"
                                 previewText={readingPreview ?? ''}
                                 timestampSeconds={readingTimestamp}
                                 accentRgb="var(--model-accent-rgb)"
+                                currentVideoId={currentVideoId}
+                                emphasis="primary"
                                 suppressEntry
                                 chunksScanned={chunksScanned}
                               />
@@ -263,17 +362,18 @@ export const CardFeed = ({
                                   {entryPhase === 'checking' && entry.checkingClaim && (
                                     <motion.div
                                       key="checking"
-                                      initial={{ opacity: 0, y: 4 }}
-                                      animate={{ opacity: 1, y: 0 }}
-                                      exit={{ opacity: 0, y: -3, transition: { duration: 0.18, ease: SOFT_SPRING } }}
-                                      transition={{ duration: 0.26, ease: SOFT_SPRING }}
+                                      initial={heroContentMorph.initial}
+                                      animate={heroContentMorph.animate}
+                                      exit={heroContentMorph.exit}
+                                      transition={heroContentMorph.transition}
                                     >
                                       <FeedCard
                                         size="verifying"
                                         claimText={entry.checkingClaim.claimText || 'Checking that claim…'}
-                                        claimType={entry.checkingClaim.claimType}
                                         timestampSeconds={entry.checkingClaim.timestampSeconds}
                                         accentRgb="var(--model-accent-rgb)"
+                                        currentVideoId={currentVideoId}
+                                        emphasis="primary"
                                         glow
                                         suppressEntry
                                       />
@@ -282,16 +382,18 @@ export const CardFeed = ({
                                   {entryPhase === 'resolved' && entry.resolvedCard && (
                                     <motion.div
                                       key="resolved"
-                                      initial={{ opacity: 0, y: 3, scale: 1.01 }}
-                                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                                      exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
-                                      transition={{ duration: 0.28, ease: SOFT_SPRING }}
+                                      initial={heroVerdictSettle.initial}
+                                      animate={heroVerdictSettle.animate}
+                                      exit={heroVerdictSettle.exit}
+                                      transition={heroVerdictSettle.transition}
                                     >
                                       <FeedCard
                                         size="compact"
                                         card={entry.resolvedCard}
                                         timestampSeconds={entry.resolvedCard.timestampSeconds}
                                         accentRgb={STATUS_RGB[entry.resolvedCard.status] ?? '154, 160, 166'}
+                                        currentVideoId={currentVideoId}
+                                        emphasis="primary"
                                         suppressEntry
                                       />
                                     </motion.div>
@@ -318,6 +420,7 @@ export const CardFeed = ({
                             badgeLabel="No captions"
                             timestampSeconds={null}
                             accentRgb="var(--sc-neutral-rgb)"
+                            currentVideoId={currentVideoId}
                             tone="muted"
                             headline="No captions found for this video."
                             supportLine="Try ⋮ → Show transcript in YouTube, then Retry. Some videos don't have captions available."
@@ -331,6 +434,7 @@ export const CardFeed = ({
                             badgeLabel="Error"
                             timestampSeconds={null}
                             accentRgb="var(--sc-neutral-rgb)"
+                            currentVideoId={currentVideoId}
                             tone="muted"
                             headline="Something interrupted verification."
                             supportLine="Try refreshing the page."
@@ -364,82 +468,9 @@ export const CardFeed = ({
                     )}
                   </AnimatePresence>
 
-                  {/* Secondary stage entry — outside mode="wait", independent lifecycle */}
+                  {/* Queue chip for queued claims behind the single active stage slot */}
                   <AnimatePresence>
-                    {!isInitialLoading && stageEntries[1] && (() => {
-                      const entry = stageEntries[1];
-                      const entryPhase = entry.resolvedCard ? 'resolved' : (entry.checkingClaim ? 'checking' : null);
-                      if (!entryPhase) return null;
-                      return (
-                        <motion.div
-                          key={entry.claimKey}
-                          className="relative mt-1"
-                          initial={prefersReducedMotion ? false : { opacity: 0, y: -6 }}
-                          animate={{ opacity: 0.93, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.97, transition: { duration: DURATION.micro, ease: SOFT_SPRING } }}
-                          transition={{ duration: DURATION.standard, ease: SOFT_SPRING }}
-                        >
-                          <AnimatePresence mode="wait" initial={false}>
-                            {entryPhase === 'checking' && entry.checkingClaim && (
-                              <motion.div
-                                key="checking"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0, transition: { duration: 0.16, ease: SOFT_SPRING } }}
-                                transition={{ duration: DURATION.micro }}
-                              >
-                                <FeedCard
-                                  size="verifying"
-                                  claimText={entry.checkingClaim.claimText || 'Checking that claim…'}
-                                  claimType={entry.checkingClaim.claimType}
-                                  timestampSeconds={entry.checkingClaim.timestampSeconds}
-                                  accentRgb="var(--sc-neutral-rgb)"
-                                  suppressEntry
-                                />
-                              </motion.div>
-                            )}
-                            {entryPhase === 'resolved' && entry.resolvedCard && (
-                              <motion.div
-                                key="resolved"
-                                initial={{ opacity: 0, scale: 1.01 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.18, ease: SOFT_SPRING } }}
-                                transition={{ duration: DURATION.micro }}
-                              >
-                                <FeedCard
-                                  size="compact"
-                                  card={entry.resolvedCard}
-                                  timestampSeconds={entry.resolvedCard.timestampSeconds}
-                                  accentRgb={STATUS_RGB[entry.resolvedCard.status] ?? '154, 160, 166'}
-                                  suppressEntry
-                                />
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                          <AnimatePresence>
-                            {queuedCount > 0 && (
-                              <motion.div
-                                key="queue-chip"
-                                className="absolute bottom-3 right-3 pointer-events-none"
-                                initial={{ opacity: 0, scale: 0.88 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.9 }}
-                                transition={{ duration: 0.18, ease: SOFT_SPRING }}
-                              >
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[10px] font-medium text-sc-muted/65 bg-sc-bg-0/85 border border-sc-border-soft/50 backdrop-blur-sm tabular-nums">
-                                  {queuedCount} more
-                                </span>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
-                      );
-                    })()}
-                  </AnimatePresence>
-
-                  {/* Queue chip when no secondary visible but overflow exists */}
-                  <AnimatePresence>
-                    {!stageEntries[1] && queuedCount > 0 && stageEntries[0] && (
+                    {queuedCount > 0 && stageEntries[0] && !isFiling && (
                       <motion.div
                         key="queue-chip-primary"
                         className="absolute bottom-3 right-3 pointer-events-none"
@@ -457,37 +488,70 @@ export const CardFeed = ({
                 </motion.div>
               </div>
 
-              {recentChecks.length > 0 && (
-                <div className={`px-3 ${livePhase === 'reading' ? 'mt-2.5' : 'mt-3.5'}`}>
+              {shouldShowRecentChecks && (
+                <div className="px-3 mt-3.5">
                   <div className="stage-section-row ml-[52px] mb-2">
                     <span className="stage-section-rule" />
                     <p className="stage-section-label">Recent checks</p>
                   </div>
-                  <div className="flex flex-col gap-1">
+                  <div
+                    className="live-recent-stack flex flex-col gap-1"
+                    data-subdued={recentStackVisualMode !== 'normal' ? 'true' : undefined}
+                    data-visual-mode={recentStackVisualMode}
+                  >
+                    {shouldShowLandingShelf && (
+                      <div
+                        ref={landingShelfRef}
+                        className="live-recent-landing-shelf"
+                        data-testid="recent-landing-shelf"
+                        aria-hidden="true"
+                      />
+                    )}
                     {recentChecks.map((card, index) => {
                       const claimKey = getCardClaimKey(card);
                       const isDockTarget = Boolean(dockedKeys?.has(claimKey));
+                      const isReceivingTarget = isFiling && filingClaimKey === claimKey;
 
-                      // CALM TRANSITION: Docking cards should NOT use layoutId morphing
-                      // The stage card exits gracefully; this card appears with simple fade
-                      // This prevents the chaotic "morphing" animation that fights with exit
                       return (
                         <motion.div
                           key={card.id}
+                          ref={(node) => {
+                            if (node) {
+                              recentTargetRefs.current.set(claimKey, node);
+                            } else {
+                              recentTargetRefs.current.delete(claimKey);
+                            }
+                          }}
                           custom={index}
                           variants={isDockTarget ? undefined : getStackEntryVariants(prefersReducedMotion)}
-                          initial={isDockTarget ? { opacity: 0, y: 8 } : prefersReducedMotion ? false : 'hidden'}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={isDockTarget ? { duration: 0.35, ease: SOFT_SPRING } : undefined}
+                          initial={isDockTarget ? { opacity: 0, y: 2, scale: 0.985 } : prefersReducedMotion ? false : 'hidden'}
+                          animate={
+                            isReceivingTarget
+                              ? {
+                                  opacity: prefersReducedMotion ? 0.16 : 0.02,
+                                  y: 0,
+                                  scale: 0.986,
+                                }
+                              : isDockTarget
+                                ? { opacity: 1, y: 0, scale: 1 }
+                                : { opacity: 1, y: 0, scale: 1 }
+                          }
+                          transition={isReceivingTarget ? stackReceiveSettle.transition : isDockTarget ? { duration: 0.28, ease: SOFT_SPRING } : undefined}
+                          data-receiving-target={isReceivingTarget ? 'true' : undefined}
                         >
                           <FeedCard
                             size="compact"
                             card={card}
                             timestampSeconds={card.timestampSeconds}
                             accentRgb={STATUS_RGB[card.status] ?? '154, 160, 166'}
-                            isExpanded={expandedClaimId === card.id}
-                            onToggle={() =>
-                              setExpandedClaimId((c) => (c === card.id ? null : card.id))
+                            currentVideoId={currentVideoId}
+                            emphasis={hasActiveTopSlot ? 'secondary' : 'primary'}
+                            surfaceMode={isReceivingTarget ? 'receiving' : 'default'}
+                            isExpanded={!hasActiveTopSlot && expandedClaimId === card.id}
+                            onToggle={
+                              hasActiveTopSlot
+                                ? undefined
+                                : () => setExpandedClaimId((c) => (c === card.id ? null : card.id))
                             }
                           />
                         </motion.div>
@@ -497,6 +561,14 @@ export const CardFeed = ({
                 </div>
               )}
             </div>
+            {!prefersReducedMotion && isFiling && filingCard && handoffRects.source && handoffRects.target && (
+              <HandoffGhost
+                card={filingCard}
+                sourceRect={handoffRects.source}
+                targetRect={handoffRects.target}
+                currentVideoId={currentVideoId}
+              />
+            )}
           </LayoutGroup>
         )}
 
@@ -572,6 +644,7 @@ export const CardFeed = ({
                       timestampSeconds={card.timestampSeconds}
                       card={card}
                       accentRgb={STATUS_RGB[card.status] ?? '154, 160, 166'}
+                      currentVideoId={currentVideoId}
                       isExpanded={expandedClaimId === card.id}
                       onToggle={() => {
                         setExpandedClaimId((current) => (current === card.id ? null : card.id));
@@ -589,6 +662,7 @@ export const CardFeed = ({
                 badgeLabel="No history"
                 timestampSeconds={null}
                 accentRgb="var(--sc-neutral-rgb)"
+                currentVideoId={currentVideoId}
                 tone="muted"
                 headline="Nothing checked yet."
                 supportLine="Verified claims will appear here as the video plays."

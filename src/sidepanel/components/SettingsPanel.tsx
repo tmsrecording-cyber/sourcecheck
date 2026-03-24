@@ -5,13 +5,13 @@ import {
   PROVIDER_SETTINGS_SESSION_KEY, 
   PROVIDER_SETTINGS_LOCAL_KEY, 
   PROVIDER_REMEMBER_KEY,
-  FREEMIUM_MODEL, 
   getStoredProviderApiKey,
   getRememberKeyPreference,
 } from '../../background/providers/types';
 
 interface SettingsPanelProps {
-  onSaved: () => void;
+  onBack: () => void;
+  onSaved: () => void | Promise<void>;
   lastError?: { code?: string; message?: string } | null;
 }
 
@@ -56,7 +56,7 @@ const STATUS_CONFIG: Record<KeyStatus, { label: string; color: string; rgb: stri
   },
 };
 
-export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
+export const SettingsPanel = ({ onBack, onSaved, lastError }: SettingsPanelProps) => {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +64,16 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
   const [hasStoredKey, setHasStoredKey] = useState(false);
   const [storedKeyLast4, setStoredKeyLast4] = useState<string | null>(null);
   const [rememberKey, setRememberKey] = useState(false);
+
+  const getActionErrorMessage = (value: unknown, fallback: string) => {
+    if (value instanceof Error && value.message.trim()) {
+      return value.message;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+    return fallback;
+  };
 
   // Derive keyStatus from hasStoredKey + lastError (always fresh, never stale)
   const keyStatus: KeyStatus = useMemo(() => {
@@ -250,10 +260,10 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
       setHasStoredKey(true);
       setStoredKeyLast4(trimmed.slice(-4));
       setApiKey('');
-      onSaved();
+      await onSaved();
     } catch (err) {
-      setError('Failed to save. Please try again.');
-      console.error('[SourceCheck/UI] Failed to save provider settings:', err);
+      setError(getActionErrorMessage(err, 'Failed to save. Please try again.'));
+      console.error('[SourceCheck/UI] Settings save flow failed:', err);
     } finally {
       setSaving(false);
     }
@@ -264,7 +274,6 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
       // Clear from both session and local storage
       await chrome.storage.session.remove(PROVIDER_SETTINGS_SESSION_KEY);
       await chrome.storage.local.remove([PROVIDER_SETTINGS_LOCAL_KEY, PROVIDER_REMEMBER_KEY, PROVIDER_SETTINGS_KEY]);
-      await chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', model: FREEMIUM_MODEL }).catch(() => {});
       setHasStoredKey(false);
       setStoredKeyLast4(null);
       setApiKey('');
@@ -304,7 +313,7 @@ export const SettingsPanel = ({ onSaved, lastError }: SettingsPanelProps) => {
             />
             <div className="capture-plate ml-1 px-4 py-4 border border-sc-border-soft bg-sc-surface-0 shadow-sc-soft">
               <button
-                onClick={onSaved}
+                onClick={onBack}
                 className="mb-2 flex items-center gap-1 text-[11px] text-sc-muted hover:text-sc-text-soft transition-colors"
                 type="button"
               >

@@ -54,16 +54,13 @@ describe('video header trust helpers', () => {
   });
 
   describe('buildLiveStripCopy', () => {
-    it('returns Listening while the live surface is reading', () => {
-      expect(buildLiveStripCopy({ status: 'monitoring', livePhase: 'reading', anchorTime: null })).toBe('Listening');
+    it('returns null while the live surface itself is carrying the story', () => {
+      expect(buildLiveStripCopy({ status: 'monitoring', livePhase: 'reading', anchorTime: null })).toBeNull();
     });
 
-    it('returns Checking claim at time when checking with timestamp', () => {
-      expect(buildLiveStripCopy({ status: 'verifying', livePhase: 'checking', anchorTime: 125 })).toBe('Checking claim at 2:05');
-    });
-
-    it('returns Checking when checking without timestamp', () => {
-      expect(buildLiveStripCopy({ status: 'verifying', livePhase: 'checking', anchorTime: null })).toBe('Checking');
+    it('returns null while checking so the top card stays the source of truth', () => {
+      expect(buildLiveStripCopy({ status: 'verifying', livePhase: 'checking', anchorTime: 125 })).toBeNull();
+      expect(buildLiveStripCopy({ status: 'verifying', livePhase: 'checking', anchorTime: null })).toBeNull();
     });
 
     it('returns null while a resolved card is still docking', () => {

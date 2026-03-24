@@ -24,7 +24,7 @@ import {
 import { getPressSettle } from './styles/motionTokens';
 import { lifecycleToAnalysisStatus } from './utils/state';
 import { resolveDisplayAnalysisStatus } from './utils/displayAnalysisStatus';
-import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel } from './components/DebugPanels';
+import { DebugStatusPanel, EventTimeline, TranscriptFetchLogPanel, VerificationMetricsPanel } from './components/DebugPanels';
 import { hardenStorageAccessLevels } from '../utils/storageAccess';
 import type {
   AskQuestionResponse,
@@ -39,6 +39,8 @@ type AskQuestionResult =
   | ({ status: 'ok' } & AskQuestionResponse)
   | { status: 'error'; error: string };
 
+type RuntimeMessageStatus = 'ok' | 'error' | 'ignored';
+
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
@@ -47,6 +49,29 @@ const getErrorMessage = (error: unknown, fallback: string) => {
     return error;
   }
   return fallback;
+};
+
+const getRuntimeMessageStatus = (value: unknown): RuntimeMessageStatus | null => {
+  if (!value || typeof value !== 'object') return null;
+  const status = (value as { status?: unknown }).status;
+  if (status === 'ok' || status === 'error' || status === 'ignored') {
+    return status;
+  }
+  return null;
+};
+
+const getRuntimeMessageError = (value: unknown, fallback: string) => {
+  if (!value || typeof value !== 'object') return fallback;
+  const error = (value as { error?: unknown }).error;
+  return typeof error === 'string' && error.trim() ? error : fallback;
+};
+
+const getClearProviderErrorFailureMessage = (response: unknown, context: 'retry' | 'settings-save') => {
+  const status = getRuntimeMessageStatus(response);
+  if (status === 'ignored') {
+    return `CLEAR_PROVIDER_ERROR was ignored during ${context}.`;
+  }
+  return getRuntimeMessageError(response, `CLEAR_PROVIDER_ERROR failed during ${context}.`);
 };
 
 const PanelShell = ({
@@ -98,17 +123,23 @@ const PanelShell = ({
 );
 
 export const App = () => {
+  const liveTabId = 'sourcecheck-tab-live';
+  const historyTabId = 'sourcecheck-tab-history';
+  const livePanelId = 'sourcecheck-panel-live';
+  const historyPanelId = 'sourcecheck-panel-history';
   const { isStorageReady, runtimeState, transcript, currentVideoIdRef } = useExtensionStorage();
   const prefersReducedMotion = useReducedMotion();
   const [askDraft, setAskDraft] = useState('');
   const { askHistory, addEntry: addAskEntry, resetForVideo: resetAskForVideo } = useAskHistory();
-  const { cardHistory, clearHistory: clearCardHistory } = useCardHistory(runtimeState.allSourceCards);
+  const isPrivateSession = runtimeState.currentVideo?.sourceContext?.visibility === 'private';
+  const { cardHistory, clearHistory: clearCardHistory } = useCardHistory(runtimeState.allSourceCards, isPrivateSession);
   const [isThinking, setIsThinking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [showSettings, setShowSettings] = useState(false);
   const { hasCustomKey } = useProviderSettings();
   const [isRetryingTranscript, setIsRetryingTranscript] = useState(false);
+  const [isStorageHardeningDegraded, setIsStorageHardeningDegraded] = useState(false);
   const { notices, enqueueNotice, dismissNotice } = useNoticeQueue();
   const isMountedRef = useRef(true);
   const lastTranscriptFallbackNoticeAtRef = useRef(0);
@@ -116,12 +147,23 @@ export const App = () => {
 
   useEffect(() => () => {
     isMountedRef.current = false;
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
-    void hardenStorageAccessLevels().catch((err) => {
-      console.warn('[SourceCheck/UI] Storage access hardening failed:', err);
-    });
+    void hardenStorageAccessLevels()
+      .then((result) => {
+        if (!isMountedRef.current) return;
+        setIsStorageHardeningDegraded(result.degraded);
+      })
+      .catch((err) => {
+        if (!isMountedRef.current) return;
+        console.warn('[SourceCheck/UI] Storage access hardening failed:', err);
+        setIsStorageHardeningDegraded(true);
+      });
   }, []);
 
   const { lastProviderError, setLastProviderError, recordSettingsSave } = useProviderErrorGate({
@@ -253,11 +295,25 @@ export const App = () => {
   const historyItemCount = cardHistory.length + askHistory.length;
   const headerCards = activeTab === 'history' ? cardHistory : runtimeState.allSourceCards;
 
+  const clearProviderError = async (context: 'retry' | 'settings-save') => {
+    const response: unknown = await chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' });
+    if (getRuntimeMessageStatus(response) !== 'ok') {
+      throw new Error(getClearProviderErrorFailureMessage(response, context));
+    }
+  };
+
+  const clearProviderErrorBestEffort = (context: 'retry' | 'settings-save') => {
+    void clearProviderError(context).catch((error) => {
+      console.warn(`[SourceCheck/UI] CLEAR_PROVIDER_ERROR did not succeed during ${context}.`, error);
+    });
+  };
+
   const handleAskSubmit = async (query: string) => {
     const trimmedQuery = query.trim();
     if (!trimmedQuery || isThinking) return;
     const submittedVideoId = currentVideoIdRef.current;
     const submittedTimestamp = runtimeState.playbackState?.currentTime ?? runtimeState.lastScannedTimestamp ?? 0;
+    let askTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
     setIsThinking(true);
     setAskError(null);
@@ -268,9 +324,9 @@ export const App = () => {
           type: 'ASK_QUESTION',
           payload: { question: trimmedQuery },
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Request timed out. Please try again.')), 45_000)
-        ),
+        new Promise<never>((_, reject) => {
+          askTimeoutId = setTimeout(() => reject(new Error('Request timed out. Please try again.')), 45_000);
+        }),
       ]);
 
       if (!isMountedRef.current || currentVideoIdRef.current !== submittedVideoId) {
@@ -306,6 +362,9 @@ export const App = () => {
         setAskError(getErrorMessage(askSubmitError, 'Could not answer that yet.'));
       }
     } finally {
+      if (askTimeoutId) {
+        clearTimeout(askTimeoutId);
+      }
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
         setIsThinking(false);
       }
@@ -329,23 +388,26 @@ export const App = () => {
       }
     }, 20_000);
     // Best-effort cleanup — do not let it block the actual retry
-    void chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' }).catch(() => {});
+    clearProviderErrorBestEffort('retry');
     try {
       const retryResponse: unknown = await chrome.runtime.sendMessage({
         type: 'RETRY_TRANSCRIPT',
         payload: { videoId: runtimeState.currentVideo.videoId }
       });
-      // MV3 sendMessage only throws on transport failure, not app-level errors.
-      // Check the response payload for service-worker-reported failures.
-      if (retryResponse && typeof retryResponse === 'object' && (retryResponse as { status?: string }).status === 'error') {
-        throw new Error((retryResponse as { error?: string }).error || 'Retry failed');
+      const retryStatus = getRuntimeMessageStatus(retryResponse);
+      if (retryStatus !== 'ok') {
+        const fallback =
+          retryStatus === 'ignored'
+            ? 'Transcript retry was ignored.'
+            : 'Transcript retry failed.';
+        throw new Error(getRuntimeMessageError(retryResponse, fallback));
       }
     } catch (error) {
       if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
       console.error('[SourceCheck/UI] Retry transcript failed:', error);
       if (isMountedRef.current && currentVideoIdRef.current === submittedVideoId) {
         setIsRetryingTranscript(false);
-        setAskError('Transcript retry failed. Refresh the page.');
+        setAskError(getErrorMessage(error, 'Transcript retry failed.'));
       }
     }
   };
@@ -353,12 +415,15 @@ export const App = () => {
   if (showSettings) {
     return (
         <SettingsPanel
-        onSaved={() => {
+        onBack={() => {
+          setShowSettings(false);
+        }}
+        onSaved={async () => {
+          await clearProviderError('settings-save');
           recordSettingsSave();
           setShowSettings(false);
           setLastProviderError(null);
           enqueueNotice(buildSettingsSavedNotice());
-          void chrome.runtime.sendMessage({ type: 'CLEAR_PROVIDER_ERROR' }).catch(() => {});
         }} 
         lastError={lastProviderError}
       />
@@ -386,42 +451,15 @@ export const App = () => {
 
   if (!runtimeState.currentVideo) {
     return (
-      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center bg-sc-bg-0 px-6 font-sc">
-        <div className="w-full max-w-[272px] flex flex-col items-center gap-5">
-          <div className="flex flex-col items-center gap-2">
-            <SourceCheckLogo size={26} />
-            <p className="text-[9px] font-mono font-bold tracking-[0.22em] uppercase text-sc-accent/60">SourceCheck</p>
+      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center bg-sc-bg-0 px-8 font-sc">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <SourceCheckLogo size={24} />
+          <div>
+            <h1 className="text-[16px] font-bold tracking-tight text-sc-text">Open a YouTube video</h1>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-sc-text-soft/65">Claims are verified automatically as you watch.</p>
           </div>
-
-          <div className="text-center">
-            <h1 className="text-[17px] font-bold tracking-tight text-sc-text">Live fact-checking</h1>
-            <p className="mt-1 text-[12.5px] leading-relaxed text-sc-text-soft/75">Claims are verified automatically as you watch — no setup required.</p>
-          </div>
-
-          <div className="w-full flex flex-col gap-2">
-            {([
-              ['For · Against · Synthesize', 'Each claim is argued both ways before a verdict'],
-              ['Cross-video memory', 'Catches repeated claims across sessions'],
-              ['Ask questions', 'Query the transcript directly at any point'],
-            ] as const).map(([label, sub]) => (
-              <div key={label} className="flex items-start gap-3 px-3 py-2.5 rounded-[6px] border border-sc-border-soft/40 bg-sc-surface-0/50">
-                <span className="mt-[3px] w-1.5 h-1.5 rounded-full bg-sc-accent/30 flex-shrink-0" />
-                <div>
-                  <p className="text-[11.5px] font-semibold text-sc-text/85">{label}</p>
-                  <p className="text-[10.5px] text-sc-muted/55 mt-0.5">{sub}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 text-[10px] text-sc-muted/40">
-            <span className="w-6 h-px bg-sc-border-soft/40" />
-            Open a YouTube video to begin
-            <span className="w-6 h-px bg-sc-border-soft/40" />
-          </div>
-
-          <p className="text-center text-[10px] text-sc-muted/35 leading-relaxed">
-            Transcript text is processed via Gemini AI.<br />No account or identity data is collected.
+          <p className="text-[10px] text-sc-muted/35 leading-relaxed mt-2">
+            Transcript text is processed via Gemini AI.<br />Runtime data stays in your browser session by default.
           </p>
         </div>
       </div>
@@ -441,8 +479,11 @@ export const App = () => {
               <motion.button
                 onClick={() => setActiveTab('live')}
                 className={`tab-btn min-w-0 px-2.5 ${activeTab === 'live' ? 'active' : ''}`}
+                id={liveTabId}
                 role="tab"
                 aria-selected={activeTab === 'live'}
+                aria-controls={livePanelId}
+                tabIndex={activeTab === 'live' ? 0 : -1}
                 whileTap={pressFeedback}
               >
                 LIVE
@@ -451,8 +492,11 @@ export const App = () => {
               <motion.button
                 onClick={() => setActiveTab('history')}
                 className={`tab-btn min-w-0 px-2.5 ${activeTab === 'history' ? 'active' : ''}`}
+                id={historyTabId}
                 role="tab"
                 aria-selected={activeTab === 'history'}
+                aria-controls={historyPanelId}
+                tabIndex={activeTab === 'history' ? 0 : -1}
                 whileTap={pressFeedback}
               >
                 <span className="flex items-center gap-1.5">
@@ -480,67 +524,96 @@ export const App = () => {
           </div>
         </div>
 
-        <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col pt-0.5">
-          {SHOW_DEBUG && (
-            <>
-              <DebugStatusPanel runtimeState={runtimeState} analysisStatus={displayAnalysisStatus} />
-              <EventTimeline runtimeState={runtimeState} />
-              <TranscriptFetchLogPanel runtimeState={runtimeState} />
-            </>
-          )}
-          {notices.length > 0 && (
-            <div className="sidepanel-notice-lane">
-              <NoticeStack notices={notices} onDismiss={dismissNotice} />
-            </div>
-          )}
-          <VideoHeader
-            title={runtimeState.currentVideo.title}
-            channel={runtimeState.currentVideo.channel}
-            activeTab={activeTab}
-            status={displayAnalysisStatus}
-            playbackState={runtimeState.playbackState}
-            lastScannedTimestamp={runtimeState.lastScannedTimestamp}
-            cards={headerCards}
-            livePhase={liveFlow.livePhase}
-            liveStripCopy={liveFlow.headerStripCopy}
-          />
-          {runtimeState.currentVideo.sourceContext?.visibility === 'private' && (
-            <div className="mx-3 mt-2 flex items-center gap-2 rounded-md border border-sc-border-soft/60 bg-sc-surface-1/50 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-sc-muted/70">Private session</span>
-              <span className="text-[10px] text-sc-muted/60">— claims and captions are not saved.</span>
-            </div>
-          )}
+        <div
+          id={activeTab === 'live' ? livePanelId : historyPanelId}
+          role="tabpanel"
+          aria-labelledby={activeTab === 'live' ? liveTabId : historyTabId}
+          className="flex flex-1 min-h-0 flex-col"
+        >
+          <div ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col pt-0.5">
+            {(SHOW_DEBUG || isStorageHardeningDegraded) && (
+              <div className="mx-3 mt-2 flex flex-wrap items-center gap-2">
+                {SHOW_DEBUG && (
+                  <span className="inline-flex items-center rounded-md border border-sc-border-soft/60 bg-sc-surface-1/60 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-sc-muted/75">
+                    Debug active
+                  </span>
+                )}
+                {isStorageHardeningDegraded && (
+                  <span className="inline-flex items-center rounded-md border border-sc-border-soft/60 bg-sc-surface-1/60 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-sc-muted/75">
+                    Storage hardening unavailable
+                  </span>
+                )}
+              </div>
+            )}
+            {SHOW_DEBUG && (
+              <div className="mx-3 mt-2">
+                <DebugStatusPanel runtimeState={runtimeState} analysisStatus={displayAnalysisStatus} />
+                <VerificationMetricsPanel runtimeState={runtimeState} />
+                <EventTimeline runtimeState={runtimeState} />
+                <TranscriptFetchLogPanel runtimeState={runtimeState} />
+              </div>
+            )}
+            {notices.length > 0 && (
+              <div className="sidepanel-notice-lane">
+                <NoticeStack notices={notices} onDismiss={dismissNotice} />
+              </div>
+            )}
+            <VideoHeader
+              title={runtimeState.currentVideo.title}
+              channel={runtimeState.currentVideo.channel}
+              activeTab={activeTab}
+              status={displayAnalysisStatus}
+              playbackState={runtimeState.playbackState}
+              lastScannedTimestamp={runtimeState.lastScannedTimestamp}
+              cards={headerCards}
+              livePhase={liveFlow.livePhase}
+              liveStripCopy={liveFlow.headerStripCopy}
+            />
+            {isPrivateSession && (
+              <div className="mx-3 mt-2 flex items-center gap-2 rounded-md border border-sc-border-soft/60 bg-sc-surface-1/50 px-3 py-2">
+                <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-sc-muted/70">Private session</span>
+                <span className="text-[10px] text-sc-muted/60">— claims and captions are not saved.</span>
+              </div>
+            )}
           <CardFeed
             cards={runtimeState.sourceCards}
             allCards={cardHistory}
+            currentVideoId={runtimeState.currentVideo.videoId}
             status={displayAnalysisStatus}
             livePhase={liveFlow.livePhase}
             readingVariant={liveFlow.readingVariant}
-            readingPreview={liveFlow.readingPreview}
-            readingTimestamp={liveFlow.readingTimestamp}
-            stageEntries={liveFlow.stageEntries}
-            dockedKeys={liveFlow.dockedKeys}
-            recentChecks={liveFlow.recentChecks}
-            queuedCount={liveFlow.queuedCount}
-            showLiveCheckLabel={liveFlow.showLiveCheckLabel}
-            isPinned={isFeedPinned}
-            pinToTop={pinFeedToTop}
-            chunksScanned={runtimeState.chunksScanned}
-            askHistory={askHistory}
-            onRetryTranscript={handleRetryTranscript}
-            onClearHistory={clearCardHistory}
-            activeTab={activeTab}
-          />
+            heroVisualState={liveFlow.heroVisualState}
+              readingPreview={liveFlow.readingPreview}
+              readingTimestamp={liveFlow.readingTimestamp}
+              stageEntries={liveFlow.stageEntries}
+              dockedKeys={liveFlow.dockedKeys}
+              recentChecks={liveFlow.recentChecks}
+              queuedCount={liveFlow.queuedCount}
+              filingClaimKey={liveFlow.filingClaimKey}
+              filingCard={liveFlow.filingCard}
+              isFiling={liveFlow.isFiling}
+              showLiveCheckLabel={liveFlow.showLiveCheckLabel}
+              isPinned={isFeedPinned}
+              pinToTop={pinFeedToTop}
+              chunksScanned={runtimeState.chunksScanned}
+              askHistory={askHistory}
+              onRetryTranscript={handleRetryTranscript}
+              onClearHistory={clearCardHistory}
+              activeTab={activeTab}
+            />
+          </div>
+          {activeTab === 'live' && (
+            <AskBox
+              transcript={transcript}
+              cards={runtimeState.sourceCards}
+              queryDraft={askDraft}
+              onQueryDraftChange={(v) => { setAskDraft(v); if (askError) setAskError(null); }}
+              isThinking={isThinking}
+              onSubmit={handleAskSubmit}
+              error={askError}
+            />
+          )}
         </div>
-        <AskBox
-          transcript={transcript}
-          cards={runtimeState.sourceCards}
-          queryDraft={askDraft}
-          onQueryDraftChange={(v) => { setAskDraft(v); if (askError) setAskError(null); }}
-          isThinking={isThinking}
-          onSubmit={handleAskSubmit}
-          error={askError}
-        />
       </div>
     </div>
   );

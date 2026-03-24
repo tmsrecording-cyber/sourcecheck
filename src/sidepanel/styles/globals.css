@@ -2041,32 +2041,18 @@ body::before {
 .live-tab-rail::before {
   content: '';
   position: absolute;
-  /* Hero spine: 12px (px-3) + 39px (spine left) = 51px → center at 52px = diamond center */
   left: 51px;
-  top: -32px; /* extend above the card so the stream visibly flows from above the diamond */
+  top: -12px;
   bottom: 0;
-  /* One 2px hero spine — this is the ONLY vertical line in the rail lane */
-  width: 2px;
-  background:
-    /* Hero spine: starts visible from the top so the stream reads as flowing from above */
-    linear-gradient(
-      180deg,
-      rgba(var(--model-accent-rgb, 138, 180, 248), 0.22) 0%,
-      rgba(var(--model-accent-rgb, 138, 180, 248), 0.32) 10%,
-      rgba(var(--model-accent-rgb, 138, 180, 248), 0.20) 38%,
-      rgba(var(--model-accent-rgb, 138, 180, 248), 0.08) 72%,
-      transparent 100%
-    ),
-    /* Data-stream tracer: bright packet dashes flowing downward */
-    repeating-linear-gradient(
-      180deg,
-      transparent 0 8px,
-      rgba(var(--model-accent-rgb, 138, 180, 248), 0.14) 8px 12px,
-      transparent 12px 28px
-    );
-  background-size: 100% 100%, 100% 108px;
-  animation: railScanFlow 3.2s linear infinite;
-  box-shadow: 0 0 4px rgba(var(--model-accent-rgb, 138, 180, 248), 0.10);
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.11) 0%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.07) 28%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.04) 58%,
+    rgba(var(--model-accent-rgb, 138, 180, 248), 0.015) 82%,
+    transparent 100%
+  );
   pointer-events: none;
   z-index: 0;
 }
@@ -2372,11 +2358,11 @@ body::before {
   position: absolute;
   left: 36px;   /* center = 36+4 = 40px — same axis as rail-line */
   top: 13px;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   transform: rotate(45deg);
   z-index: 10;
-  border: 2px solid;
+  border: 1.5px solid;
   transition:
     background-color var(--motion-layout) var(--motion-soft-spring),
     border-color var(--motion-layout) var(--motion-soft-spring),
@@ -2386,8 +2372,7 @@ body::before {
 }
 
 .feed-card-wrapper:hover .rail-node {
-  /* B4: Hover expands to 12px equivalent via scale */
-  transform: rotate(45deg) scale(1.2);
+  transform: rotate(45deg) scale(1.08);
 }
 
 .rail-node-glow {
@@ -2401,9 +2386,9 @@ body::before {
 .rail-node-active::after {
   content: '';
   position: absolute;
-  inset: -3px;
+  inset: -1px;
   border-radius: 1px;
-  border: 1.5px solid rgba(var(--model-accent-rgb, 138, 180, 248), 0.48);
+  border: 1px solid rgba(var(--model-accent-rgb, 138, 180, 248), 0.18);
   animation: railNodeRingPulse 2s ease-out infinite;
 }
 
@@ -2414,11 +2399,11 @@ body::before {
   }
   60% {
     opacity: 0;
-    transform: scale(2.2);
+    transform: scale(1.8);
   }
   100% {
     opacity: 0;
-    transform: scale(2.2);
+    transform: scale(1.8);
   }
 }
 
@@ -2428,7 +2413,7 @@ body::before {
   height: 6px;
   left: 37px;  /* center = 37+3 = 40px — same axis */
   top: 15px;
-  opacity: 0.88;
+  opacity: 0.5;
   box-shadow: none;
 }
 
@@ -2438,7 +2423,7 @@ body::before {
   top: 18px;
   width: 18px; /* bridges compact card's margin-left: 18px */
   height: 1px;
-  opacity: 0.55;
+  opacity: 0.34;
   transition: background var(--motion-layout) var(--motion-soft-spring);
 }
 
@@ -2463,9 +2448,9 @@ body::before {
   position: absolute;
   left: 47px;   /* starts just past diamond tip (~46px) toward the 52px card edge */
   top: 17px;
-  width: 8px;   /* short bridge: 47→55px, fades into card */
+  width: 6px;
   height: 1px;
-  opacity: 0.8;
+  opacity: 0.42;
   transition:
     background var(--motion-layout) var(--motion-soft-spring),
     opacity var(--motion-fast-02) var(--motion-soft-spring);
@@ -2551,6 +2536,20 @@ body::before {
 .feed-card:hover {
   border-color: var(--sc-border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+}
+
+.feed-card[data-surface-mode="ghost"] {
+  pointer-events: none;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.feed-card[data-surface-mode="receiving"] {
+  border-color: rgba(var(--sc-border-rgb), 0.10);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
 /* Size variants */
@@ -2810,6 +2809,35 @@ body::before {
     inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
+.feed-card-compact[data-emphasis="secondary"] {
+  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.42), rgba(var(--sc-surface-0-rgb), 0.58));
+  border-color: rgba(var(--sc-border-rgb), 0.12);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.feed-card-compact[data-emphasis="secondary"]:hover {
+  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.42), rgba(var(--sc-surface-0-rgb), 0.58));
+  border-color: rgba(var(--sc-border-rgb), 0.12);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.feed-card-compact[data-surface-mode="receiving"] {
+  background: linear-gradient(180deg, rgba(var(--sc-surface-1-rgb), 0.36), rgba(var(--sc-surface-0-rgb), 0.5));
+  border-color: rgba(var(--sc-border-rgb), 0.08);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.feed-card-compact[data-surface-mode="ghost"] {
+  margin-left: 0;
+  border-color: rgba(var(--sc-border-rgb), 0.16);
+}
+
 .feed-card-compact::before {
   content: "";
   position: absolute;
@@ -2819,6 +2847,10 @@ body::before {
   width: 2.5px;
   border-radius: 999px;
   background: rgba(var(--sc-muted-rgb), 0.22);
+}
+
+.feed-card-compact[data-emphasis="secondary"]::before {
+  opacity: 0.5;
 }
 
 .feed-card-compact[data-status="supported"]::before {
@@ -3686,6 +3718,49 @@ body::before {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.compact-card-inner[data-subdued="true"] {
+  cursor: default;
+}
+
+.compact-card-inner[data-subdued="true"]:hover {
+  background: transparent;
+}
+
+.live-recent-stack[data-subdued="true"] {
+  opacity: 0.9;
+}
+
+.live-recent-stack[data-subdued="true"] > * {
+  transition: opacity var(--motion-standard) var(--motion-soft-spring);
+}
+
+.live-recent-stack[data-visual-mode="subdued"] {
+  opacity: 0.92;
+}
+
+.live-recent-stack[data-visual-mode="receiving"] {
+  opacity: 0.94;
+}
+
+.live-recent-stack[data-visual-mode="receiving"] > *:not([data-receiving-target="true"]) {
+  opacity: 0.9;
+}
+
+.live-recent-landing-shelf {
+  min-height: 92px;
+  border-radius: 10px;
+  margin-left: 18px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.handoff-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 50;
+  will-change: left, top, width, height, opacity, transform;
+}
+
 .compact-card-inner:focus-visible {
   box-shadow: 0 0 0 1px rgba(var(--model-accent-rgb, 138, 180, 248), 0.34);
 }
@@ -3804,4 +3879,17 @@ body::before {
 .feed-card[data-status="unverifiable"]:hover {
   box-shadow: 0 0 0 1px rgba(var(--sc-neutral-rgb), 0.35),
               0 8px 24px rgba(var(--sc-neutral-rgb), 0.12);
+}
+
+.feed-card[data-emphasis="secondary"][data-status="supported"]:hover,
+.feed-card[data-emphasis="secondary"][data-status="partial"]:hover,
+.feed-card[data-emphasis="secondary"][data-status="disputed"]:hover,
+.feed-card[data-emphasis="secondary"][data-status="unverifiable"]:hover {
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.feed-card-wrapper[data-emphasis="secondary"] .rail-node-compact {
+  opacity: 0.24;
 }
