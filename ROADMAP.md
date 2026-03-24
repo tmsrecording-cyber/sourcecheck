@@ -7,6 +7,7 @@ SourceCheck's near-term job is not to become a generic AI app. It is to become a
 - **Priority:** Trust First
 - **Style:** Hard Gates
 - **Rule:** Only one milestone is active at a time. No new lane starts until the current milestone fully passes code, test, and manual acceptance.
+- **Allowance:** Post-shipment stabilization lanes are allowed when they close verified trust/runtime defects before expansion.
 
 ## Hard Rules
 - No large dependency additions unless directly required by the active milestone.
@@ -19,6 +20,14 @@ SourceCheck's near-term job is not to become a generic AI app. It is to become a
   - `npm --prefix backend test`
   - `npm run test:unit`
   - `npm run test:e2e:smoke`
+
+## Active Stabilization Lane — Runtime Trust Hardening
+This is the current execution lane. It closes verified post-M5 trust/runtime defects without starting a new product direction, and extraction tuning stays blocked until it is complete.
+
+- remote logger trust boundary
+- transcript truncation fail-open
+- source-tab canonicalization tightening
+- vector fail-closed hardening
 
 ## Product Direction
 **What the app should do**

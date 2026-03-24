@@ -564,11 +564,11 @@ After searching, respond:
 
 3. sourceType — one of: academic_paper, news_article, official_source, wikipedia, other
 
-4. nuance — Under 15 words. What SPECIFICALLY confirms or partially confirms this claim?
+4. nuance — Under 12 words. What SPECIFICALLY confirms or partially confirms this claim?
    Lead with the evidence, not the verdict.
    BANNED: "We could not verify", "Unable to verify", "Requires additional context"
 
-5. evidenceSnippet — The most relevant sentence from your source (15-80 words). Direct quote if possible.
+5. evidenceSnippet — Optional. Return null unless a short quote under 24 words adds material evidence.
 
 6. confidence — 0.0 to 1.0. How strong is the supporting evidence?
    1.0 = primary source with exact data match
@@ -628,11 +628,11 @@ After searching, respond:
 
 3. sourceType — one of: academic_paper, news_article, official_source, wikipedia, other
 
-4. nuance — Under 15 words. What SPECIFICALLY undermines, complicates, or challenges this claim?
+4. nuance — Under 12 words. What SPECIFICALLY undermines, complicates, or challenges this claim?
    Lead with the counter-evidence, not the verdict.
    BANNED: "We could not verify", "Unable to verify", "Requires additional context"
 
-5. evidenceSnippet — The most relevant counter-evidence sentence (15-80 words). Direct quote if possible.
+5. evidenceSnippet — Optional. Return null unless a short quote under 24 words adds material evidence.
 
 6. confidence — 0.0 to 1.0. How strong is the counter-evidence?
    1.0 = direct factual contradiction from authoritative source
